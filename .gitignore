@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# 환경 변수 — .env.example만 커밋한다
+.env
+.env.*
+!.env.example
+
+# 런타임 데이터 (로컬 개발용 볼륨)
+/data/
+/var/
+
+# 에디터
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

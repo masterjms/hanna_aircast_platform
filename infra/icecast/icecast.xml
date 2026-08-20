@@ -1,0 +1,64 @@
+<!--
+  Icecast — 실시간 방송 fan-out (Phase 4).
+
+  마운트는 방송 세션 단위다: /live/s43. 마을 A 와 마을 B 가 동시에 방송할 수 있고,
+  각 단말은 자기 세션의 마운트 하나만 받아간다.
+
+  queue-size 와 burst-size 는 1차 LAN 데모에서 맞춘 값이다.
+  WAN + TLS 환경에서 underrun 재측정이 필요하다.
+-->
+<icecast>
+    <location>xWIFI</location>
+    <admin>admin@localhost</admin>
+
+    <limits>
+        <!-- 단말 300대 + 관리자 모니터링 여유 -->
+        <clients>400</clients>
+        <sources>20</sources>
+        <threadpool>8</threadpool>
+        <queue-size>16384</queue-size>
+        <client-timeout>30</client-timeout>
+        <header-timeout>15</header-timeout>
+        <source-timeout>10</source-timeout>
+        <!--
+          burst-on-connect 를 끈다. 켜면 단말이 붙는 순간 과거 오디오를 몰아주는데,
+          그만큼 지연이 고정으로 붙고 P4 지터 버퍼가 하드캡까지 차오른다.
+        -->
+        <burst-on-connect>0</burst-on-connect>
+        <burst-size>0</burst-size>
+    </limits>
+
+    <authentication>
+        <!-- 실제 값은 환경변수로 주입한다. 여기 평문을 커밋하지 않는다. -->
+        <source-password>@ICECAST_SOURCE_PASSWORD@</source-password>
+        <relay-password>@ICECAST_SOURCE_PASSWORD@</relay-password>
+        <admin-user>admin</admin-user>
+        <admin-password>@ICECAST_ADMIN_PASSWORD@</admin-password>
+    </authentication>
+
+    <listen-socket>
+        <port>8000</port>
+    </listen-socket>
+
+    <mount type="default">
+        <!-- 단말은 메타데이터를 파싱하지 않는다. 보내면 스트림만 오염된다. -->
+        <public>0</public>
+        <burst-size>0</burst-size>
+    </mount>
+
+    <paths>
+        <logdir>/var/log/icecast2</logdir>
+        <webroot>/usr/share/icecast2/web</webroot>
+        <adminroot>/usr/share/icecast2/admin</adminroot>
+    </paths>
+
+    <logging>
+        <accesslog>access.log</accesslog>
+        <errorlog>error.log</errorlog>
+        <loglevel>3</loglevel>
+    </logging>
+
+    <security>
+        <chroot>0</chroot>
+    </security>
+</icecast>

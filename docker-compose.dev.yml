@@ -1,0 +1,53 @@
+# 로컬 개발용 — 인프라만 띄운다.
+# 백엔드/프론트는 호스트에서 직접 돌려야 리로드가 빠르다.
+#
+#   docker compose -f docker-compose.dev.yml up -d
+#   cd backend && .venv/Scripts/python -m alembic upgrade head
+#   cd backend && .venv/Scripts/python -m uvicorn app.main:app --reload
+#   cd frontend && npm run dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: xwifi-postgres-dev
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-xwifi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-xwifi-dev-pw}
+      POSTGRES_DB: ${POSTGRES_DB:-xwifi}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-xwifi}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: xwifi-mosquitto-dev
+    ports:
+      - "1883:1883"
+    volumes:
+      # 개발용은 익명 접속 허용. prod 설정은 docker-compose.yml 쪽을 쓴다.
+      - ./infra/mosquitto/config/mosquitto.dev.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data-dev:/mosquitto/data
+
+  icecast:
+    image: libretime/icecast:latest
+    container_name: xwifi-icecast-dev
+    ports:
+      # 컨테이너 안에서는 8000 이지만 호스트 8000 은 백엔드가 쓰므로 8100 으로 뺀다.
+      # 운영에서는 nginx 가 /live/ 를 프록시하므로 이 포트가 노출되지 않는다.
+      - "8100:8000"
+    environment:
+      ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:-hackme}
+      ICECAST_ADMIN_PASSWORD: ${ICECAST_SOURCE_PASSWORD:-hackme}
+      ICECAST_RELAY_PASSWORD: ${ICECAST_SOURCE_PASSWORD:-hackme}
+      ICECAST_ADMIN_EMAIL: admin@localhost
+      ICECAST_HOSTNAME: localhost
+
+volumes:
+  pgdata-dev:
+  mosquitto-data-dev:

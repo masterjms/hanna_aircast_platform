@@ -1,0 +1,95 @@
+"""이력 — broadcast_events, device_events.
+
+한 번의 방송 명령(broadcast_events 1행)이 여러 단말(device_events N행)에 결과를 남긴다.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from typing import Any
+
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.constants import MAC_LENGTH, TargetScope
+from app.models.base import Base
+
+_SCOPES = ", ".join(f"'{s.value}'" for s in TargetScope)
+
+
+class BroadcastEvent(Base):
+    """서버가 발행한 명령 1건.
+
+    ended_at 이 NULL 인 행 = 진행 중인 방송. 대상 겹침 검사가 이 조건을 본다.
+    """
+
+    __tablename__ = "broadcast_events"
+    __table_args__ = (
+        CheckConstraint(f"target_scope IN ({_SCOPES})", name="ck_broadcast_events_scope"),
+        # 진행 중인 방송만 훑는 부분 인덱스 — 겹침 검사가 가장 잦은 질의다.
+        Index(
+            "ix_broadcast_events_active",
+            "ended_at",
+            postgresql_where="ended_at IS NULL",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    #: session_id / cmd_id / job_id 통일본. DB 시퀀스(job_id_seq)로 발번한다.
+    job_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+
+    target_scope: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_id: Mapped[str | None] = mapped_column(String(50))
+
+    file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id"))
+    #: 스케줄에 의한 자동 실행이면 채우고, 수동이면 NULL.
+    schedule_id: Mapped[int | None] = mapped_column(ForeignKey("schedules.id"))
+    #: 수동이면 채우고, 스케줄이면 NULL.
+    triggered_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+
+    triggered_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+    ended_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DeviceEvent(Base):
+    """단말이 올려보낸 응답 1건.
+
+    payload 는 MQTT 원본을 JSONB 로 그대로 넣는다. 단말 프로토콜에 필드가 추가돼도
+    스키마를 바꾸지 않기 위해서다.
+
+    STATUS 는 여기 쌓지 않는다 — 300대 × 30초면 하루 86만 행이 된다.
+    최신값만 devices.last_status 에 캐시한다(app/mqtt/handlers.py 참고).
+    """
+
+    __tablename__ = "device_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    event_id: Mapped[int | None] = mapped_column(
+        ForeignKey("broadcast_events.id", ondelete="CASCADE"), index=True
+    )
+    mac: Mapped[str] = mapped_column(
+        String(MAC_LENGTH), ForeignKey("devices.mac"), nullable=False, index=True
+    )
+    result_type: Mapped[str | None] = mapped_column(String(20))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    received_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+
+    #: QoS 1 중복 수신 방어용 멱등 키. "<mac>:<result_type>:<job_id>" 형태.
+    #: job_id 를 못 뽑는 메시지는 NULL 로 두고 중복 검사를 하지 않는다.
+    #: (DB 스키마 문서에는 없던 구현 추가분 — 마이그레이션 0001 에 UNIQUE 인덱스가 있다.)
+    dedup_key: Mapped[str | None] = mapped_column(String(140))

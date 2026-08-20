@@ -1,0 +1,20 @@
+# 토픽 접근 제어.
+#
+# 서버 계정(xwifi-server)만 cmd/config 에 발행할 수 있다.
+# 단말 계정은 자기 result/status 에만 발행하고, 명령 토픽은 구독만 한다.
+
+user xwifi-server
+topic readwrite iotradio/#
+
+# 단말 공통 계정. %c 는 클라이언트 ID(= MAC)로 치환된다.
+# 단말이 접속할 때 client_id 를 자기 MAC(콜론 없는 소문자)으로 설정해야 한다.
+user xwifi-device
+topic write iotradio/device/%c/result
+topic write iotradio/device/%c/status
+topic read  iotradio/device/%c/cmd
+topic read  iotradio/device/%c/config
+topic read  iotradio/all/cmd
+topic read  iotradio/all/config
+# 마을 명령은 마을이 배정된 단말만 구독한다. 마을 id 를 ACL 로 좁힐 수 없어
+# (단말별 계정을 만들지 않는 한) 전체 마을 토픽 읽기를 허용한다.
+topic read  iotradio/village/+/cmd

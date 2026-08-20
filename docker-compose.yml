@@ -1,0 +1,96 @@
+# 운영 스택 — 고객 1곳 = 이 구성 한 벌.
+#
+# DB 는 RDS 를 쓰는 게 기본이다. 그 경우 postgres 서비스를 빼고
+# .env 의 DATABASE_URL 만 RDS 엔드포인트로 바꾼다.
+# 온프레미스로 옮길 때는 이 파일을 그대로 쓰고 인증서만 교체한다.
+
+services:
+  backend:
+    build: ./backend
+    container_name: xwifi-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # 컨테이너 네트워크 안에서는 서비스명으로 붙는다(.env 의 localhost 를 덮어쓴다).
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-xwifi}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-xwifi}
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      ICECAST_HOST: icecast
+      ICECAST_PORT: "8000"
+      FILE_ROOT: /var/lib/iotradio/files
+    volumes:
+      - files:/var/lib/iotradio/files
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: xwifi-frontend-build
+    # 정적 파일만 만들어 볼륨에 떨어뜨리고 종료한다. nginx 가 그걸 서빙한다.
+    command: ["sh", "-c", "npm run build && cp -r dist/. /out/"]
+    volumes:
+      - web:/out
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: xwifi-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-xwifi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:-xwifi}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-xwifi}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: xwifi-mosquitto
+    restart: unless-stopped
+    ports:
+      # 단말이 붙는 TLS 포트만 밖으로 연다. 평문 1883 은 내부 전용.
+      - "8883:8883"
+    volumes:
+      - ./infra/mosquitto/config:/mosquitto/config:ro
+      - ./infra/certs:/mosquitto/certs:ro
+      - mosquitto-data:/mosquitto/data
+
+  icecast:
+    image: libretime/icecast:latest
+    container_name: xwifi-icecast
+    restart: unless-stopped
+    environment:
+      ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?}
+      ICECAST_ADMIN_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?}
+      ICECAST_RELAY_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?}
+    volumes:
+      - ./infra/icecast/icecast.xml:/etc/icecast2/icecast.xml:ro
+
+  nginx:
+    image: nginx:alpine
+    container_name: xwifi-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/certs:/etc/nginx/certs:ro
+      - web:/usr/share/nginx/html:ro
+    depends_on:
+      - backend
+      - icecast
+
+volumes:
+  pgdata:
+  mosquitto-data:
+  files:
+  web:
