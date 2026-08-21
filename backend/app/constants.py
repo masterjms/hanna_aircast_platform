@@ -61,12 +61,22 @@ class ResultType(StrEnum):
 
 
 class DeviceState(StrEnum):
-    """STATUS.state 후보 (통신 사양 §3.4)."""
+    """STATUS.state 후보 (통신 사양 §3.4, 2026-08-20 개정).
+
+    단말 우선순위는 OTA > LIVE > FILE > RF > IDLE 이다.
+
+    LIVE_READY_WAIT 는 삭제됐다 — LIVE_READY 발행 전의 "준비 중" 구간도 이제
+    LIVE 로 통합된다. 외부 AMP 모델은 AMP 안정화 대기 동안 계속 LIVE 로 보인다.
+    서버가 "준비 중"과 "실제 송출 중"을 구분해야 하면 LIVE_START 발행 시각과
+    LIVE_READY 수신 여부로 애플리케이션 레벨에서 추적한다.
+    """
 
     IDLE = "IDLE"
-    LIVE_READY_WAIT = "LIVE_READY_WAIT"
     LIVE = "LIVE"
     FILE = "FILE"
+    #: P4 RF 모듈이 자체적으로 켜고 끄는 상태. 서버는 관측만 하고 제어하지 않는다.
+    RF = "RF"
+    OTA = "OTA"
     OFFLINE = "OFFLINE"
 
 

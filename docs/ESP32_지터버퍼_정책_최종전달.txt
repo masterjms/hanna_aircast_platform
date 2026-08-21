@@ -1,0 +1,170 @@
+[ESP32-P4+C6 오디오 지터 버퍼 - 고수위 드리프트 보정 정책 최종안]
+작성: Claude (Opus 5) / 검토 대상: Codex
+목적: PC(FFmpeg)->Icecast->ESP32 마이크 스트리밍 4~5초 지연의 근본 원인 해결
+
+====================================================================
+1. 문제 상황 요약
+====================================================================
+
+- PC 마이크 -> FFmpeg(Opus, 40ms frame 고정) -> Icecast -> ESP32-P4+C6 로 스트리밍
+- ESP32는 1초 프리버퍼링 후 재생 시작, 최대 3초(LIVE_JITTER_SLOTS=75) 버퍼 보유
+- 실측 마이크->스피커 총 지연: 4~5초
+- PC 측(캡처+인코딩+Icecast 전송) 추정 지연: 약 2~3초
+- 나머지 1초 이상이 어디서 발생하는지가 문제였음
+
+====================================================================
+2. 근본 원인 (확정)
+====================================================================
+
+Codex 확인 로그: buffered=74 (75슬롯 중 74개, 약 2.96초)
+
+- ESP32 jitterbuf_task()는 FreeRTOS tick 기준 40ms playout clock으로 동작
+- 최종 출력(audio_out_task -> I2S write)은 별도의 I2S/codec clock에 종속
+- 두 clock이 서로 다른 발진자를 쓰기 때문에 미세한 속도 차이(clock drift)가
+  시간이 지날수록 누적됨
+- 현재 코드에는 저수위(언더런) 대응(PLC + 무음 폴백)은 있지만,
+  고수위(오버런/드리프트) 능동 보정 로직이 없음
+- 그 결과 버퍼가 목표치(1초)를 벗어나 하드캡(3초) 근처까지 계속 밀려 쌓임
+- PC측 지연(2~3초) + ESP32측 실제 적체(3초 근접) = 실측 4~5초와 정확히 일치
+
+=> "1초 프리버퍼"는 시작 시점 목표일 뿐, 운영 중 유지되는 값이 아니었음.
+   고수위 드리프트 보정 로직 부재가 지연 증가의 직접 원인.
+
+====================================================================
+3. 확정 정책 - 설정값 (#define 유지)
+====================================================================
+
+#define JITTER_FRAME_MS               40                  // 프레임 단위 고정
+#define JITTER_MAX_SLOTS              LIVE_JITTER_SLOTS   // 기존 75 그대로 유지 (3.0초 하드캡)
+
+#define JITTER_PREBUFFER_FRAMES       25   // 1.0초 - 최초/재버퍼링 시 재생 시작 기준
+#define JITTER_LOWWATER_FRAMES        7    // 0.28초 - 저수위 경고(로그만, 동작 없음)
+#define JITTER_UNDERRUN_SEVERE_MS     250  // 이 시간 이상 고갈 지속 시 재버퍼링 진입
+
+#define JITTER_HIGHWATER_TRIGGER      62   // 2.48초 - 이 이상이면 트리밍 시작
+#define JITTER_HIGHWATER_TARGET       45   // 1.80초 - 트리밍 목표치(여기까지 내려오면 중단)
+#define JITTER_TRIM_EVERY_N_FRAMES    5    // 트리밍 중 N프레임 소비마다 1개 추가로 드롭
+
+[값 근거]
+- LIVE_JITTER_SLOTS(75, 3.0초)는 기존 정의 그대로 유지. 손대지 않음.
+- JITTER_HIGHWATER_TARGET을 1.0초가 아닌 1.8초로 잡은 이유:
+  목표치를 프리버퍼 값과 동일하게 두면 드리프트가 다시 금방 트리거 지점까지
+  차올라 보정이 반복(진동)됨. 1.0초와 2.5초 사이 중간값으로 착지시켜
+  보정 빈도를 낮춤.
+- JITTER_TRIM_EVERY_N_FRAMES=5: 200ms마다 1프레임(40ms)씩 걷어내는 속도.
+  62->45프레임(17개) 걷어내는 데 약 3.4초 소요. 한 번에 훅 줄지 않고
+  서서히 정상화되어 청감상 거의 티가 안 남.
+
+====================================================================
+4. 확정 정책 - 상태 머신 (pseudocode)
+====================================================================
+
+typedef enum {
+    JB_STATE_PREBUFFERING,
+    JB_STATE_NORMAL,
+    JB_STATE_HIGHWATER_TRIM,
+} jitter_state_t;
+
+static jitter_state_t s_jb_state = JB_STATE_PREBUFFERING;
+static uint32_t s_underrun_ms = 0;
+static uint32_t s_trim_counter = 0;
+
+// jitterbuf_task() 의 40ms tick마다 호출
+void jitterbuf_tick(void)
+{
+    int buffered = jitter_queue_count();  // s_opus_q 기준 권장 (아래 5번 참고)
+
+    switch (s_jb_state) {
+
+    case JB_STATE_PREBUFFERING:
+        if (buffered >= JITTER_PREBUFFER_FRAMES) {
+            s_jb_state = JB_STATE_NORMAL;
+            audio_playback_start();      // audio_out_task 소비 시작
+        }
+        return;  // 프리버퍼링 중엔 소비 안 함, 채우기만
+
+    case JB_STATE_NORMAL:
+        if (buffered == 0) {
+            emit_plc_frame();            // 기존 PLC 로직 그대로 (opus_decode NULL)
+            s_underrun_ms += JITTER_FRAME_MS;
+            if (s_underrun_ms >= JITTER_UNDERRUN_SEVERE_MS) {
+                s_jb_state = JB_STATE_PREBUFFERING;
+                audio_playback_stop();
+                jitter_queue_clear();
+                s_underrun_ms = 0;
+                ESP_LOGW(TAG, "underrun>=%dms -> rebuffer", JITTER_UNDERRUN_SEVERE_MS);
+            }
+            return;
+        }
+
+        s_underrun_ms = 0;
+        if (buffered < JITTER_LOWWATER_FRAMES) {
+            ESP_LOGD(TAG, "low-water buffered=%d", buffered);   // 로그만, 개입 없음
+        }
+        consume_one_frame();
+
+        if (buffered >= JITTER_HIGHWATER_TRIGGER) {
+            s_jb_state = JB_STATE_HIGHWATER_TRIM;
+            s_trim_counter = 0;
+            ESP_LOGW(TAG, "high-water buffered=%d -> trim start", buffered);
+        }
+        return;
+
+    case JB_STATE_HIGHWATER_TRIM:
+        s_underrun_ms = 0;
+        consume_one_frame();             // 정상 소비 1개
+
+        if (++s_trim_counter >= JITTER_TRIM_EVERY_N_FRAMES) {
+            s_trim_counter = 0;
+            drop_oldest_frame();         // 추가로 1개 더 버림 (조용히)
+        }
+
+        buffered = jitter_queue_count();
+        if (buffered <= JITTER_HIGHWATER_TARGET) {
+            s_jb_state = JB_STATE_NORMAL;
+            ESP_LOGI(TAG, "high-water resolved buffered=%d -> normal", buffered);
+        }
+        return;
+    }
+}
+
+====================================================================
+5. 구현 시 참고사항
+====================================================================
+
+- jitter_queue_count() / consume_one_frame() / drop_oldest_frame() /
+  emit_plc_frame() : 실제 s_opus_q / s_pcm_q API 이름으로 매핑 필요.
+
+- 트리밍(드롭) 위치는 s_opus_q(디코드 전, opus 패킷 단위)에서 하는 것을
+  권장. s_pcm_q(디코드 후)에서 버리면 이미 디코딩한 연산이 낭비됨.
+
+- drop_oldest_frame() 로그 레벨은 INFO가 아니라 DEBUG/VERBOSE 권장.
+  드리프트 보정은 정상 운영 중 지속적으로 발생할 수 있어 INFO로 두면
+  로그가 계속 시끄러워질 수 있음. 대신 상태 전이(트림 시작/종료) 시점만
+  WARN/INFO로 남기면 충분.
+
+- 기존의 "75슬롯(3초) 밖 패킷 방어 로직"은 그대로 유지. 이번 정책은
+  그보다 낮은 62/45 지점에서 미리 개입해 하드캡에 거의 안 닿게 만드는
+  것이 목적이며, 기존 방어 로직을 대체하지 않고 보완하는 것.
+
+- 언더런측(PLC, 무음 폴백, 재연결 시 버퍼 전체 폐기) 로직은 현재 구현이
+  이미 적절하므로 변경 불필요.
+
+====================================================================
+6. 검증 방법 제안
+====================================================================
+
+1) 장시간(10분 이상) 스트리밍 유지하면서 buffered 값을 주기적으로 로깅
+2) 정상 상태에서 buffered가 25(1초) 근처에서 계속 유지되는지 확인
+   - 계속 상승 추세면 드리프트 보정이 아직 부족한 것 -> TRIM_EVERY_N_FRAMES
+     값을 줄여(예: 5 -> 3) 보정 속도를 높일 것
+   - 반대로 너무 자주 저수위로 떨어지면 프리버퍼(25)나 목표치(45)를
+     높이는 방향 검토
+3) 실측 마이크->스피커 지연을 다시 측정해 1~2초대로 줄었는지 확인
+   (목표: PC측 지연 2~3초 + ESP32 버퍼 유지 1초 근처 = 총 3~4초 이하)
+4) 트리밍이 실제 청감상 티가 나는지(끊김/피치 변화) 확인 후, 티가 나면
+   TRIM_EVERY_N_FRAMES를 늘려(5 -> 8 등) 더 천천히 보정하도록 조정
+
+====================================================================
+끝.
+====================================================================

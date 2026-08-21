@@ -189,6 +189,32 @@ class TestPublisher:
         _, raw, _, retain = conn.sent[0]
         assert raw == b"" and retain is True
 
+    def test_cmd_payloads_use_job_id_only(self):
+        """CMD 의 job 식별자는 job_id 하나다 (통신 사양 2026-08-20 통일).
+
+        이름이 틀리면 단말은 필드를 조용히 무시하고 기본값으로 동작한다 —
+        서버는 발행 성공으로 알고, 현장에서는 방송이 안 나간다. 옛 이름
+        (session_id/cmd_id/file_id)이 되살아나는 걸 여기서 막는다.
+        """
+        payloads = [
+            MqttPublisher.file_start_payload(
+                job_id=7,
+                size=1024,
+                sha256="a" * 64,
+                url="http://x/dl/t",
+                file_name="a.mp3",
+                store_flash=False,
+                autoplay=True,
+            ),
+            MqttPublisher.file_stop_payload(job_id=7),
+            MqttPublisher.live_start_payload(job_id=7, stream_url="http://x/live/00000001/7"),
+            MqttPublisher.live_stop_payload(job_id=7),
+        ]
+        for p in payloads:
+            assert p["job_id"] == 7, p
+            # file_id 는 단말이 echo 만 하고 안 써서 사양에서 삭제됐다.
+            assert not {"session_id", "cmd_id", "file_id"} & set(p), p
+
     async def test_oversized_payload_is_blocked_before_send(self):
         """단말이 못 받는 크기다. 보내고 성공했다고 착각하는 게 최악이다."""
         conn = FakeConnection()
@@ -206,7 +232,7 @@ class TestPublisher:
         """cmd 에 retain 을 걸면 단말 재접속 때 지난 방송이 되살아난다."""
         conn = FakeConnection()
         await MqttPublisher(conn).publish_command(  # type: ignore[arg-type]
-            payload={"type": "LIVE_STOP", "session_id": 1},
+            payload={"type": "LIVE_STOP", "job_id": 1},
             target_scope=TargetScope.VILLAGE,
             scope=VillageScope.for_super_admin(),
             village_id=1,

@@ -140,7 +140,6 @@ class MqttPublisher:
     def file_start_payload(
         *,
         job_id: int,
-        file_id: int,
         size: int,
         sha256: str,
         url: str,
@@ -150,13 +149,13 @@ class MqttPublisher:
     ) -> dict[str, object]:
         """FILE_START.
 
-        cmd_id 가 job 식별자이고 file_id 는 파일 참조다 — 둘은 다른 것이다.
-        단말은 결과 응답에 이 둘을 그대로 echo 한다.
+        job 식별자는 job_id 하나다(2026-08-20 통일). 예전에는 cmd_id 와 file_id 를
+        같이 보냈지만, file_id 는 단말이 결과에 echo 만 하고 쓰지 않아서 삭제됐다.
+        서버가 "어느 파일이었나"를 아는 건 broadcast_events.file_id 로 충분하다.
         """
         return {
             "type": "FILE_START",
-            "cmd_id": job_id,
-            "file_id": file_id,
+            "job_id": job_id,
             "size": size,
             "resume_offset": 0,
             "sha256": sha256,
@@ -167,14 +166,14 @@ class MqttPublisher:
         }
 
     @staticmethod
-    def file_stop_payload(*, job_id: int, file_id: int) -> dict[str, object]:
+    def file_stop_payload(*, job_id: int) -> dict[str, object]:
         """FILE_STOP. 다운로드 중이든 autoplay 재생 중이든 둘 다 멈춘다."""
-        return {"type": "FILE_STOP", "cmd_id": job_id, "file_id": file_id}
+        return {"type": "FILE_STOP", "job_id": job_id}
 
     @staticmethod
     def live_start_payload(
         *,
-        session_id: int,
+        job_id: int,
         stream_url: str,
         ready_timeout_sec: int = 30,
     ) -> dict[str, object]:
@@ -190,7 +189,7 @@ class MqttPublisher:
         """
         return {
             "type": "LIVE_START",
-            "session_id": session_id,
+            "job_id": job_id,
             "stream_url": stream_url,
             "codec": "opus",
             "frame_ms": 40,
@@ -200,9 +199,9 @@ class MqttPublisher:
         }
 
     @staticmethod
-    def live_stop_payload(*, session_id: int) -> dict[str, object]:
-        """LIVE_STOP. 반드시 현재 송출 중인 session_id 로 보낸다."""
-        return {"type": "LIVE_STOP", "session_id": session_id}
+    def live_stop_payload(*, job_id: int) -> dict[str, object]:
+        """LIVE_STOP. 반드시 현재 송출 중인 job_id 로 보낸다."""
+        return {"type": "LIVE_STOP", "job_id": job_id}
 
     # ── CMD ─────────────────────────────────────────────────────────────
     async def publish_command(

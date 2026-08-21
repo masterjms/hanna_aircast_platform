@@ -126,6 +126,30 @@ xwifi-server/
 
 ## 로컬 실행
 
+### 빠른 방법 — `dev.ps1`
+
+PowerShell 에서 리포 루트에 대고 실행한다.
+
+```powershell
+.\dev.ps1 setup    # 최초 1회 (venv · 의존성 · 마이그레이션 · 시드)
+.\dev.ps1 up       # 전부 실행
+.\dev.ps1 status   # 무엇이 떠 있는지
+.\dev.ps1 down     # 전부 종료
+```
+
+`up` 을 하면 백엔드 · 프론트 · 목단말이 각각 **별도 창**으로 뜬다. 로그를
+따로 보고 Ctrl+C 로 개별 종료하기 위해서다. 옵션은 `.\dev.ps1 help`.
+
+VSCode 를 쓰면 `Ctrl+Shift+B` 로 같은 걸 실행할 수 있다(`.vscode/tasks.json`).
+이쪽은 새 창 대신 VSCode 터미널 탭으로 뜬다.
+
+> **`up` 이 "다른 Postgres 로 간다" 고 하면** — WSL 에 네이티브
+> postgres/mosquitto 가 깔려 있어 같은 포트를 먼저 잡은 것이다. 둘 다 DB 이름과
+> 비밀번호가 같아서 오류 없이 조용히 엉뚱한 DB 에 붙고, 데이터가 반쪽씩 갈린다.
+> `wsl -e bash -lc "sudo systemctl disable --now postgresql mosquitto"` 로 해제한다.
+
+아래는 `dev.ps1` 이 실제로 하는 일이다. 직접 단계별로 돌리고 싶을 때 참고.
+
 ### 1. 인프라
 
 ```bash

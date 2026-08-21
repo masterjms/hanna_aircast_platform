@@ -1,0 +1,47 @@
+xWIFI 마을방송 1차 LAN 데모
+
+====================================================================
+1. 오디오 지연/끊김 튜닝 결과
+====================================================================
+
+PC(FFmpeg+Icecast) - 공유기 - ESP32 실시간 오디오 스트리밍에서 간헐적 끊김(severe
+underrun) 발생. 원인은 네트워크 구간에서 도착시 뭉쳐서(burst) 오는 현상 존재
+그러나 일부 튜닝 후 적절한 범위내에서 테스트 완료
+결과 : 지연 4~5초 이내, 추후 추가 튜닝은 필요
+
+1) FFmpeg 인코더
+   Ogg page 묶음 주기 40ms 반영
+   옵션: -page_duration 40000
+
+2) Icecast 서버
+   리스너 backlog 허용량(queue-size)5.5초 반영
+
+*) 내부 LAN 테스트 기준 TLS 제외(서버 구축시 진행)
+
+====================================================================
+2. MQTT 명령 구조
+====================================================================
+
+iotradio/device/<mac>/cmd     서버->개별 단말
+iotradio/village/<id>/cmd     서버->마을 단위
+iotradio/all/cmd              서버->전체 단말
+iotradio/device/<mac>/result  단말->서버 (명령 처리 결과)
+iotradio/device/<mac>/status  단말->서버 (상태/통계, LWT 겸용)
+iotradio/all/config           서버->전체 단말 (설정, retain)
+
+[명령 리스트]
+
+CMD (서버->단말)      : LIVE_START, LIVE_STOP, FILE_START, FILE_STOP
+RESULT (단말->서버)   : LIVE_READY, FILE_END, FILE_ABORT
+STATUS 계열(단말->서버): STATUS, LIVE_STATS, LWT
+CONFIG (서버->단말)   : status_interval_sec, live_stats_interval_sec, event_qos
+
+====================================================================
+3. HTTP 파일 다운로드
+====================================================================
+
+- MQTT FILE_START가 지정한 사전 녹음 파일(mp3 등)을 ESP가 일반 HTTP
+  GET으로 다운로드. Icecast(8000, 실시간용)와는 별도 포트/별도 서버
+- FILE_START에 https_url, size, sha256을 같이 보내고, 단말이 다운로드
+  후 size/sha256으로 무결성 검증
+- LAN 데모는 검증용 로컬 서버(포트 9002, 인증 없음)로 테스트 했음

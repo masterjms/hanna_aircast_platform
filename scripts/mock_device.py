@@ -199,6 +199,22 @@ class MockDevice:
             await client.subscribe(f"{ROOT}/village/{self.village_id}/cmd", qos=1)
             print(f"[{self.mac}]   마을 토픽 구독 {self.village_id}")
 
+    async def set_state(self, client: aiomqtt.Client, state: str) -> None:
+        """state 를 바꾸고, 실제로 바뀌었으면 즉시 STATUS 를 1회 발행한다.
+
+        2026-08-20 사양: 단말은 state 가 바뀌면 주기(status_interval_sec)를
+        기다리지 않고 바로 STATUS 를 보낸다 — 서버가 단말 상태를 실시간에
+        가깝게 파악하기 위함. QoS 는 주기 STATUS 와 같이 event_qos(기본 0)를 따른다.
+        """
+        if state == self.state:
+            return
+        self.state = state
+        await client.publish(
+            f"{ROOT}/device/{self.mac}/status",
+            json.dumps(self.status_payload()).encode(),
+            qos=0,
+        )
+
     # ── CMD 처리 ────────────────────────────────────────────────────────
     async def publish_result(self, client: aiomqtt.Client, payload: dict) -> None:
         await client.publish(
@@ -235,12 +251,12 @@ class MockDevice:
 
         LIVE_READY.status: 0=READY, 1=TIMEOUT, 2=ABORT, 3=FAIL/BUSY
         """
-        session_id = cmd.get("session_id")
+        job_id = cmd.get("job_id")
 
         if self.busy_file is not None:
             # 파일 처리 중이면 LIVE 를 거절한다(단말에서 LIVE·FILE 은 배타).
             await self.publish_result(client, {
-                "type": "LIVE_READY", "ver": 267, "session_id": session_id,
+                "type": "LIVE_READY", "ver": 267, "job_id": job_id,
                 "device": with_colons(self.mac), "status": 3, "reason": 8,
             })
             print(f"[{self.mac}]   LIVE_READY status=3 (FILE 처리 중)")
@@ -254,8 +270,8 @@ class MockDevice:
             ok = False
 
         if ok:
-            self.live_session = session_id
-            self.state = "LIVE"
+            self.live_session = job_id
+            await self.set_state(client, "LIVE")
             self.live_task = asyncio.create_task(self._drain_stream(url))
             status, reason = 0, 0
             print(f"[{self.mac}]   LIVE_READY status=0 ({url})")
@@ -264,7 +280,7 @@ class MockDevice:
             print(f"[{self.mac}]   LIVE_READY status=1 TIMEOUT ({url})")
 
         await self.publish_result(client, {
-            "type": "LIVE_READY", "ver": 267, "session_id": session_id,
+            "type": "LIVE_READY", "ver": 267, "job_id": job_id,
             "device": with_colons(self.mac), "status": status, "reason": reason,
         })
 
@@ -286,8 +302,8 @@ class MockDevice:
                 await self.live_task
             self.live_task = None
         self.live_session = None
-        self.state = "IDLE"
-        print(f"[{self.mac}]   LIVE 종료 (session={cmd.get('session_id')})")
+        await self.set_state(client, "IDLE")
+        print(f"[{self.mac}]   LIVE 종료 (job={cmd.get('job_id')})")
 
     async def do_file_start(self, client: aiomqtt.Client, cmd: dict) -> None:
         """실제 단말처럼 https_url 을 받아 sha256 을 검증하고 결과를 보고한다.
@@ -295,18 +311,18 @@ class MockDevice:
         LIVE 중이면 PREEMPTED_BY_LIVE, 이미 파일 처리 중이면 BUSY 로 거절한다
         (통신 사양 §3.2 — 단말에서 LIVE·FILE·OTA 는 서로 배타).
         """
-        job_id, file_id = cmd.get("cmd_id"), cmd.get("file_id")
+        job_id = cmd.get("job_id")
 
         if self.busy_file is not None:
             await self.publish_result(client, {
-                "type": "FILE_ABORT", "cmd_id": job_id, "file_id": file_id,
+                "type": "FILE_ABORT", "job_id": job_id,
                 "device": with_colons(self.mac), "reason": "BUSY",
             })
             print(f"[{self.mac}]   거절: BUSY")
             return
 
         self.busy_file = job_id
-        self.state = "FILE"
+        await self.set_state(client, "FILE")
         try:
             url = cmd.get("https_url", "")
             expect = cmd.get("sha256", "")
@@ -317,42 +333,42 @@ class MockDevice:
 
             if len(body) and verify_ok:
                 await self.publish_result(client, {
-                    "type": "FILE_END", "ver": 267, "cmd_id": job_id, "file_id": file_id,
+                    "type": "FILE_END", "ver": 267, "job_id": job_id,
                     "device": with_colons(self.mac), "size": len(body), "verify_ok": 1,
                 })
                 print(f"[{self.mac}]   FILE_END ({len(body)} bytes, sha256 일치)")
             else:
                 reason = "SHA_MISMATCH" if len(body) else "DOWNLOAD_FAIL"
                 await self.publish_result(client, {
-                    "type": "FILE_ABORT", "cmd_id": job_id, "file_id": file_id,
+                    "type": "FILE_ABORT", "job_id": job_id,
                     "device": with_colons(self.mac), "reason": reason,
                 })
                 print(f"[{self.mac}]   FILE_ABORT ({reason})")
         except Exception as exc:  # noqa: BLE001
             await self.publish_result(client, {
-                "type": "FILE_ABORT", "cmd_id": job_id, "file_id": file_id,
+                "type": "FILE_ABORT", "job_id": job_id,
                 "device": with_colons(self.mac), "reason": "DOWNLOAD_FAIL",
             })
             print(f"[{self.mac}]   FILE_ABORT (다운로드 실패: {exc})")
         finally:
             self.busy_file = None
-            self.state = "IDLE"
+            await self.set_state(client, "IDLE")
 
     async def do_file_stop(self, client: aiomqtt.Client, cmd: dict) -> None:
         """멈출 게 있으면 FILE_ABORT(USER_CANCEL), 없으면 FILE_STOP_RESULT(NOT_ACTIVE)."""
-        job_id, file_id = cmd.get("cmd_id"), cmd.get("file_id")
+        job_id = cmd.get("job_id")
 
         if self.busy_file is None:
             await self.publish_result(client, {
-                "type": "FILE_STOP_RESULT", "ver": 267, "cmd_id": job_id, "file_id": file_id,
+                "type": "FILE_STOP_RESULT", "ver": 267, "job_id": job_id,
                 "device": with_colons(self.mac), "status": 1, "reason": "NOT_ACTIVE",
             })
             print(f"[{self.mac}]   FILE_STOP_RESULT (NOT_ACTIVE)")
         else:
             self.busy_file = None
-            self.state = "IDLE"
+            await self.set_state(client, "IDLE")
             await self.publish_result(client, {
-                "type": "FILE_ABORT", "cmd_id": job_id, "file_id": file_id,
+                "type": "FILE_ABORT", "job_id": job_id,
                 "device": with_colons(self.mac), "reason": "USER_CANCEL",
             })
             print(f"[{self.mac}]   FILE_ABORT (USER_CANCEL)")

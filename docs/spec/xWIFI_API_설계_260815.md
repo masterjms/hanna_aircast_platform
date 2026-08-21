@@ -104,10 +104,11 @@ DELETE /api/schedules/:id
 ## 10. OTA
 
 ```
-POST /api/ota/start          {file_id(pkg), targets, target_scope, target_id} -> OTA_START 발행
-POST /api/ota/apply           {job_id} -> OTA_APPLY 발행 (DOWNLOAD_DONE/WAIT_APPLY 확인 후에만 프론트에서 버튼 활성화)
-GET  /api/ota/jobs            진행 중/완료된 OTA job 목록과 최신 상태
+POST /api/ota/start          {file_id(pkg), target_scope, target_id} -> OTA_START 발행
+GET  /api/ota/jobs            진행 중/완료된 OTA job 목록과 최신 상태(state: ACCEPTED/PREPARE/DOWNLOADING/VERIFYING/COMPLETED/FAIL)
 ```
+
+2026-08-20부터 `OTA_APPLY`가 폐지되어 `/api/ota/apply` 엔드포인트는 없다 — 단말이 다운로드/검증(COMPLETED) 이후 서버 승인 없이 자동으로 적용+재부팅까지 진행한다. 최종 성공 여부는 재부팅 후 재접속된 단말의 STATUS 펌웨어 버전으로 판단(§단말 관리 API의 last_status 기준).
 
 권한: super_admin만. OTA 진행 중인 단말은 방송 API에서 자동으로 거절되어야 함(단말 자체도 BUSY로 거절하지만, 프론트 UI에서도 버튼을 미리 막아주는 게 자연스러움).
 
@@ -126,7 +127,7 @@ GET /api/costs/summary   ?scope=all|village&village_id=&from=&to=
 - 정확한 요청/응답 JSON 필드명, 에러 코드 체계
 - 페이지네이션 방식(offset/cursor)
 - WebSocket 또는 폴링으로 대시보드 실시간 갱신할지 여부 — 지금은 안 정함, 화면 설계 때 같이 결정
-- ID 필드 통일(job_id로 통일하는 안)이 코덱스와 확정되면 위 API의 필드명도 맞춰서 정리
+- ~~ID 필드 통일(job_id로 통일하는 안)~~ — 2026-08-20 ESP32측(코덱스)과 확정 완료. MQTT 프로토콜은 job_id로 통일됨(§통신 사양 참고). REST API의 `job_id`(방송 정지/OTA 대상 지정용)는 이미 이 명칭을 쓰고 있어 추가 변경 없음 — 단, `/api/broadcast/file/start`의 `file_id`는 별개 개념(재생할 파일의 DB `files.id`)이므로 혼동 주의
 
 ## 참고
 

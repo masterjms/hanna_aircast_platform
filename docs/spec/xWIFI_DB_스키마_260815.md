@@ -108,8 +108,8 @@ CREATE TABLE schedules (
 ```sql
 CREATE TABLE broadcast_events (
     id            BIGSERIAL PRIMARY KEY,
-    event_type    VARCHAR(20) NOT NULL,   -- LIVE_START/LIVE_STOP/FILE_START/FILE_STOP/OTA_START/OTA_APPLY/CONFIG
-    job_id        BIGINT,                 -- session_id/cmd_id/job_id 통일본 (코덱스 확인 후 확정)
+    event_type    VARCHAR(20) NOT NULL,   -- LIVE_START/LIVE_STOP/FILE_START/FILE_STOP/OTA_START/CONFIG (OTA_APPLY는 2026-08-20 폐지)
+    job_id        BIGINT,                 -- MQTT job_id 그대로 저장 (2026-08-20 session_id/cmd_id/job_id 통일 완료, §통신 사양 참고)
     target_scope  VARCHAR(20) NOT NULL CHECK (target_scope IN ('device','zone','village','all')),
     target_id     VARCHAR(50),
     file_id       INTEGER REFERENCES files(id),

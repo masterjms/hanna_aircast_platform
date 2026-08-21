@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
@@ -71,6 +72,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         seconds=settings.config_reconcile_interval_sec,
         args=[publisher],
         id="config-reconcile",
+        # 기동 직후에도 1회 돈다. interval 트리거는 기본적으로 첫 실행을
+        # now + interval 로 잡는데, 그러면 브로커 retain 이 유실된 채 서버가
+        # 뜬 경우 최대 1주기(기본 1시간) 동안 전 단말이 미배정으로 남는다.
+        # 태스크가 MQTT 연결을 자체적으로 기다리므로 바로 걸어도 안전하다.
+        next_run_time=datetime.now(),
         # 서버가 잠깐 멈췄다 살아나도 밀린 실행이 한꺼번에 터지지 않게 한다.
         coalesce=True,
         max_instances=1,

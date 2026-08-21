@@ -21,6 +21,7 @@ dist/
 # 런타임 데이터 (로컬 개발용 볼륨)
 /data/
 /var/
+/backend/data/
 
 # 에디터
 .vscode/

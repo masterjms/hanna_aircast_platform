@@ -304,7 +304,6 @@ async def start_file_broadcast(
 
     cmd = publisher.file_start_payload(
         job_id=job_id,
-        file_id=audio.id,
         size=audio.size_bytes,
         sha256=audio.sha256,
         url=url,
@@ -367,7 +366,7 @@ async def stop_file_broadcast(
     )
 
     if macs and event.job_id is not None and event.file_id is not None:
-        cmd = publisher.file_stop_payload(job_id=event.job_id, file_id=event.file_id)
+        cmd = publisher.file_stop_payload(job_id=event.job_id)
         try:
             await publisher.publish_command(
                 payload=cmd,
@@ -478,7 +477,7 @@ async def start_live_broadcast(
 
     try:
         await publisher.publish_command(
-            payload=publisher.live_start_payload(session_id=session_id, stream_url=url),
+            payload=publisher.live_start_payload(job_id=session_id, stream_url=url),
             target_scope=payload.target_scope,
             scope=scope,
             village_id=(
@@ -532,7 +531,7 @@ async def stop_live_broadcast(
     if macs and session_id is not None:
         try:
             await publisher.publish_command(
-                payload=publisher.live_stop_payload(session_id=session_id),
+                payload=publisher.live_stop_payload(job_id=session_id),
                 target_scope=TargetScope(event.target_scope),
                 scope=scope,
                 village_id=(
