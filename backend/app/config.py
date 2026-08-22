@@ -31,7 +31,9 @@ class Settings(BaseSettings):
     # ── 앱 ──────────────────────────────────────────────
     app_env: str = "dev"
     log_level: str = "INFO"
-    public_base_url: str = "http://localhost:8000"
+    #: 백엔드가 듣는 포트. Icecast 가 8000 을 쓰므로 8080 으로 비켜났다.
+    app_port: int = 8080
+    public_base_url: str = "http://localhost:8080"
     #: 쉼표로 구분한 문자열로 받는다. pydantic-settings 는 list 타입 환경변수를
     #: JSON 으로 파싱하려 들기 때문에 원문을 받아서 cors_origins 프로퍼티로 편다.
     cors_origins_raw: str = Field(default="", validation_alias="CORS_ORIGINS")

@@ -23,8 +23,9 @@ dist/
 /var/
 /backend/data/
 
-# 에디터
-.vscode/
+# 에디터 — tasks.json 은 팀이 공유하는 실행 태스크라 예외로 커밋한다.
+.vscode/*
+!.vscode/tasks.json
 .idea/
 .DS_Store
 Thumbs.db

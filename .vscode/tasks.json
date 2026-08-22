@@ -1,0 +1,85 @@
+{
+  // VSCode 에서 Ctrl+Shift+P → "Tasks: Run Task" 로 실행한다.
+  //
+  // "개발 환경 전부 실행" 이 기본 빌드 태스크(Ctrl+Shift+B)로 잡혀 있다.
+  // 백엔드·프론트·목단말은 각각 VSCode 터미널 탭으로 뜨므로 로그를 나란히 볼 수 있다.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "개발 환경 전부 실행",
+      "dependsOrder": "sequence",
+      "dependsOn": ["인프라 (docker)", "백엔드", "프론트", "목 단말"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "인프라 (docker)",
+      "type": "shell",
+      "command": "docker compose -f docker-compose.dev.yml up -d",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared", "close": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "백엔드",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe run.py",
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      // 계속 떠 있는 서버라 전용 탭을 준다. Ctrl+C 로 끈다.
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated", "group": "servers" },
+      "problemMatcher": []
+    },
+    {
+      "label": "프론트",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "${workspaceFolder}/frontend" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated", "group": "servers" },
+      "problemMatcher": []
+    },
+    {
+      "label": "목 단말",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe ..\\scripts\\mock_device.py --count 5",
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated", "group": "servers" },
+      "problemMatcher": []
+    },
+    {
+      "label": "전부 종료",
+      "type": "shell",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 down",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "상태 확인",
+      "type": "shell",
+      "command": "powershell -NoProfile -ExecutionPolicy Bypass -File ./dev.ps1 status",
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "테스트 (pytest)",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe -m pytest tests -q",
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    },
+    {
+      "label": "린트 (ruff)",
+      "type": "shell",
+      "command": ".\\.venv\\Scripts\\python.exe -m ruff check app tests ../scripts",
+      "options": { "cwd": "${workspaceFolder}/backend" },
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -10,10 +10,10 @@ export default defineConfig({
     // target 을 127.0.0.1 로 못 박는다. 'localhost' 를 쓰면 Node 가 ::1(IPv6) 로
     // 먼저 풀어서, 127.0.0.1 에만 바인딩된 백엔드에 연결이 안 된다.
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
-      '/health': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/api': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+      '/health': { target: 'http://127.0.0.1:8080', changeOrigin: true },
       // Phase 4 — 브라우저 마이크 업링크
-      '/ingest': { target: 'ws://127.0.0.1:8000', ws: true },
+      '/ingest': { target: 'ws://127.0.0.1:8080', ws: true },
     },
   },
 });

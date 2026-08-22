@@ -168,7 +168,7 @@ python -m venv .venv
 .venv/Scripts/python run.py
 ```
 
-API 문서: <http://localhost:8000/docs> · 상태: <http://localhost:8000/health>
+API 문서: <http://localhost:8080/docs> · 상태: <http://localhost:8080/health>
 
 ### 3. 프론트
 
@@ -179,6 +179,67 @@ npm run dev
 ```
 
 <http://localhost:5173> — `/api` 는 Vite 프록시가 백엔드로 넘긴다.
+
+### 포트 배치
+
+| 포트 | 무엇 | 왜 이 번호인가 |
+|---|---|---|
+| 8080 | 백엔드 API | Icecast 에 8000 을 내주고 비켰다 |
+| 8000 | Icecast | **단말 펌웨어가 `<ip>:8000/live` 로 고정 접속**한다. 문서(`docs/Icecast_구성작업_지시서_최종.md`)도 8000 기준 |
+| 1883 | MQTT | 통신 사양 §3.1 |
+| 5173 | 프론트 dev | Vite 기본값 |
+
+### 실물 단말 테스트
+
+목 단말이 아니라 실제 ESP32 를 붙일 때는 세 가지가 더 필요하다.
+
+**1. 단말이 이 PC 를 찾을 수 있어야 한다.** 단말은 `localhost` 가 아니라 이 PC 의
+LAN IP 로 접속한다. 단말과 PC 가 같은 네트워크(같은 공유기)에 있어야 한다.
+
+```powershell
+ipconfig | Select-String IPv4     # 이 IP 를 단말에 설정
+```
+
+**2. 방화벽을 열어야 한다.** 관리자 권한 PowerShell:
+
+```powershell
+netsh advfirewall firewall add rule name="xWIFI MQTT 1883" protocol=TCP dir=in localport=1883 action=allow profile=private
+netsh advfirewall firewall add rule name="xWIFI Icecast 8000" protocol=TCP dir=in localport=8000 action=allow profile=private
+netsh advfirewall firewall add rule name="xWIFI API 8080" protocol=TCP dir=in localport=8080 action=allow profile=private
+```
+
+> ⚠ `profile=private` 로 제한한다. 개발용 브로커는 **익명 접속을 허용**하므로
+> (`infra/mosquitto/config/mosquitto.dev.conf`), 공용 네트워크에 열면 아무나
+> 방송 명령을 보낼 수 있다. 네트워크 프로필이 "공용"이면 먼저 "개인"으로 바꾼다.
+
+**3. `.env` 의 `PUBLIC_BASE_URL` 을 LAN IP 로 바꾼다.** FILE_START 의 다운로드
+URL 을 만드는 값이라 `localhost` 면 단말이 자기 자신에게 받으러 간다.
+
+```
+PUBLIC_BASE_URL=http://192.168.0.5:8080
+ICECAST_PUBLIC_BASE_URL=http://192.168.0.5:8000
+```
+
+그다음 아래 감시 도구를 띄우고 단말 전원을 넣는다.
+
+### MQTT 감시 · 사양 검증
+
+```bash
+cd backend
+.venv/Scripts/python ../scripts/mqtt_monitor.py
+```
+
+브로커에 흐르는 모든 메시지를 보여주고, 단말이 보낸 것을 통신 사양과 대조한다.
+`--seconds 30` 으로 시간을 제한할 수 있고, Ctrl+C 로 끝내면 요약이 나온다.
+
+잡아내는 것:
+
+- `state` 가 IDLE/LIVE/FILE/RF/OTA/OFFLINE 밖의 값인지
+- OTA state 가 6종(ACCEPTED/PREPARE/DOWNLOADING/VERIFYING/COMPLETED/FAIL) 밖인지
+- **옛 ID 필드(`session_id`/`cmd_id`/`file_id`)를 쓰는지** — 보이면 단말 펌웨어가
+  job_id 통일(2026-08-20) 이전 버전이다
+- `village_id` 가 8자리 숫자인지, payload 의 `device` 가 토픽 MAC 과 맞는지
+- `config_version` 이 서버가 보낸 값으로 바뀌었는지 (CONFIG 가 실제로 먹었는지)
 
 ### 4. 목 단말 (실물 없이 테스트)
 

@@ -38,9 +38,10 @@ services:
     image: libretime/icecast:latest
     container_name: xwifi-icecast-dev
     ports:
-      # 컨테이너 안에서는 8000 이지만 호스트 8000 은 백엔드가 쓰므로 8100 으로 뺀다.
+      # 호스트도 8000 을 그대로 쓴다. 단말 펌웨어가 <ip>:8000/live 로 고정 접속하고
+      # 문서(Icecast_구성작업_지시서)도 8000 기준이라 여기 맞춘다. 백엔드는 8080 으로 비켰다.
       # 운영에서는 nginx 가 /live/ 를 프록시하므로 이 포트가 노출되지 않는다.
-      - "8100:8000"
+      - "8000:8000"
     environment:
       ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:-hackme}
       ICECAST_ADMIN_PASSWORD: ${ICECAST_SOURCE_PASSWORD:-hackme}

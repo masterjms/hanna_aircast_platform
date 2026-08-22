@@ -31,7 +31,7 @@ def main() -> None:
     config = uvicorn.Config(
         "app.main:app",
         host="127.0.0.1",
-        port=8000,
+        port=settings.app_port,
         log_level=settings.log_level.lower(),
         # reload 를 쓰면 uvicorn 이 자식 프로세스를 띄우며 셀렉터 루프를 고르지만,
         # 아래에서 우리가 루프를 직접 정하므로 여기서는 끄고 간다.

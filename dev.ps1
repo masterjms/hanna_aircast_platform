@@ -37,11 +37,11 @@ $Py       = Join-Path $Root 'backend\.venv\Scripts\python.exe'
 $BackDir  = Join-Path $Root 'backend'
 $FrontDir = Join-Path $Root 'frontend'
 
-$PORT_API   = 8000
+$PORT_API   = 8080
 $PORT_WEB   = 5173
 $PORT_PG    = 5432
 $PORT_MQTT  = 1883
-$PORT_ICE   = 8100
+$PORT_ICE   = 8000
 
 # ── 출력 ─────────────────────────────────────────────────────────────
 function Step($m) { Write-Host "`n▶ $m" -ForegroundColor Cyan }
@@ -330,8 +330,8 @@ xWIFI 마을방송 — 개발 환경 실행기
 
 주소
   화면      http://localhost:5173
-  API 문서  http://localhost:8000/docs
-  상태      http://localhost:8000/health
+  API 문서  http://localhost:8080/docs
+  상태      http://localhost:8080/health
 
 시드 계정
   admin   / admin1234!     super_admin (전체)
