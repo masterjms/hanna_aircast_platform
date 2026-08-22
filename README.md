@@ -222,6 +222,29 @@ ICECAST_PUBLIC_BASE_URL=http://192.168.0.5:8000
 
 그다음 아래 감시 도구를 띄우고 단말 전원을 넣는다.
 
+### 마을 배정이 단말에 전달되는 경로
+
+현재 펌웨어는 `iotradio/all/config` **하나만** 구독한다(통신 사양 §3.5). 그래서
+마을 배정도 이 공통 토픽으로 나가야 단말이 받는다.
+
+```
+iotradio/all/config   (QoS 1, retain)
+{"config_version":31,"status_interval_sec":45,"live_stats_interval_sec":10,
+ "event_qos":0,"village_id":"00000001"}
+```
+
+토픽이 하나라 `village_id` 도 하나뿐이다. 그래서 서버는 **배정된 단말이 전부 한
+마을일 때만** 값을 싣고, 마을이 둘 이상 섞이면 필드를 뺀다
+(`config_reconcile.shared_village_id`). 잘못 배정하느니 미배정으로 두는 편이
+안전하기 때문이다 — 필드를 잘못 실으면 A마을 단말이 B마을 방송을 받는다.
+
+배정이 바뀌면 `config_version` 을 올려서 다시 발행한다. 같은 토픽에 retain 으로
+덮어쓰는 구조라, 버전이 그대로면 단말이 "이미 적용한 설정"으로 보고 무시한다.
+
+단말별 토픽(`iotradio/device/<mac>/config`)도 함께 발행하고 있다. 코덱스와 협의
+중인 신규 항목이라 지금은 아무도 안 듣지만, 펌웨어가 이걸 구독하기 시작하면
+위의 "한 마을일 때만" 제약이 없어지고 다중 마을 운영이 가능해진다.
+
 ### MQTT 감시 · 사양 검증
 
 ```bash

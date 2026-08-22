@@ -18,8 +18,10 @@ param(
     [ValidateSet('setup', 'up', 'down', 'status', 'logs', 'infra', 'restart', 'help')]
     [string]$Command = 'help',
 
-    # 목 단말 수. 0 이면 안 띄운다. 실물 단말로 테스트할 땐 0 으로.
-    [int]$Mock = 5,
+    # 목 단말 수. 기본은 0 — 안 띄운다.
+    # 가짜 단말이 섞이면 실물 단말 로그를 읽을 수 없고, 방송 대상에도 끼어든다.
+    # 실물 없이 시험할 때만 -Mock 5 처럼 명시한다.
+    [int]$Mock = 0,
 
     # 프론트를 빼고 띄운다 (API 만 만질 때).
     [switch]$NoFront
@@ -205,7 +207,10 @@ function Start-Frontend {
 
 function Start-Mock([int]$Count) {
     Step "목 단말 $Count 대"
-    if ($Count -le 0) { Write-Host '  - 건너뜀 (-Mock 0)'; return }
+    if ($Count -le 0) {
+        Write-Host '  - 안 띄움 (실물 단말용). 가짜 단말이 필요하면 -Mock 5'
+        return
+    }
     if (-not (Test-Path $Py)) { Fail 'venv 가 없다 — setup 먼저'; return }
     Start-InNewWindow 'xWIFI 목단말' $BackDir `
         ".\.venv\Scripts\python.exe ..\scripts\mock_device.py --count $Count"
@@ -321,11 +326,17 @@ xWIFI 마을방송 — 개발 환경 실행기
   .\dev.ps1 restart   down 후 up.
 
 옵션
-  -Mock <N>     목 단말 수 (기본 5). 실물 단말로 테스트하려면 -Mock 0
+  -Mock <N>     가짜 단말 수 (기본 0 = 안 띄움). 실물 없이 시험할 때만 쓴다.
   -NoFront      프론트 없이 백엔드만
 
 예시
-  .\dev.ps1 up -Mock 0        실물 단말로 테스트
+  .\dev.ps1 up               실물 단말로 테스트 (가짜 단말 없음)
+  .\dev.ps1 up -Mock 5       실물 없이 가짜 단말 5대로 시험
+  
+  # 모니터링 스크립트 실행(실물 단말이 MQTT 로 보내는 메시지 확인)
+  cd xwifi-server\backend
+  .\.venv\Scripts\python.exe ..\scripts\mqtt_monitor.py
+
   .\dev.ps1 up -NoFront       API 만 만질 때
 
 주소

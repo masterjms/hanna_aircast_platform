@@ -75,31 +75,36 @@ class MqttPublisher:
         status_interval_sec: int,
         live_stats_interval_sec: int,
         event_qos: int,
+        village_id: int | None = None,
     ) -> None:
         """전 단말 공통 설정. retain=True 라서 나중에 붙는 단말도 즉시 받는다.
 
         payload 에 type 필드가 없다 — 통신 사양 §3.5 의 실제 형식이다.
         단말은 모르는 필드를 무시하고, clamp 범위를 벗어난 값은 그 필드만 버린다.
 
-        village_id 는 여기 넣지 않는다. 1차 LAN 데모에서는 전 단말이 한 마을이라
-        공통 CONFIG 에 실어 보냈지만, 여러 마을을 운영하면 전원이 같은 마을로
-        배정되어 버린다. 마을 배정은 publish_device_config() 로 단말별로 나간다.
+        village_id 를 왜 공통 CONFIG 에 싣는가:
+            현재 펌웨어는 이 토픽 하나만 구독한다(통신 사양 §3.5). 단말별
+            토픽(publish_device_config)은 코덱스와 협의 중인 신규 항목이라
+            아직 아무도 안 듣는다. 그래서 여기에 안 실으면 단말이 영영
+            "00000000"(미배정)으로 남고 마을 명령 토픽을 구독하지 않는다.
 
-        ⚠ 코덱스 협의 필요: 공통 CONFIG 에 village_id 가 빠졌을 때 단말이
-          (a) 기존 배정을 유지하는지 (b) "00000000" 으로 되돌리는지.
-          (b) 라면 단말별 CONFIG 구독이 붙기 전까지 전 단말이 미배정이 된다.
+            토픽이 하나뿐이라 값도 하나뿐이다 — 여러 마을이 섞이면 전원이 같은
+            마을로 배정되므로, 호출자는 "배정된 단말이 전부 한 마을일 때만"
+            값을 넘긴다(config_reconcile.shared_village_id 참고).
+
+        village_id=None 이면 필드 자체를 뺀다. 사양상 단말은 모르는 필드를
+        무시하므로, 빼는 것과 빈 값을 보내는 것은 다르다.
         """
-        await self._send(
-            topics.all_config(),
-            {
-                "config_version": config_version,
-                "status_interval_sec": status_interval_sec,
-                "live_stats_interval_sec": live_stats_interval_sec,
-                "event_qos": event_qos,
-            },
-            qos=_QOS_CONFIG,
-            retain=True,
-        )
+        payload: dict[str, object] = {
+            "config_version": config_version,
+            "status_interval_sec": status_interval_sec,
+            "live_stats_interval_sec": live_stats_interval_sec,
+            "event_qos": event_qos,
+        }
+        if village_id is not None:
+            payload["village_id"] = topics.village_token(village_id)
+
+        await self._send(topics.all_config(), payload, qos=_QOS_CONFIG, retain=True)
 
     async def publish_device_config(
         self,

@@ -19,9 +19,11 @@ from app.core.scope import VillageScope
 from app.errors import ApiError, DeviceAlreadyExists, DeviceNotFound, VillageNotFound
 from app.models.device import Device
 from app.models.org import Village, Zone
+from app.models.system import CurrentConfig
 from app.modules.org import service as org_service
 from app.mqtt.publisher import MqttPublisher
 from app.schemas.device import DeviceCreate, DeviceDetail, DeviceOut, DeviceUpdate
+from app.tasks import config_reconcile
 
 log = logging.getLogger(__name__)
 
@@ -307,8 +309,35 @@ async def update_device(
             )
         except Exception:  # noqa: BLE001
             log.exception("배정 후 CONFIG 발행 실패 (재조정 주기가 복구): %s", mac)
+        await _republish_global_config(db, publisher)
 
     return await get_device(db, mac, scope)
+
+
+async def _republish_global_config(db: AsyncSession, publisher: MqttPublisher) -> None:
+    """마을 배정이 바뀌었으니 공통 CONFIG 의 village_id 를 다시 내린다.
+
+    현재 펌웨어는 `iotradio/all/config` 만 구독하므로, 위의 단말별 발행만으로는
+    단말이 마을을 영영 모른다(통신 사양 §3.5).
+
+    config_version 을 같이 올리는 게 핵심이다 — 같은 토픽에 retain 으로 덮어쓰는
+    구조라, 버전이 그대로면 단말이 "이미 적용한 설정"으로 보고 무시한다.
+    """
+    config = await db.get(CurrentConfig, 1)
+    if config is None:
+        return
+    config.config_version += 1
+    await db.flush()
+    try:
+        await publisher.publish_global_config(
+            config_version=config.config_version,
+            status_interval_sec=config.status_interval_sec,
+            live_stats_interval_sec=config.live_stats_interval_sec,
+            event_qos=config.event_qos,
+            village_id=await config_reconcile.shared_village_id(db),
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("공통 CONFIG 재발행 실패 (재조정 주기가 복구)")
 
 
 async def delete_device(
@@ -321,17 +350,26 @@ async def delete_device(
 
     await db.delete(device)
     await db.flush()
-    await clear_device_configs(publisher, [mac])
+    await clear_device_configs(publisher, [mac], db)
 
 
-async def clear_device_configs(publisher: MqttPublisher, macs: Sequence[str]) -> None:
+async def clear_device_configs(
+    publisher: MqttPublisher, macs: Sequence[str], db: AsyncSession | None = None
+) -> None:
     """단말별 CONFIG retain 을 지운다.
 
     안 지우면 단말이 재접속할 때 브로커가 없어진 배정을 다시 물려준다.
     마을 삭제 · 단말 삭제 · 배정 해제 후에 부른다.
+
+    db 를 넘기면 공통 CONFIG 의 village_id 도 다시 맞춘다 — 마지막 단말이
+    빠져서 배정이 없어졌는데 공통 CONFIG 에 옛 마을이 남아 있으면, 새로 붙는
+    단말이 없어진 마을로 배정된다.
     """
     for mac in macs:
         try:
             await publisher.publish_device_config(mac=mac, village_id=None, config_version=0)
         except Exception:  # noqa: BLE001
             log.exception("CONFIG retain 삭제 실패: %s", mac)
+
+    if db is not None:
+        await _republish_global_config(db, publisher)

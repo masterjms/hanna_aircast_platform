@@ -14,6 +14,7 @@ from app.constants import CONFIG_LIMITS
 from app.errors import ApiError
 from app.mqtt.publisher import MqttPublisher
 from app.schemas.system import ConfigOut, ConfigUpdate, HealthOut
+from app.tasks import config_reconcile
 from app.tasks.config_reconcile import load_config
 
 log = logging.getLogger(__name__)
@@ -60,6 +61,8 @@ async def update_config(
             status_interval_sec=config.status_interval_sec,
             live_stats_interval_sec=config.live_stats_interval_sec,
             event_qos=config.event_qos,
+            # 주기만 바꿨는데 village_id 가 빠지면 단말이 미배정으로 되돌아간다.
+            village_id=await config_reconcile.shared_village_id(db),
         )
     except Exception:  # noqa: BLE001
         log.exception("CONFIG 발행 실패 (재조정 주기가 복구)")

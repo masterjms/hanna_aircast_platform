@@ -61,6 +61,8 @@ class Monitor:
         self.raw = raw
         self.macs: set[str] = set()
         self.types: Counter[str] = Counter()
+        #: 구독 직후 브로커가 밀어준 보관 메시지. 실시간 발행과 섞으면 안 된다.
+        self.retained: Counter[str] = Counter()
         self.problems: list[str] = []
         self.states: dict[str, str] = {}
         #: MAC 별 마지막 config_version — CONFIG 가 실제로 먹었는지 보는 값.
@@ -130,7 +132,7 @@ class Monitor:
             self.flag(mac, f"사양에 없는 type '{kind}'")
 
     # ── 출력 ─────────────────────────────────────────────────────────
-    def show(self, topic: str, raw: bytes) -> None:
+    def show(self, topic: str, raw: bytes, *, retained: bool = False) -> None:
         now = datetime.now().strftime("%H:%M:%S")
         parts = topic.split("/")
         # iotradio/device/<mac>/<leaf> · iotradio/village/<id>/cmd · iotradio/all/<leaf>
@@ -138,6 +140,10 @@ class Monitor:
         leaf = parts[-1]
         to_device = leaf in {"cmd", "config"}
         arrow = "S→D" if to_device else "D→S"
+
+        # 구독 직후 브로커가 밀어주는 보관 메시지는 "지금 발행된 것"이 아니다.
+        # 구분해서 안 보여주면 서버가 주기적으로 쏘는 것처럼 오해하게 된다.
+        tag = paint(" [보관]", "dim", enabled=self.color) if retained else ""
 
         if not raw:
             print(f"{paint(now, 'dim', enabled=self.color)} {arrow} {topic} "
@@ -154,7 +160,10 @@ class Monitor:
             return
 
         kind = str(data.get("type") or ("CONFIG" if leaf == "config" else "?"))
-        self.types[kind] += 1
+        if retained:
+            self.retained[kind] += 1
+        else:
+            self.types[kind] += 1
 
         if mac:
             if not _MAC_RE.match(mac):
@@ -166,7 +175,7 @@ class Monitor:
         color = "blue" if to_device else "green"
         head = f"{paint(now, 'dim', enabled=self.color)} {paint(arrow, color, enabled=self.color)} "
         body = json.dumps(data, ensure_ascii=False) if self.raw else _brief(data)
-        print(f"{head}{paint(kind, color, enabled=self.color)}  {topic}\n      {body}")
+        print(f"{head}{paint(kind, color, enabled=self.color)}{tag}  {topic}\n      {body}")
 
         if mac and not to_device:
             self.check_device_message(mac, topic, data)
@@ -196,7 +205,13 @@ class Monitor:
             print(f"    {mac}  state={state}  config_version={version}")
             print(f"      {kinds}")
 
-        print(f"\n  메시지 종류: {', '.join(f'{k}×{v}' for k, v in self.types.most_common())}")
+        live = ", ".join(f"{k}×{v}" for k, v in self.types.most_common()) or "없음"
+        print(f"\n  실시간 발행: {live}")
+        if self.retained:
+            # 구독 직후 브로커가 한 번에 밀어준 것이다. 서버가 주기적으로
+            # 쏘는 게 아니라는 걸 구분해서 보여준다.
+            kept = ", ".join(f"{k}×{v}" for k, v in self.retained.most_common())
+            print(f"  보관 메시지(구독 직후 1회): {kept}")
 
         if self.problems:
             print(paint(f"\n  사양 위반 {len(self.problems)}건:", "red", enabled=self.color))
@@ -229,7 +244,8 @@ async def watch(mon: Monitor, host: str, port: int, seconds: float | None) -> No
 
         async def loop() -> None:
             async for message in client.messages:
-                mon.show(str(message.topic), bytes(message.payload or b""))
+                mon.show(str(message.topic), bytes(message.payload or b""),
+                         retained=bool(message.retain))
 
         if seconds is None:
             await loop()

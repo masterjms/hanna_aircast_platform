@@ -65,7 +65,7 @@ async def delete_village(
     """
     macs = await service.macs_in_village(db, village_id)
     await service.delete_village(db, village_id)
-    await device_service.clear_device_configs(publisher, macs)
+    await device_service.clear_device_configs(publisher, macs, db)
 
 
 # ── 구역 ─────────────────────────────────────────────────────────────────

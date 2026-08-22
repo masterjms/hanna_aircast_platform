@@ -8,7 +8,7 @@
     {
       "label": "개발 환경 전부 실행",
       "dependsOrder": "sequence",
-      "dependsOn": ["인프라 (docker)", "백엔드", "프론트", "목 단말"],
+      "dependsOn": ["인프라 (docker)", "백엔드", "프론트"],
       "group": { "kind": "build", "isDefault": true },
       "problemMatcher": []
     },
@@ -40,7 +40,9 @@
       "problemMatcher": []
     },
     {
-      "label": "목 단말",
+      // 실물 단말로 테스트할 땐 띄우지 않는다 — 가짜 단말이 섞이면
+      // 로그를 읽을 수 없고 방송 대상에도 끼어든다. 그래서 기본 실행에서 뺐다.
+      "label": "목 단말 (실물 없이 시험할 때만)",
       "type": "shell",
       "command": ".\\.venv\\Scripts\\python.exe ..\\scripts\\mock_device.py --count 5",
       "options": { "cwd": "${workspaceFolder}/backend" },

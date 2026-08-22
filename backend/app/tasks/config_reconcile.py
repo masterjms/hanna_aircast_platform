@@ -35,6 +35,35 @@ async def load_config(db: AsyncSession) -> CurrentConfig:
     return config
 
 
+async def shared_village_id(db: AsyncSession) -> int | None:
+    """공통 CONFIG 에 실을 마을. 배정된 단말이 전부 한 마을일 때만 그 값을 준다.
+
+    현재 펌웨어는 `iotradio/all/config` 하나만 구독한다(통신 사양 §3.5). 토픽이
+    하나라 village_id 도 하나뿐이므로, 마을이 둘 이상 섞이면 어느 쪽을 실어도
+    나머지 마을 단말이 남의 마을 방송을 받게 된다. 그래서 그럴 땐 None 을 주고
+    필드를 뺀다 — 잘못 배정하느니 미배정으로 두는 편이 안전하다.
+
+    단말별 CONFIG 구독(publish_device_config)이 펌웨어에 붙으면 이 제약은
+    없어지고, 이 함수도 같이 사라진다.
+    """
+    rows = (
+        await db.execute(
+            select(Device.village_id).where(Device.village_id.is_not(None)).distinct()
+        )
+    ).scalars().all()
+
+    if len(rows) == 1:
+        return rows[0]
+    if len(rows) > 1:
+        log.warning(
+            "마을이 %d 개 배정돼 있어 공통 CONFIG 에서 village_id 를 뺀다 — "
+            "단말별 CONFIG 구독이 붙기 전까지 다중 마을은 지원되지 않는다 (마을 %s)",
+            len(rows),
+            sorted(rows),
+        )
+    return None
+
+
 async def publish_all(publisher: MqttPublisher) -> None:
     """공통 CONFIG 1회 + 마을이 배정된 단말별 CONFIG N회.
 
@@ -49,6 +78,7 @@ async def publish_all(publisher: MqttPublisher) -> None:
             status_interval_sec=config.status_interval_sec,
             live_stats_interval_sec=config.live_stats_interval_sec,
             event_qos=config.event_qos,
+            village_id=await shared_village_id(db),
         )
 
         rows = (
