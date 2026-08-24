@@ -14,16 +14,16 @@ from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import Select, false, func, not_, select
+from sqlalchemy import Select, false, func, not_, or_, select
 from sqlalchemy.orm import aliased
 
 from app.core.deps import Db, Scope
+from app.core.presence import is_online, online_clause, online_cutoff
 from app.core.scope import VillageScope
 from app.models.device import Device
 from app.models.event import BroadcastEvent
 from app.models.org import Village, Zone
 from app.modules.device import service as device_service
-from app.modules.device.service import is_online, online_clause, online_cutoff
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -52,7 +52,7 @@ class ActiveBroadcast(BaseModel):
     job_id: int | None
     event_type: str
     target_scope: str
-    target_id: str | None
+    target_ids: list[str]
     triggered_at: dt.datetime
 
 
@@ -60,7 +60,7 @@ class RecentEvent(BaseModel):
     id: int
     event_type: str
     target_scope: str
-    target_id: str | None
+    target_ids: list[str]
     triggered_at: dt.datetime
     ended_at: dt.datetime | None
 
@@ -119,10 +119,11 @@ def _scoped_events(stmt: Select, scope: VillageScope) -> Select:
     if scope.is_empty:
         # 담당 마을이 없으면 볼 수 있는 이력도 없다.
         return stmt.where(false())
-    village_ids = [str(v) for v in sorted(scope.village_ids)]
+    # target_ids 는 JSONB 목록이다. "내 마을 중 하나라도 대상에 들어 있는 행"을
+    # @>(contains) 를 마을별로 OR 해서 찾는다 — 이력 테이블 규모에서는 충분하다.
     return stmt.where(
         BroadcastEvent.target_scope == "village",
-        BroadcastEvent.target_id.in_(village_ids),
+        or_(*[BroadcastEvent.target_ids.contains([str(v)]) for v in sorted(scope.village_ids)]),
     )
 
 

@@ -20,6 +20,12 @@ declare module 'opus-recorder' {
     /** 2048 = VOIP, 2049 = AUDIO */
     encoderApplication?: number;
     mediaTrackConstraints?: MediaTrackConstraints | boolean;
+    /**
+     * 이미 만들어 둔 소스 노드. 주면 opus-recorder 가 getUserMedia 를
+     * 부르지 않는다 — 대신 스트림과 AudioContext 정리는 우리 몫이다.
+     * 마이크를 두 번 열면 윈도우에서 NotReadableError 가 난다.
+     */
+    sourceNode?: MediaStreamAudioSourceNode;
   }
 
   export default class Recorder {

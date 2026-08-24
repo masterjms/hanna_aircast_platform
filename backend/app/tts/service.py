@@ -15,7 +15,7 @@
   · 겹침 검사·권한·이력이 이미 방송 경로에 있다. TTS 가 따로 쏘면 전부 복제해야 한다.
 
 캐시:
-  키는 sha256(text|language|voice) 다. 같은 문구를 다시 만들면 Polly 를 부르지 않고
+  키는 sha256(text|language|voice) 다. 같은 문구를 다시 만들면 Google TTS 를 부르지 않고
   기존 파일을 그대로 돌려준다 — 미리듣기와 저장이 같은 키를 타므로 호출은 1회다.
   (사양 문서는 sha1 이라고 적었지만, 파일 해시로 이미 sha256 을 쓰고 있어
    해시를 두 종류 두지 않았다. 캐시 키라 보안 의미는 없다.)
@@ -43,7 +43,7 @@ from app.tts.engine import get_engine, normalize_mp3
 
 log = logging.getLogger(__name__)
 
-#: 한 번에 합성할 수 있는 글자 수. Polly 표준 요청 상한(3000자)보다 낮게 잡는다 —
+#: 한 번에 합성할 수 있는 글자 수. Google 요청 상한(5000바이트)보다 넉넉히 낮게 잡는다 —
 #: 마을 안내방송은 길어야 몇 문장이고, 긴 문구는 요금과 실수 위험이 같이 커진다.
 MAX_TEXT_LENGTH = 1000
 

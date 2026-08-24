@@ -4,6 +4,15 @@
 retain 이 유실되면 단말은 영영 낡은 설정으로 남는다. 그래서 기동 시 1회 + 주기적으로
 DB 값을 다시 발행한다.
 
+CONFIG 는 두 토픽으로 나뉜다(사양 §4):
+
+    iotradio/all/config            공통 설정만. **village_id 를 넣지 않는다.**
+    iotradio/device/<mac>/config   그 단말 하나의 마을 배정.
+
+두 토픽은 항상 같은 config_version 으로 **함께** 나가야 한다. 단말이 토픽별로
+버전을 따로 추적하지 않고 마지막에 받은 값을 쓰는 단일 카운터 구조라(사양 §4.3),
+한쪽만 올리면 단말이 낡은 값을 최종본으로 보고하게 된다.
+
 멱등이다. 같은 값을 몇 번을 다시 보내도 config_version 이 그대로면 단말은 무시한다.
 """
 
@@ -35,60 +44,60 @@ async def load_config(db: AsyncSession) -> CurrentConfig:
     return config
 
 
-async def shared_village_id(db: AsyncSession) -> int | None:
-    """공통 CONFIG 에 실을 마을. 배정된 단말이 전부 한 마을일 때만 그 값을 준다.
-
-    현재 펌웨어는 `iotradio/all/config` 하나만 구독한다(통신 사양 §3.5). 토픽이
-    하나라 village_id 도 하나뿐이므로, 마을이 둘 이상 섞이면 어느 쪽을 실어도
-    나머지 마을 단말이 남의 마을 방송을 받게 된다. 그래서 그럴 땐 None 을 주고
-    필드를 뺀다 — 잘못 배정하느니 미배정으로 두는 편이 안전하다.
-
-    단말별 CONFIG 구독(publish_device_config)이 펌웨어에 붙으면 이 제약은
-    없어지고, 이 함수도 같이 사라진다.
-    """
-    rows = (
-        await db.execute(
-            select(Device.village_id).where(Device.village_id.is_not(None)).distinct()
-        )
-    ).scalars().all()
-
-    if len(rows) == 1:
-        return rows[0]
-    if len(rows) > 1:
-        log.warning(
-            "마을이 %d 개 배정돼 있어 공통 CONFIG 에서 village_id 를 뺀다 — "
-            "단말별 CONFIG 구독이 붙기 전까지 다중 마을은 지원되지 않는다 (마을 %s)",
-            len(rows),
-            sorted(rows),
-        )
-    return None
+async def assigned_devices(db: AsyncSession) -> list[tuple[str, int]]:
+    """마을이 배정된 단말 (mac, village_id) 목록."""
+    rows = await db.execute(
+        select(Device.mac, Device.village_id).where(Device.village_id.is_not(None))
+    )
+    return [(mac, village_id) for mac, village_id in rows.all()]
 
 
-async def publish_all(publisher: MqttPublisher) -> None:
+async def unassigned_devices(db: AsyncSession) -> list[str]:
+    """마을이 없는 단말 MAC 목록. 이들의 보관본은 지워야 한다."""
+    rows = await db.scalars(select(Device.mac).where(Device.village_id.is_(None)))
+    return list(rows)
+
+
+async def publish_all(publisher: MqttPublisher, db: AsyncSession | None = None) -> None:
     """공통 CONFIG 1회 + 마을이 배정된 단말별 CONFIG N회.
 
-    미배정 단말은 건너뛴다 — 배정될 때 device 모듈이 개별 발행한다.
+    미배정 단말은 보관본을 지운다. DB 가 정본이므로, 브로커에 옛 배정이 남아
+    있으면 그 단말이 재접속할 때 없어진 마을을 다시 물려받는다. 빈 payload 는
+    이미 비어 있는 토픽에 보내도 아무 일이 없어서 매 주기 돌려도 무해하다.
+
+    db 를 넘기면 그 세션을 쓴다. 요청 처리 중(아직 커밋 전)에 부를 때 필요하다 —
+    새 세션을 열면 방금 올린 config_version 이 안 보인다.
     """
-    async with session_scope() as db:
-        config = await load_config(db)
-        version = config.config_version
+    if db is not None:
+        await _publish(publisher, db)
+        return
+    async with session_scope() as own:
+        await _publish(publisher, own)
 
-        await publisher.publish_global_config(
-            config_version=version,
-            status_interval_sec=config.status_interval_sec,
-            live_stats_interval_sec=config.live_stats_interval_sec,
-            event_qos=config.event_qos,
-            village_id=await shared_village_id(db),
-        )
 
-        rows = (
-            await db.execute(
-                select(Device.mac, Device.village_id).where(Device.village_id.is_not(None))
-            )
-        ).all()
+async def _publish(publisher: MqttPublisher, db: AsyncSession) -> None:
+    config = await load_config(db)
+    version = config.config_version
+    devices = await assigned_devices(db)
+
+    await publisher.publish_global_config(
+        config_version=version,
+        status_interval_sec=config.status_interval_sec,
+        live_stats_interval_sec=config.live_stats_interval_sec,
+        event_qos=config.event_qos,
+    )
+
+    # DB 가 미배정인데 브로커에 보관본이 남아 있으면, 그 단말은 재접속할 때
+    # 없어진 배정을 다시 물려받는다. 빈 payload 로 지운다 — 이미 비어 있으면
+    # 아무 일도 일어나지 않으므로 매 주기 돌려도 무해하다.
+    for mac in await unassigned_devices(db):
+        try:
+            await publisher.publish_device_config(mac=mac, village_id=None, config_version=0)
+        except Exception:  # noqa: BLE001
+            log.exception("미배정 단말 CONFIG retain 삭제 실패: %s", mac)
 
     published = 0
-    for mac, village_id in rows:
+    for mac, village_id in devices:
         try:
             await publisher.publish_device_config(
                 mac=mac, village_id=village_id, config_version=version
@@ -98,7 +107,7 @@ async def publish_all(publisher: MqttPublisher) -> None:
             # 한 대가 실패해도 나머지는 계속 보낸다. 다음 주기에 다시 시도된다.
             log.exception("단말 CONFIG 발행 실패: %s", mac)
 
-    log.info("CONFIG 재발행 완료 (version=%d, 단말 %d/%d대)", version, published, len(rows))
+    log.info("CONFIG 재발행 완료 (version=%d, 단말 %d/%d대)", version, published, len(devices))
 
 
 async def run(publisher: MqttPublisher, *, wait_for_connection: bool = True) -> None:

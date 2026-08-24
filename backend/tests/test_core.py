@@ -25,7 +25,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.errors import PayloadTooLarge, Unauthorized, VillageOutOfScope
+from app.errors import ApiError, PayloadTooLarge, Unauthorized, VillageOutOfScope
 from app.models.device import Device
 from app.mqtt import topics
 from app.mqtt.publisher import MqttPublisher, _encode
@@ -189,6 +189,91 @@ class TestPublisher:
         _, raw, _, retain = conn.sent[0]
         assert raw == b"" and retain is True
 
+    def test_stream_url_rejects_https_until_tls(self):
+        """단말 Icecast 클라이언트에 TLS 검증이 아직 없다 (ESP32 회신 260824 §3).
+
+        보내면 접속이 실패하고 LIVE_READY status=2 로만 드러난다 — 발행 전에 끊는다.
+        TLS 전환으로 단말이 https 를 지원하면 이 테스트와 검사를 함께 푼다.
+        """
+        from app.mqtt.publisher import STREAM_URL_MAX_BYTES
+
+        with pytest.raises(ApiError):
+            MqttPublisher.live_start_payload(job_id=1, stream_url="https://x.co.kr/live/1")
+
+        # http 는 정상
+        p = MqttPublisher.live_start_payload(job_id=1, stream_url="http://x.co.kr/live/1")
+        assert p["stream_url"] == "http://x.co.kr/live/1"
+
+        # 512B 초과는 거절 — 단말이 잘라 쓰지 않고 방송을 거절하기 때문
+        too_long = "http://x.co.kr/live/" + "9" * STREAM_URL_MAX_BYTES
+        with pytest.raises(ApiError):
+            MqttPublisher.live_start_payload(job_id=1, stream_url=too_long)
+
+    def test_second_result_for_same_job_is_not_deduped(self):
+        """단말은 한 job 에 LIVE_READY 를 두 번 보낸다 (ESP32 회신 260824 §5.1).
+
+            status=0  P4 출력 준비 완료 (Icecast 접속 *전*)
+            status=2  스트림 접속 실패로 abort
+
+        예전 dedup 키(mac:type:job_id)는 두 번째를 중복으로 보고 버렸다 — 서버가
+        그 단말을 영영 정상으로 알고, 화면은 "준비 완료"인데 스피커는 조용한
+        상태가 된다. OTA_STATUS 도 같은 job_id 로 상태가 여러 번 오므로 같은 문제였다.
+        """
+        from app.mqtt.handlers import _dedup_key
+
+        ready = {"type": "LIVE_READY", "job_id": 7, "status": 0, "reason": 0}
+        abort = {"type": "LIVE_READY", "job_id": 7, "status": 2, "reason": 1}
+
+        k_ready = _dedup_key("aabbcc000000", "LIVE_READY", 7, ready)
+        k_abort = _dedup_key("aabbcc000000", "LIVE_READY", 7, abort)
+        assert k_ready != k_abort, "상태가 다른 결과가 중복으로 묶이면 안 된다"
+
+        # 진짜 QoS1 재전송(내용 동일)은 여전히 걸러진다
+        assert k_abort == _dedup_key("aabbcc000000", "LIVE_READY", 7, dict(abort))
+
+    def test_telemetry_keeps_only_latest_row(self):
+        """LIVE_STATS 는 주기 telemetry 라 최신값 1행만 남긴다.
+
+        결과(LIVE_READY 등)와 달리 tick 마다 행을 쌓으면 300대 × 10초 주기에
+        방송 10분이면 18,000 행이 되고, 화면의 단말별 응답 목록도 같은 단말이
+        계속 늘어난다(DeviceEvent docstring 의 STATUS 정책과 같은 이유).
+
+        그래서 telemetry 는 dedup 키에 payload 를 넣지 않는다 — 값이 달라도
+        같은 키로 들어가 기존 행을 덮어쓴다.
+        """
+        from app.constants import TELEMETRY_RESULTS
+        from app.mqtt.handlers import _dedup_key
+
+        assert "LIVE_STATS" in TELEMETRY_RESULTS
+
+        early = {"type": "LIVE_STATS", "job_id": 9, "rx_seq_last": 100, "p4_buffer_ms": 400}
+        late = {"type": "LIVE_STATS", "job_id": 9, "rx_seq_last": 400, "p4_buffer_ms": 1600}
+        # telemetry 는 payload 없이 키를 만든다 → 값이 달라도 같은 키
+        assert _dedup_key("aabbcc000000", "LIVE_STATS", 9) == _dedup_key(
+            "aabbcc000000", "LIVE_STATS", 9
+        )
+        # 결과(payload 포함)와는 키가 겹치지 않아야 한다
+        assert _dedup_key("aabbcc000000", "LIVE_STATS", 9) != _dedup_key(
+            "aabbcc000000", "LIVE_STATS", 9, early
+        )
+        assert _dedup_key("aabbcc000000", "LIVE_STATS", 9, early) != _dedup_key(
+            "aabbcc000000", "LIVE_STATS", 9, late
+        )
+
+    def test_stats_text_summarises_quality(self):
+        """LIVE_STATS 는 실패 사유가 아니라 수신 품질로 요약한다.
+
+        소리가 끊긴다는 신고가 오면 버퍼 부족인지 디코딩 오류인지 여기서 가른다.
+        """
+        from app.modules.broadcast.service import _reason_text, _stats_text
+
+        assert _stats_text({"p4_buffer_ms": 1320}) == "버퍼 1.3초"
+        assert _stats_text({"p4_buffer_ms": 1480, "underrun_count": 3}) == "버퍼 1.5초 · 끊김 3"
+        # 정상이면 0 인 값은 굳이 늘어놓지 않는다
+        assert _stats_text({"p4_buffer_ms": 800, "underrun_count": 0}) == "버퍼 0.8초"
+        # telemetry 는 실패 사유 칸에 들어가지 않는다
+        assert _reason_text("LIVE_STATS", {"p4_buffer_ms": 1320}) is None
+
     def test_cmd_payloads_use_job_id_only(self):
         """CMD 의 job 식별자는 job_id 하나다 (통신 사양 2026-08-20 통일).
 
@@ -235,7 +320,7 @@ class TestPublisher:
             payload={"type": "LIVE_STOP", "job_id": 1},
             target_scope=TargetScope.VILLAGE,
             scope=VillageScope.for_super_admin(),
-            village_id=1,
+            village_ids=[1],
         )
         assert conn.sent[0][3] is False
 
@@ -269,7 +354,7 @@ class TestPublisher:
                 payload={"type": "LIVE_STOP"},
                 target_scope=TargetScope.VILLAGE,
                 scope=VillageScope.for_villages([1]),
-                village_id=2,
+                village_ids=[2],
             )
         assert conn.sent == []
 

@@ -96,6 +96,7 @@ async def ingest_endpoint(ws: WebSocket, session_id: int, registry: LiveRegistry
         return
 
     session.uplink_connected = True
+    session.uplink_seen = True
     await ws.send_text(json.dumps({"type": "ready", "mount": session.mount}))
     log.info("/ingest 연결 session=%d mount=%s", session_id, session.mount)
 

@@ -4,7 +4,7 @@
  * 파일 방송과 실시간 방송 둘 다 여기서 건다.
  *
  * 실시간은 브라우저 마이크 → WSS /ingest → Icecast → 단말 순으로 흐른다.
- * 마운트는 세션마다 갈라져서(/live/<마을8자리>/<세션id>) 마을 A 와 B 가
+ * 마운트는 방송마다 갈라져서(/live/<job_id>) 마을 A 와 B 가
  * 동시에 방송할 수 있다.
  *
  * 대상 단말이 이미 다른 방송에 잡혀 있으면 서버가 409 로 거절한다 —
@@ -12,7 +12,7 @@
  * 사용자가 판단하게 한다.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type {
@@ -26,8 +26,26 @@ import type {
 } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { getToken } from '../api/client';
-import { isUplinkSupported, useMicUplink } from '../hooks/useMicUplink';
+import { uplinkBlockedReason, useMicUplink } from '../hooks/useMicUplink';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
+
+/** 대상 대수 표시.
+ *
+ * 방송은 온라인 단말에만 나간다. 등록 대수만 보여주면 운영자가 "3대에
+ * 나가겠구나" 하고 눌렀는데 1대만 나가는 일이 생긴다 — 그래서 둘을 같이 쓰고,
+ * 꺼진 단말이 있으면 눈에 띄게 한다.
+ */
+function DeviceCount({ online, total }: { online: number; total: number }) {
+  if (total === 0) return <span className="dim">(단말 없음)</span>;
+  if (online === 0) return <span className="count count--none">(전부 오프라인 · {total}대)</span>;
+  if (online < total)
+    return (
+      <span className="count count--partial">
+        (온라인 {online}/{total}대)
+      </span>
+    );
+  return <span className="dim">(온라인 {online}대)</span>;
+}
 
 function formatTime(iso: string | null): string {
   if (!iso) return '—';
@@ -47,6 +65,8 @@ function ActiveCard({
   const isLive = broadcast.event_type.startsWith('LIVE');
   const done = broadcast.results.filter((r) => r.ok === true).length;
   const failed = broadcast.results.filter((r) => r.ok === false).length;
+  // results 는 단말당 1행이라 행 수가 곧 대수다. 예전에는 메시지마다 1행이라
+  // 단말 1대가 3행이 되면 "1 / 3대"처럼 대수를 틀리게 셌다.
   const total = Math.max(broadcast.target_count, broadcast.results.length);
   const pct = total > 0 ? Math.round(((done + failed) / total) * 100) : 0;
 
@@ -61,7 +81,7 @@ function ActiveCard({
           <div className="active-card__title">
             {broadcast.file_name ?? (isLive ? '실시간 방송' : broadcast.event_type)} ·{' '}
             {broadcast.target_scope}
-            {broadcast.target_id ? ` ${broadcast.target_id}` : ''}
+            {broadcast.target_ids.length > 0 ? ` ${broadcast.target_ids.join(', ')}` : ''}
           </div>
           <div className="dim" style={{ fontSize: 12 }}>
             job_id {broadcast.job_id} · {formatTime(broadcast.triggered_at)} 시작
@@ -111,6 +131,7 @@ function ActiveCard({
               <span className="mono dim">{r.mac}</span>
               <span className="strong">{r.label ?? ''}</span>
               {r.reason && <span className="dim">{r.reason}</span>}
+              {r.stats && <span className="dim">{r.stats}</span>}
             </li>
           ))}
         </ul>
@@ -123,9 +144,12 @@ export function BroadcastPage() {
   const { user, isSuperAdmin } = useAuth();
 
   const [scope, setScope] = useState<TargetScope>('village');
+  // 마을·단말은 다중 선택이다 — "마을 2곳 동시 방송" 같은 요구를 담는다.
+  // villageId(단수)는 구역·단말 목록을 거르는 필터로만 쓴다.
+  const [villageIds, setVillageIds] = useState<number[]>([]);
   const [villageId, setVillageId] = useState<number | ''>('');
   const [zoneId, setZoneId] = useState<number | ''>('');
-  const [mac, setMac] = useState('');
+  const [macs, setMacs] = useState<string[]>([]);
   const [fileId, setFileId] = useState<number | ''>('');
   const [storeFlash, setStoreFlash] = useState(false);
 
@@ -141,7 +165,14 @@ export function BroadcastPage() {
   // 진행 중인 실시간 방송의 event id. 마이크는 이 세션에 물린다.
   const [liveId, setLiveId] = useState<number | null>(null);
   const mic = useMicUplink();
-  const micSupported = isUplinkSupported();
+  /**
+   * 실시간 방송을 시작한 시각(ms). 아래 감시 효과가 "이 시각 이후에 받은
+   * 목록"으로만 판단하게 한다 — 시작 직후에는 목록이 아직 새 방송을 모른다.
+   */
+  const liveStartedAt = useRef(0);
+  // 왜 못 쓰는지까지 알려준다 — http 로 열어서인지, 브라우저가 낡아서인지
+  // 구분이 안 되면 사용자가 엉뚱한 곳을 고치게 된다.
+  const micBlocked = uplinkBlockedReason();
 
   const active = usePolling(() => api.broadcast.active(), POLL_INTERVAL.broadcasting);
 
@@ -173,14 +204,14 @@ export function BroadcastPage() {
     setZoneId('');
   }, [villageId]);
 
-  const targetId = (): string | null => {
-    if (scope === 'all') return null;
-    if (scope === 'village') return villageId === '' ? null : String(villageId);
-    if (scope === 'zone') return zoneId === '' ? null : String(zoneId);
-    return mac || null;
+  const targetIds = (): string[] => {
+    if (scope === 'all') return [];
+    if (scope === 'village') return villageIds.map(String);
+    if (scope === 'zone') return zoneId === '' ? [] : [String(zoneId)];
+    return macs;
   };
 
-  const targetReady = scope === 'all' || targetId() !== null;
+  const targetReady = scope === 'all' || targetIds().length > 0;
   const ready = fileId !== '' && targetReady;
 
   const startFile = async () => {
@@ -192,7 +223,7 @@ export function BroadcastPage() {
       await api.broadcast.fileStart({
         file_id: Number(fileId),
         target_scope: scope,
-        target_id: targetId(),
+        target_ids: targetIds(),
         store_flash: storeFlash,
         autoplay: true,
       });
@@ -218,8 +249,10 @@ export function BroadcastPage() {
       // 1) 서버가 세션을 만들고 Icecast 소스를 세운다
       const b = await api.broadcast.liveStart({
         target_scope: scope,
-        target_id: targetId(),
+        target_ids: targetIds(),
       });
+      // 아래 감시 효과가 오판하지 않도록 시작 시각을 먼저 찍는다.
+      liveStartedAt.current = Date.now();
       setLiveId(b.id);
       active.reload();
 
@@ -267,12 +300,17 @@ export function BroadcastPage() {
   const running = active.data ?? [];
 
   // 방송이 서버 쪽에서 끝났는데(다른 창에서 중지 등) 마이크가 남아 있으면 정리한다.
+  //
+  // 시작 시각보다 오래된 목록으로는 판단하지 않는다. setLiveId 는 즉시 반영되는데
+  // 목록 갱신은 비동기라, 그 사이에 "없으니 끝났다"고 오판하면 방금 만든 업링크를
+  // 핸드셰이크 도중에 끊어버린다(WebSocket 1006).
   useEffect(() => {
-    if (liveId !== null && !running.some((b) => b.id === liveId)) {
-      mic.stop();
-      setLiveId(null);
-    }
-  }, [liveId, running, mic]);
+    if (liveId === null) return;
+    if (active.fetchedAt <= liveStartedAt.current) return;
+    if (running.some((b) => b.id === liveId)) return;
+    mic.stop();
+    setLiveId(null);
+  }, [liveId, running, mic, active.fetchedAt]);
 
   return (
     <>
@@ -331,7 +369,35 @@ export function BroadcastPage() {
             )}
           </div>
 
-          {scope !== 'all' && (
+          {scope === 'village' && (
+            <div className="field">
+              <label>마을 (여러 곳 선택 가능)</label>
+              <div className="check-list">
+                {villages.map((v) => (
+                  <label key={v.id} className="check-list__item">
+                    <input
+                      type="checkbox"
+                      checked={villageIds.includes(v.id)}
+                      disabled={v.online_count === 0}
+                      onChange={(e) =>
+                        setVillageIds((prev) =>
+                          e.target.checked ? [...prev, v.id] : prev.filter((x) => x !== v.id),
+                        )
+                      }
+                    />
+                    {v.name} <DeviceCount online={v.online_count} total={v.device_count} />
+                  </label>
+                ))}
+              </div>
+              {villageIds.length > 1 && (
+                <p className="hint">
+                  선택한 {villageIds.length}개 마을이 같은 방송을 동시에 받습니다.
+                </p>
+              )}
+            </div>
+          )}
+
+          {(scope === 'zone' || scope === 'device') && (
             <div className="field">
               <label htmlFor="b-village">마을</label>
               <select
@@ -342,7 +408,7 @@ export function BroadcastPage() {
                 <option value="">선택하세요</option>
                 {villages.map((v) => (
                   <option key={v.id} value={v.id}>
-                    {v.name} ({v.device_count}대)
+                    {v.name} (온라인 {v.online_count}/{v.device_count}대)
                   </option>
                 ))}
               </select>
@@ -361,7 +427,7 @@ export function BroadcastPage() {
                 <option value="">선택하세요</option>
                 {zones.map((z) => (
                   <option key={z.id} value={z.id}>
-                    {z.name} ({z.device_count}대)
+                    {z.name} (온라인 {z.online_count}/{z.device_count}대)
                   </option>
                 ))}
               </select>
@@ -370,17 +436,26 @@ export function BroadcastPage() {
 
           {scope === 'device' && (
             <div className="field">
-              <label htmlFor="b-mac">단말</label>
-              <select id="b-mac" value={mac} onChange={(e) => setMac(e.target.value)}>
-                <option value="">선택하세요</option>
+              <label>단말 (여러 대 선택 가능)</label>
+              <div className="check-list">
                 {devices
                   .filter((d) => villageId === '' || d.village_id === villageId)
                   .map((d) => (
-                    <option key={d.mac} value={d.mac} disabled={!d.online}>
+                    <label key={d.mac} className="check-list__item">
+                      <input
+                        type="checkbox"
+                        checked={macs.includes(d.mac)}
+                        disabled={!d.online}
+                        onChange={(e) =>
+                          setMacs((prev) =>
+                            e.target.checked ? [...prev, d.mac] : prev.filter((m) => m !== d.mac),
+                          )
+                        }
+                      />
                       {d.label ?? d.mac} {d.online ? '' : '(오프라인)'}
-                    </option>
+                    </label>
                   ))}
-              </select>
+              </div>
             </div>
           )}
 
@@ -395,10 +470,8 @@ export function BroadcastPage() {
           <section className="card">
             <h2 className="section-title">실시간 방송</h2>
 
-            {!micSupported ? (
-              <p className="hint hint--warn">
-                이 브라우저에서는 마이크를 사용할 수 없습니다. 최신 브라우저에서 열어 주세요.
-              </p>
+            {micBlocked ? (
+              <p className="hint hint--warn">{micBlocked}</p>
             ) : (
               <>
                 <div className="mic">
@@ -448,8 +521,9 @@ export function BroadcastPage() {
                 </button>
 
                 <p className="hint">
-                  마이크 권한을 허용해야 시작됩니다. 단말은 세션 전용 주소
-                  (/live/&lt;마을&gt;/&lt;세션&gt;)로 붙어서 마을끼리 동시에 방송할 수 있습니다.
+                  마이크 권한을 허용해야 시작됩니다. 단말은 방송마다 다른 주소
+                  (/live/&lt;방송번호&gt;)로 붙으므로, 내용이 다른 방송을 마을끼리 동시에
+                  내보낼 수 있습니다.
                 </p>
               </>
             )}

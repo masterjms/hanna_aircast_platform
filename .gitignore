@@ -13,10 +13,12 @@ node_modules/
 dist/
 .vite/
 
-# 환경 변수 — .env.example만 커밋한다
+# 환경 변수 — *.example 만 커밋한다. 실제 값은 PC 마다 다르다.
 .env
 .env.*
 !.env.example
+!.env.local.example
+!.env.device.example
 
 # 런타임 데이터 (로컬 개발용 볼륨)
 /data/

@@ -11,6 +11,9 @@
     <location>xWIFI</location>
     <admin>admin@localhost</admin>
 
+    <!-- entrypoint 가 ICECAST_HOSTNAME 으로 덮어쓴다. 요소가 없으면 못 넣는다. -->
+    <hostname>localhost</hostname>
+
     <limits>
         <!-- 단말 300대 + 관리자 모니터링 여유 -->
         <clients>400</clients>
@@ -47,9 +50,12 @@
     </mount>
 
     <paths>
-        <logdir>/var/log/icecast2</logdir>
-        <webroot>/usr/share/icecast2/web</webroot>
-        <adminroot>/usr/share/icecast2/admin</adminroot>
+        <!-- libretime/icecast 이미지 기준 경로다. Debian 패키지(icecast2)와 다르니
+             이미지를 바꾸면 여기도 같이 확인해야 한다. -->
+        <basedir>/usr/share/icecast</basedir>
+        <logdir>/var/log/icecast</logdir>
+        <webroot>/usr/share/icecast/web</webroot>
+        <adminroot>/usr/share/icecast/admin</adminroot>
     </paths>
 
     <logging>

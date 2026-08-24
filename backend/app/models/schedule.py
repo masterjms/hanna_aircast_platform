@@ -14,7 +14,7 @@ from sqlalchemy import (
     Time,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.constants import TargetScope
@@ -46,8 +46,8 @@ class Schedule(Base):
     file_id: Mapped[int] = mapped_column(ForeignKey("files.id"), nullable=False)
 
     target_scope: Mapped[str] = mapped_column(String(20), nullable=False)
-    #: scope 에 맞는 mac / zone_id / village_id. scope='all' 이면 NULL.
-    target_id: Mapped[str | None] = mapped_column(String(50))
+    #: scope 에 맞는 id 목록 (broadcast_events.target_ids 와 동일 규칙).
+    target_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
     created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))

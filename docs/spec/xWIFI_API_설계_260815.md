@@ -49,14 +49,25 @@ DELETE /api/zones/:id
 ## 4. 방송 제어
 
 ```
-POST /api/broadcast/live/start   {target_scope, target_id}
-POST /api/broadcast/live/stop    {target_scope, target_id, job_id}
-POST /api/broadcast/file/start   {target_scope, target_id, file_id}
-POST /api/broadcast/file/stop    {target_scope, target_id, job_id?}
+POST /api/broadcast/live/start   {target_scope, target_ids[]}
+POST /api/broadcast/live/stop    {broadcast_id}
+POST /api/broadcast/file/start   {target_scope, target_ids[], file_id}
+POST /api/broadcast/file/stop    {broadcast_id}
 GET  /api/broadcast/active       현재 진행 중인 방송 목록(대시보드 패널용)
 ```
 
-target_scope는 device/zone/village/all 중 하나. village_admin은 all과 자기 담당 외 village/device를 요청하면 403. 내부적으로 zone/village/all은 백엔드가 devices 테이블 조회해서 MQTT는 iotradio/village/<id>/cmd 또는 개별 device 토픽으로 발행(§통신 사양 그대로).
+target_scope는 device/zone/village/all 중 하나. **target_ids는 목록이다**(2026-08-24) — 마을 여러 곳을 한 방송으로 묶는 "다중 마을 동시 방송"을 값 하나로는 표현할 수 없어서다. scope=all이면 빈 목록.
+
+  village  target_ids = 마을 id 들   예) ["1","2"]  → 두 마을이 같은 방송을 받는다
+  zone     target_ids = 구역 id 들
+  device   target_ids = MAC 들       예) 한 마을에서 단말 3대만
+  all      target_ids = []
+
+village_admin은 all과, **목록 중 하나라도** 담당 밖이면 403(일부만 나가는 방송은 의도한 결과가 아니므로 전체를 거절). 내부적으로 zone/village/all은 백엔드가 devices 테이블을 조회해서 MQTT는 대상 마을마다 iotradio/village/<id>/cmd 로, 또는 개별 device 토픽으로 발행한다(§통신 사양 그대로). **다중 마을이어도 job_id와 stream_url은 하나**다 — 여러 토픽에 같은 payload를 내보내 단말들이 같은 마운트로 모인다.
+
+라이브 방송의 Icecast 마운트는 `/live/<job_id>`. 마을을 경로에 넣지 않는 이유는 다중 마을 방송을 경로로 표현할 수 없어서다("어느 마을인가"는 이력의 target_ids가 답한다). 단말은 LIVE_START.stream_url 문자열을 그대로 쓰므로 경로 구조는 서버 재량이다.
+
+**무음 방송 자동 종료**: 라이브 시작 후 LIVE_UPLINK_GRACE_SEC(기본 30초) 안에 마이크 업링크(/ingest)가 한 번도 붙지 않으면 서버가 방송을 자동 종료한다. 화면에는 ON AIR로 보이는데 스피커는 조용한 상태가 프로덕션에서 가장 위험하기 때문이다. 붙었다 끊긴 경우는 재연결 여지가 있으므로 종료하지 않는다.
 
 ## 5. 파일 라이브러리
 
@@ -104,7 +115,7 @@ DELETE /api/schedules/:id
 ## 10. OTA
 
 ```
-POST /api/ota/start          {file_id(pkg), target_scope, target_id} -> OTA_START 발행
+POST /api/ota/start          {file_id(pkg), target_scope, target_ids[]} -> OTA_START 발행
 GET  /api/ota/jobs            진행 중/완료된 OTA job 목록과 최신 상태(state: ACCEPTED/PREPARE/DOWNLOADING/VERIFYING/COMPLETED/FAIL)
 ```
 

@@ -32,5 +32,5 @@ class VoiceCatalogOut(BaseModel):
 
 class TtsResult(BaseModel):
     file: FileOut
-    #: True 면 기존 합성본을 재사용한 것이다(Polly 호출 없음).
+    #: True 면 기존 합성본을 재사용한 것이다(Google TTS 호출 없음).
     cached: bool

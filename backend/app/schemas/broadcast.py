@@ -13,8 +13,9 @@ from app.schemas.common import ApiModel
 class FileBroadcastRequest(BaseModel):
     file_id: int
     target_scope: TargetScope
-    #: scope 에 맞는 mac / zone_id / village_id. scope=all 이면 생략한다.
-    target_id: str | None = Field(default=None, max_length=50)
+    #: scope 에 맞는 id 목록 — village 면 마을 id 들, device 면 MAC 들.
+    #: scope=all 이면 빈 목록. "마을 2곳 동시 방송" 같은 다중 대상을 위해 목록이다.
+    target_ids: list[str] = Field(default_factory=list, max_length=200)
     #: P4 플래시에 저장할지. 반복 재생할 안내음성이면 True 가 유리하다.
     store_flash: bool = False
     #: 다운로드 완료 후 자동 재생. 기본은 True — 방송 버튼을 눌렀으니 틀리길 원한다.
@@ -23,7 +24,7 @@ class FileBroadcastRequest(BaseModel):
 
 class LiveBroadcastRequest(BaseModel):
     target_scope: TargetScope
-    target_id: str | None = Field(default=None, max_length=50)
+    target_ids: list[str] = Field(default_factory=list, max_length=200)
 
 
 class BroadcastStopRequest(BaseModel):
@@ -39,6 +40,8 @@ class DeviceResultOut(BaseModel):
     #: True=성공, False=실패, None=아직 응답 없음.
     ok: bool | None = None
     reason: str | None = None
+    #: LIVE_STATS 요약(버퍼·끊김). 결과가 아니라 수신 품질이라 따로 둔다.
+    stats: str | None = None
     received_at: dt.datetime | None = None
 
 
@@ -47,7 +50,7 @@ class BroadcastOut(ApiModel):
     job_id: int | None
     event_type: str
     target_scope: TargetScope
-    target_id: str | None
+    target_ids: list[str]
     file_id: int | None
     file_name: str | None = None
     triggered_at: dt.datetime

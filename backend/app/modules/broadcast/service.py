@@ -14,6 +14,7 @@ broadcast_events 를 소유한다. 흐름은 항상 같다:
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 
@@ -21,19 +22,19 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.constants import EventType, TargetScope
+from app.constants import TELEMETRY_RESULTS, EventType, TargetScope
 from app.core.ids import next_job_id
 from app.core.scope import VillageScope
+from app.db import session_scope
 from app.errors import ApiError, BroadcastOverlap, NotFound
 from app.live.icecast import IcecastSource
-from app.live.mount import mount_path, stream_url, village_for_target
+from app.live.mount import mount_path, stream_url
 from app.live.registry import LiveRegistry, LiveSession
 from app.models.device import Device
 from app.models.event import BroadcastEvent, DeviceEvent
 from app.models.file import File
 from app.modules.device import service as device_service
 from app.modules.file import service as file_service
-from app.modules.org import service as org_service
 from app.mqtt.publisher import MqttPublisher
 from app.schemas.broadcast import (
     BroadcastOut,
@@ -67,7 +68,7 @@ async def _resolve_targets(
     db: AsyncSession,
     *,
     target_scope: TargetScope,
-    target_id: str | None,
+    target_ids: list[str],
     scope: VillageScope,
 ) -> list[str]:
     """방송 대상 → 온라인 MAC 목록."""
@@ -79,7 +80,7 @@ async def _resolve_targets(
     macs = await device_service.macs_for_target(
         db,
         target_scope=target_scope.value,
-        target_id=target_id,
+        target_ids=target_ids,
         scope=scope,
         online_only=True,
     )
@@ -135,7 +136,7 @@ async def _assert_no_overlap(db: AsyncSession, macs: list[str]) -> None:
             busy = await device_service.macs_for_target(
                 db,
                 target_scope=event.target_scope,
-                target_id=event.target_id,
+                target_ids=event.target_ids,
                 scope=admin_scope,
                 online_only=False,
             )
@@ -158,6 +159,30 @@ async def _assert_no_overlap(db: AsyncSession, macs: list[str]) -> None:
         raise BroadcastOverlap(detail={"conflicts": conflicts})
 
 
+def _reason_text(result_type: str | None, payload: dict) -> str | None:
+    """실패 사유 등 결과에 붙는 짧은 설명."""
+    if result_type in TELEMETRY_RESULTS:
+        return None
+    return str(payload.get("reason") or payload.get("fail_reason") or "") or None
+
+
+def _stats_text(payload: dict) -> str | None:
+    """LIVE_STATS 를 한 줄로 요약한다.
+
+    버퍼가 얼마나 차 있고 끊김(언더런)이 있었는지가 운영자가 볼 값이다.
+    소리가 끊긴다는 신고가 오면 여기 숫자로 원인을 가른다.
+    """
+    parts = []
+    buffer_ms = payload.get("p4_buffer_ms")
+    if buffer_ms is not None:
+        parts.append(f"버퍼 {int(buffer_ms) / 1000:.1f}초")
+    for key, label in (("underrun_count", "끊김"), ("decode_error_count", "디코딩오류")):
+        count = payload.get(key)
+        if count:
+            parts.append(f"{label} {count}")
+    return " · ".join(parts) or None
+
+
 # ── 조회 ─────────────────────────────────────────────────────────────────
 async def _to_out(
     db: AsyncSession, event: BroadcastEvent, registry: LiveRegistry | None = None
@@ -176,7 +201,7 @@ async def _to_out(
             macs = await device_service.macs_for_target(
                 db,
                 target_scope=event.target_scope,
-                target_id=event.target_id,
+                target_ids=event.target_ids,
                 scope=VillageScope.for_super_admin(),
                 online_only=True,
             )
@@ -205,8 +230,29 @@ async def _to_out(
         )
     ).all()
 
-    results: list[DeviceResultOut] = []
+    # 단말 하나당 한 줄로 접는다.
+    #
+    # 한 단말이 같은 방송에 메시지를 여러 번 보낸다:
+    #   LIVE_READY status=0  준비 완료 (Icecast 접속 전)
+    #   LIVE_STATS           수신 품질, 주기적으로
+    #   LIVE_READY status=2  접속 실패로 abort
+    # 이걸 그대로 나열하면 단말 1대가 화면에 3줄로 보이고, "준비 완료 1/2대"
+    # 처럼 대수까지 틀리게 센다(행 수를 대수로 착각).
+    #
+    # 그래서 단말마다 **마지막 결과**로 상태를 정하고, telemetry 는 그 줄에
+    # 덧붙인다. 마지막 결과를 쓰는 게 중요하다 — status=0 뒤에 abort 가 오면
+    # 그 단말은 실패다(ESP32 회신 260824 §5.2).
+    latest: dict[str, tuple[DeviceEvent, str | None]] = {}
+    telemetry: dict[str, DeviceEvent] = {}
     for de, label in rows:
+        if de.result_type in TELEMETRY_RESULTS:
+            telemetry[de.mac] = de
+            latest.setdefault(de.mac, (de, label))
+        else:
+            latest[de.mac] = (de, label)
+
+    results: list[DeviceResultOut] = []
+    for mac, (de, label) in latest.items():
         payload = de.payload or {}
         ok: bool | None = None
         if de.result_type in _SUCCESS_RESULTS:
@@ -217,16 +263,19 @@ async def _to_out(
         elif de.result_type in _FAILURE_RESULTS:
             ok = False
 
+        stats = telemetry.get(mac)
         results.append(
             DeviceResultOut(
-                mac=de.mac,
+                mac=mac,
                 label=label,
                 result_type=de.result_type,
                 ok=ok,
-                reason=str(payload.get("reason") or payload.get("fail_reason") or "") or None,
+                reason=_reason_text(de.result_type, payload),
+                stats=_stats_text(stats.payload or {}) if stats is not None else None,
                 received_at=de.received_at,
             )
         )
+    results.sort(key=lambda r: (r.ok is not False, r.mac))
 
     out.results = results
 
@@ -255,8 +304,10 @@ async def list_active(
 def _visible_to(event: BroadcastEvent, scope: VillageScope) -> bool:
     if scope.all_villages:
         return True
-    if event.target_scope == TargetScope.VILLAGE.value and event.target_id:
-        return int(event.target_id) in scope.village_ids
+    if event.target_scope == TargetScope.VILLAGE.value and event.target_ids:
+        # 대상 마을 중 하나라도 담당이면 보인다 — 다중 마을 방송은 관련된
+        # 모든 village_admin 이 봐야 중지도 할 수 있다.
+        return any(int(v) in scope.village_ids for v in event.target_ids)
     # device/zone/all 대상은 마을을 바로 알 수 없다. 보수적으로 감춘다.
     return False
 
@@ -292,7 +343,7 @@ async def start_file_broadcast(
     await _lock_broadcast_start(db)
 
     macs = await _resolve_targets(
-        db, target_scope=payload.target_scope, target_id=payload.target_id, scope=scope
+        db, target_scope=payload.target_scope, target_ids=payload.target_ids, scope=scope
     )
     await _assert_no_overlap(db, macs)
 
@@ -318,7 +369,7 @@ async def start_file_broadcast(
         event_type=EventType.FILE_START.value,
         job_id=job_id,
         target_scope=payload.target_scope.value,
-        target_id=payload.target_id,
+        target_ids=payload.target_ids,
         file_id=audio.id,
         triggered_by=user_id,
     )
@@ -329,7 +380,7 @@ async def start_file_broadcast(
         payload=cmd,
         target_scope=payload.target_scope,
         scope=scope,
-        village_id=int(payload.target_id) if payload.target_scope is TargetScope.VILLAGE else None,
+        village_ids=_village_ids(payload.target_scope, payload.target_ids),
         macs=macs,
     )
     log.info("파일 방송 시작 job_id=%s 대상 %d대 file=%s", job_id, len(macs), audio.filename)
@@ -360,7 +411,7 @@ async def stop_file_broadcast(
     macs = await device_service.macs_for_target(
         db,
         target_scope=event.target_scope,
-        target_id=event.target_id,
+        target_ids=event.target_ids,
         scope=scope,
         online_only=True,
     )
@@ -372,11 +423,7 @@ async def stop_file_broadcast(
                 payload=cmd,
                 target_scope=TargetScope(event.target_scope),
                 scope=scope,
-                village_id=(
-                    int(event.target_id)
-                    if event.target_scope == TargetScope.VILLAGE.value and event.target_id
-                    else None
-                ),
+                village_ids=_village_ids(TargetScope(event.target_scope), event.target_ids),
                 macs=macs,
             )
         except Exception:  # noqa: BLE001
@@ -391,23 +438,11 @@ async def stop_file_broadcast(
 
 
 # ── 실시간 방송 ──────────────────────────────────────────────────────────
-async def _village_of_target(
-    db: AsyncSession, target_scope: TargetScope, target_id: str | None
-) -> int | None:
-    """마운트 경로에 넣을 마을. 전체 방송이면 None.
-
-    zone/device 도 결국 어느 한 마을에 속한다 — 그 마을을 찾아 넣어야
-    URL 만 보고 어느 마을 방송인지 알 수 있다.
-    """
-    if target_scope is TargetScope.ALL:
-        return None
-    if target_scope is TargetScope.VILLAGE:
-        return int(target_id) if target_id else None
-    if target_scope is TargetScope.ZONE and target_id:
-        return await org_service.zone_village_id(db, int(target_id))
-    if target_scope is TargetScope.DEVICE and target_id:
-        return await db.scalar(select(Device.village_id).where(Device.mac == target_id))
-    return None
+def _village_ids(target_scope: TargetScope, target_ids: list[str]) -> list[int]:
+    """발행에 넘길 마을 id 목록. 마을 대상이 아니면 빈 목록(발행부가 무시한다)."""
+    if target_scope is not TargetScope.VILLAGE:
+        return []
+    return [int(v) for v in target_ids]
 
 
 async def start_live_broadcast(
@@ -433,16 +468,13 @@ async def start_live_broadcast(
     await _lock_broadcast_start(db)
 
     macs = await _resolve_targets(
-        db, target_scope=payload.target_scope, target_id=payload.target_id, scope=scope
+        db, target_scope=payload.target_scope, target_ids=payload.target_ids, scope=scope
     )
     await _assert_no_overlap(db, macs)
 
     session_id = await next_job_id(db)
-    village_id = await _village_of_target(db, payload.target_scope, payload.target_id)
-    mount = mount_path(
-        village_id=village_for_target(payload.target_scope, village_id),
-        session_id=session_id,
-    )
+    # 마운트는 job_id 하나로 정한다 — 다중 마을 방송은 경로에 마을을 담을 수 없다.
+    mount = mount_path(session_id)
     url = stream_url(settings.icecast_public_base_url, mount)
 
     source = IcecastSource(mount)
@@ -458,7 +490,7 @@ async def start_live_broadcast(
         event_type=EventType.LIVE_START.value,
         job_id=session_id,
         target_scope=payload.target_scope.value,
-        target_id=payload.target_id,
+        target_ids=payload.target_ids,
         triggered_by=user_id,
     )
     db.add(event)
@@ -480,11 +512,7 @@ async def start_live_broadcast(
             payload=publisher.live_start_payload(job_id=session_id, stream_url=url),
             target_scope=payload.target_scope,
             scope=scope,
-            village_id=(
-                int(payload.target_id)
-                if payload.target_scope is TargetScope.VILLAGE and payload.target_id
-                else None
-            ),
+            village_ids=_village_ids(payload.target_scope, payload.target_ids),
             macs=macs,
         )
     except Exception:
@@ -496,7 +524,46 @@ async def start_live_broadcast(
         raise
 
     log.info("실시간 방송 시작 session=%d mount=%s 대상 %d대", session_id, mount, len(macs))
+
+    if settings.live_uplink_grace_sec > 0:
+        # 유예시간 안에 마이크가 안 붙으면 자동 종료한다. 무음이 "정상 방송"으로
+        # 나가는 게 최악이다 — 화면에는 ON AIR 로 보이는데 스피커는 조용한 상태.
+        asyncio.create_task(
+            _stop_if_never_uplinked(session_id, publisher, registry),
+            name=f"live-grace-{session_id}",
+        )
+
     return await _to_out(db, event, registry)
+
+
+async def _stop_if_never_uplinked(
+    session_id: int, publisher: MqttPublisher, registry: LiveRegistry
+) -> None:
+    """유예시간 뒤에도 업링크가 한 번도 안 붙었으면 방송을 끈다.
+
+    '한 번도'가 기준이다(uplink_seen). 붙었다 잠깐 끊긴 방송은 재연결 여지가
+    있으므로 끄지 않는다 — 그건 운영자 부재가 아니라 네트워크 문제다.
+    """
+    await asyncio.sleep(settings.live_uplink_grace_sec)
+
+    session = registry.get(session_id)
+    if session is None or session.uplink_seen:
+        return  # 이미 끝났거나, 마이크가 붙었(었)다
+
+    log.warning(
+        "무음 방송 자동 종료 session=%d — %d초 동안 업링크가 붙지 않았다",
+        session_id, settings.live_uplink_grace_sec,
+    )
+    try:
+        async with session_scope() as db:
+            event = await db.get(BroadcastEvent, session.event_id)
+            if event is None or event.ended_at is not None:
+                return
+            await stop_live_broadcast(
+                db, event.id, VillageScope.for_super_admin(), publisher, registry
+            )
+    except Exception:  # noqa: BLE001 - 실패해도 화면의 무음 경고는 남는다
+        log.exception("무음 방송 자동 종료 실패 session=%d", session_id)
 
 
 async def stop_live_broadcast(
@@ -523,7 +590,7 @@ async def stop_live_broadcast(
     macs = await device_service.macs_for_target(
         db,
         target_scope=event.target_scope,
-        target_id=event.target_id,
+        target_ids=event.target_ids,
         scope=scope,
         online_only=True,
     )
@@ -534,11 +601,7 @@ async def stop_live_broadcast(
                 payload=publisher.live_stop_payload(job_id=session_id),
                 target_scope=TargetScope(event.target_scope),
                 scope=scope,
-                village_id=(
-                    int(event.target_id)
-                    if event.target_scope == TargetScope.VILLAGE.value and event.target_id
-                    else None
-                ),
+                village_ids=_village_ids(TargetScope(event.target_scope), event.target_ids),
                 macs=macs,
             )
         except Exception:  # noqa: BLE001

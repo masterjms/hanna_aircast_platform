@@ -94,7 +94,7 @@ CREATE TABLE schedules (
     times         TIME[] NOT NULL,        -- 예: {10:00, 16:00}
     file_id       INTEGER NOT NULL REFERENCES files(id),
     target_scope  VARCHAR(20) NOT NULL CHECK (target_scope IN ('device','zone','village','all')),
-    target_id     VARCHAR(50),            -- scope에 맞는 mac/zone_id/village_id, all이면 NULL
+    target_ids    JSONB NOT NULL DEFAULT '[]',  -- scope에 맞는 id 목록(마을 여러 곳 가능), all이면 []
     enabled       BOOLEAN NOT NULL DEFAULT true,
     created_by    INTEGER REFERENCES users(id),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -111,7 +111,7 @@ CREATE TABLE broadcast_events (
     event_type    VARCHAR(20) NOT NULL,   -- LIVE_START/LIVE_STOP/FILE_START/FILE_STOP/OTA_START/CONFIG (OTA_APPLY는 2026-08-20 폐지)
     job_id        BIGINT,                 -- MQTT job_id 그대로 저장 (2026-08-20 session_id/cmd_id/job_id 통일 완료, §통신 사양 참고)
     target_scope  VARCHAR(20) NOT NULL CHECK (target_scope IN ('device','zone','village','all')),
-    target_id     VARCHAR(50),
+    target_ids    JSONB NOT NULL DEFAULT '[]',
     file_id       INTEGER REFERENCES files(id),
     schedule_id   INTEGER REFERENCES schedules(id),   -- 스케줄에 의한 자동 실행이면 채움, 수동이면 NULL
     triggered_by  INTEGER REFERENCES users(id),         -- 수동이면 채움, 스케줄이면 NULL

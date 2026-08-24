@@ -17,6 +17,14 @@ export interface PollingResult<T> {
   error: Error | null;
   /** 최초 1회 로딩. 이후 갱신에서는 false 를 유지해 화면이 깜빡이지 않게 한다. */
   loading: boolean;
+  /**
+   * 마지막으로 응답을 받은 시각(ms). 아직 못 받았으면 0.
+   *
+   * "지금 보고 있는 data 가 언제 것인가"를 알아야 하는 화면이 있다. 예를 들어
+   * 방송을 막 시작한 직후에는 목록이 아직 그 방송을 모르는데, 그걸 "끝났다"로
+   * 오해하면 안 된다.
+   */
+  fetchedAt: number;
   reload: () => void;
 }
 
@@ -28,6 +36,7 @@ export function usePolling<T>(
   const [data, setData] = useState<T | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchedAt, setFetchedAt] = useState(0);
 
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
@@ -49,6 +58,7 @@ export function usePolling<T>(
         if (!stopped && mine === generation.current) {
           setData(next);
           setError(null);
+          setFetchedAt(Date.now());
         }
       } catch (err) {
         if (!stopped && mine === generation.current) {
@@ -90,7 +100,7 @@ export function usePolling<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [intervalMs, tick, ...deps]);
 
-  return { data, error, loading, reload };
+  return { data, error, loading, fetchedAt, reload };
 }
 
 /** 화면 갱신 주기 (ms). 사양: 기본 5초, 방송 진행 중 2초. */

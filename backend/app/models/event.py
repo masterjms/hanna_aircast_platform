@@ -50,7 +50,10 @@ class BroadcastEvent(Base):
     job_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
 
     target_scope: Mapped[str] = mapped_column(String(20), nullable=False)
-    target_id: Mapped[str | None] = mapped_column(String(50))
+    #: scope 에 맞는 id 목록 — village 면 마을 id 들, device 면 MAC 들, zone 이면
+    #: 구역 id 들, all 이면 빈 목록. 목록인 이유: "마을 2곳에 동시 방송" 같은
+    #: 다중 대상을 값 하나(String)로는 표현할 수 없다.
+    target_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id"))
     #: 스케줄에 의한 자동 실행이면 채우고, 수동이면 NULL.
@@ -72,6 +75,10 @@ class DeviceEvent(Base):
 
     STATUS 는 여기 쌓지 않는다 — 300대 × 30초면 하루 86만 행이 된다.
     최신값만 devices.last_status 에 캐시한다(app/mqtt/handlers.py 참고).
+
+    LIVE_STATS 도 같은 성격의 주기 telemetry라 tick 마다 쌓지 않고 방송·단말당
+    1행만 두고 덮어쓴다(handlers._TELEMETRY_RESULTS). 반대로 LIVE_READY 같은
+    결과는 한 job 에 두 번 올 수 있고(준비 완료 → 접속 실패) 둘 다 남아야 한다.
     """
 
     __tablename__ = "device_events"

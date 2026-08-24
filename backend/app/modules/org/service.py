@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import Role
+from app.core.presence import online_clause, online_cutoff
 from app.core.scope import VillageScope
 from app.core.security import hash_password
 from app.errors import (
@@ -38,22 +39,33 @@ from app.schemas.org import (
 
 
 # ── 마을 ─────────────────────────────────────────────────────────────────
-async def _village_device_counts(db: AsyncSession, village_ids: Sequence[int]) -> dict[int, int]:
-    """마을별 단말 수. 목록 화면이 N+1 질의를 하지 않도록 한 번에 센다."""
+async def _village_device_counts(
+    db: AsyncSession, village_ids: Sequence[int]
+) -> dict[int, tuple[int, int]]:
+    """마을별 (등록 수, 온라인 수). 목록 화면이 N+1 질의를 하지 않도록 한 번에 센다.
+
+    온라인 수를 같이 세는 이유: 방송은 온라인 단말에만 나간다. 등록 수만 보여주면
+    운영자가 "3대에 나가겠구나" 하고 누르는데 실제로는 1대만 나가는 일이 생긴다.
+    """
     if not village_ids:
         return {}
+    online = online_clause(online_cutoff())
     rows = await db.execute(
-        select(Device.village_id, func.count())
+        select(
+            Device.village_id,
+            func.count(),
+            func.count().filter(online),
+        )
         .where(Device.village_id.in_(village_ids))
         .group_by(Device.village_id)
     )
-    return {vid: count for vid, count in rows.all()}
+    return {vid: (total, online_n) for vid, total, online_n in rows.all()}
 
 
-def _to_village_out(village: Village, device_count: int) -> VillageOut:
+def _to_village_out(village: Village, counts: tuple[int, int]) -> VillageOut:
     out = VillageOut.model_validate(village)
     out.village_token = village_token(village.id)
-    out.device_count = device_count
+    out.device_count, out.online_count = counts
     return out
 
 
@@ -61,7 +73,7 @@ async def list_villages(db: AsyncSession, scope: VillageScope) -> list[VillageOu
     stmt = scope.apply(select(Village).order_by(Village.name), Village.id)
     villages = (await db.scalars(stmt)).all()
     counts = await _village_device_counts(db, [v.id for v in villages])
-    return [_to_village_out(v, counts.get(v.id, 0)) for v in villages]
+    return [_to_village_out(v, counts.get(v.id, (0, 0))) for v in villages]
 
 
 async def get_village(db: AsyncSession, village_id: int, scope: VillageScope) -> VillageOut:
@@ -125,19 +137,20 @@ async def list_zones(db: AsyncSession, village_id: int, scope: VillageScope) -> 
         )
     ).all()
 
-    counts: dict[int, int] = {}
+    counts: dict[int, tuple[int, int]] = {}
     if zones:
+        online = online_clause(online_cutoff())
         rows = await db.execute(
-            select(Device.zone_id, func.count())
+            select(Device.zone_id, func.count(), func.count().filter(online))
             .where(Device.zone_id.in_([z.id for z in zones]))
             .group_by(Device.zone_id)
         )
-        counts = {zid: count for zid, count in rows.all()}
+        counts = {zid: (total, online_n) for zid, total, online_n in rows.all()}
 
     result = []
     for zone in zones:
         out = ZoneOut.model_validate(zone)
-        out.device_count = counts.get(zone.id, 0)
+        out.device_count, out.online_count = counts.get(zone.id, (0, 0))
         result.append(out)
     return result
 

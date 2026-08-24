@@ -37,6 +37,9 @@ class LiveSession:
     started_at: dt.datetime = field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
     #: /ingest 웹소켓이 붙었는지. 붙기 전에는 무음이 나간다.
     uplink_connected: bool = False
+    #: 한 번이라도 붙은 적이 있는지. 무음 방송 자동종료 판정에 쓴다 —
+    #: "잠깐 끊김"(재연결 여지)과 "한 번도 안 붙음"(운영자 부재)은 다르다.
+    uplink_seen: bool = False
 
     @property
     def bytes_sent(self) -> int:

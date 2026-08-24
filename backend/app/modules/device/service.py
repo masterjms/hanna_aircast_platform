@@ -5,16 +5,14 @@
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import Select, and_, func, not_, or_, select
+from sqlalchemy import Select, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from app.config import settings
-from app.constants import DeviceState
+from app.core.presence import is_online, online_clause, online_cutoff
 from app.core.scope import VillageScope
 from app.errors import ApiError, DeviceAlreadyExists, DeviceNotFound, VillageNotFound
 from app.models.device import Device
@@ -28,35 +26,7 @@ from app.tasks import config_reconcile
 log = logging.getLogger(__name__)
 
 
-def online_cutoff() -> dt.datetime:
-    """이 시각보다 최근에 통신했으면 온라인."""
-    return dt.datetime.now(dt.timezone.utc) - dt.timedelta(
-        seconds=settings.device_online_threshold_sec
-    )
 
-
-def is_online(device: Device, cutoff: dt.datetime) -> bool:
-    """온라인 판정.
-
-    최근 통신만으로 판단하지 않는다. LWT 로 OFFLINE 이 확정된 단말은 마지막 통신이
-    아무리 최근이어도 이미 끊긴 상태다 — 5분 임계를 기다릴 이유가 없다.
-    """
-    status = device.last_status or {}
-    if status.get("state") == DeviceState.OFFLINE.value:
-        return False
-    return device.last_seen_at is not None and device.last_seen_at >= cutoff
-
-
-#: 온라인 판정의 SQL 판. is_online() 과 반드시 같은 규칙이어야 한다.
-#: 대시보드도 이걸 쓴다 — 판정이 두 벌이면 타일과 목록이 서로 다른 말을 한다.
-def online_clause(cutoff: dt.datetime):
-    return and_(
-        Device.last_seen_at >= cutoff,
-        or_(
-            Device.last_status.is_(None),
-            Device.last_status["state"].astext != DeviceState.OFFLINE.value,
-        ),
-    )
 
 
 def _base_query() -> Select:
@@ -188,34 +158,39 @@ async def macs_for_target(
     db: AsyncSession,
     *,
     target_scope: str,
-    target_id: str | None,
+    target_ids: Sequence[str],
     scope: VillageScope,
     online_only: bool = True,
 ) -> list[str]:
     """방송 대상 → MAC 목록.
 
-    zone / device 는 MAC 단위로 펼쳐서 발행해야 하므로 여기서 해석한다.
+    대상은 목록이다 — "마을 2곳 동시 방송"을 값 하나로는 표현할 수 없다.
+    village_admin 은 목록 **전부**가 담당 범위여야 한다. 하나라도 남의 마을이면
+    전체를 거절한다 — 일부만 나가는 방송은 운영자가 의도한 것이 아니다.
+
     online_only=True 면 최근 5분 내 통신한 단말만 센다 — 통신 사양상 대상 카운트는
     온라인 단말만 넣는다.
     """
     stmt = select(Device.mac)
 
     if target_scope == "device":
-        if not target_id:
+        if not target_ids:
             raise ApiError("대상 단말 MAC 이 필요합니다.")
-        stmt = stmt.where(Device.mac == target_id)
+        stmt = stmt.where(Device.mac.in_(list(target_ids)))
     elif target_scope == "zone":
-        if not target_id:
+        if not target_ids:
             raise ApiError("대상 구역 id 가 필요합니다.")
-        zone_id = int(target_id)
-        scope.ensure_allowed(await org_service.zone_village_id(db, zone_id))
-        stmt = stmt.where(Device.zone_id == zone_id)
+        zone_ids = [int(z) for z in target_ids]
+        for zone_id in zone_ids:
+            scope.ensure_allowed(await org_service.zone_village_id(db, zone_id))
+        stmt = stmt.where(Device.zone_id.in_(zone_ids))
     elif target_scope == "village":
-        if not target_id:
+        if not target_ids:
             raise ApiError("대상 마을 id 가 필요합니다.")
-        village_id = int(target_id)
-        scope.ensure_allowed(village_id)
-        stmt = stmt.where(Device.village_id == village_id)
+        village_ids = [int(v) for v in target_ids]
+        for village_id in village_ids:
+            scope.ensure_allowed(village_id)
+        stmt = stmt.where(Device.village_id.in_(village_ids))
     else:  # all
         stmt = stmt.where(Device.village_id.is_not(None))
 
@@ -302,26 +277,27 @@ async def update_device(
     await db.flush()
 
     if village_changed:
-        # 실패해도 단말 수정 자체는 유지한다. 다음 CONFIG 재조정 주기가 따라잡는다.
-        try:
-            await publisher.publish_device_config(
-                mac=mac, village_id=new_village, config_version=config_version
-            )
-        except Exception:  # noqa: BLE001
-            log.exception("배정 후 CONFIG 발행 실패 (재조정 주기가 복구): %s", mac)
-        await _republish_global_config(db, publisher)
+        if new_village is None:
+            # 해제는 그 단말의 보관본을 명시적으로 지워야 한다. resync 는 배정된
+            # 단말만 발행하므로, 안 지우면 옛 배정이 브로커에 남아서 단말이
+            # 재접속할 때 되살아난다.
+            await clear_device_configs(publisher, [mac])
+        await resync_config(db, publisher)
 
     return await get_device(db, mac, scope)
 
 
-async def _republish_global_config(db: AsyncSession, publisher: MqttPublisher) -> None:
-    """마을 배정이 바뀌었으니 공통 CONFIG 의 village_id 를 다시 내린다.
+async def resync_config(db: AsyncSession, publisher: MqttPublisher) -> None:
+    """config_version 을 올리고 CONFIG 두 토픽을 함께 다시 내린다.
 
-    현재 펌웨어는 `iotradio/all/config` 만 구독하므로, 위의 단말별 발행만으로는
-    단말이 마을을 영영 모른다(통신 사양 §3.5).
+    버전을 올리는 이유: 같은 토픽에 retain 으로 덮어쓰는 구조라, 버전이 그대로면
+    단말이 "이미 적용한 설정"으로 보고 무시한다.
 
-    config_version 을 같이 올리는 게 핵심이다 — 같은 토픽에 retain 으로 덮어쓰는
-    구조라, 버전이 그대로면 단말이 "이미 적용한 설정"으로 보고 무시한다.
+    두 토픽을 함께 보내는 이유: 단말은 토픽별로 버전을 따로 추적하지 않고 마지막에
+    받은 값을 그대로 쓰는 단일 카운터 구조다(사양 §4.3). 한쪽만 올리면 단말이
+    낡은 값을 최종본으로 보고하게 된다.
+
+    발행이 실패해도 DB 변경은 유지한다 — 정본은 DB 이고, 재조정 주기가 따라잡는다.
     """
     config = await db.get(CurrentConfig, 1)
     if config is None:
@@ -329,15 +305,9 @@ async def _republish_global_config(db: AsyncSession, publisher: MqttPublisher) -
     config.config_version += 1
     await db.flush()
     try:
-        await publisher.publish_global_config(
-            config_version=config.config_version,
-            status_interval_sec=config.status_interval_sec,
-            live_stats_interval_sec=config.live_stats_interval_sec,
-            event_qos=config.event_qos,
-            village_id=await config_reconcile.shared_village_id(db),
-        )
+        await config_reconcile.publish_all(publisher, db)
     except Exception:  # noqa: BLE001
-        log.exception("공통 CONFIG 재발행 실패 (재조정 주기가 복구)")
+        log.exception("CONFIG 재발행 실패 (재조정 주기가 복구)")
 
 
 async def delete_device(
@@ -361,9 +331,8 @@ async def clear_device_configs(
     안 지우면 단말이 재접속할 때 브로커가 없어진 배정을 다시 물려준다.
     마을 삭제 · 단말 삭제 · 배정 해제 후에 부른다.
 
-    db 를 넘기면 공통 CONFIG 의 village_id 도 다시 맞춘다 — 마지막 단말이
-    빠져서 배정이 없어졌는데 공통 CONFIG 에 옛 마을이 남아 있으면, 새로 붙는
-    단말이 없어진 마을로 배정된다.
+    db 를 넘기면 config_version 을 올려 두 토픽을 다시 맞춘다 — 안 그러면 남은
+    단말들이 낡은 버전을 최종본으로 들고 있게 된다.
     """
     for mac in macs:
         try:
@@ -372,4 +341,4 @@ async def clear_device_configs(
             log.exception("CONFIG retain 삭제 실패: %s", mac)
 
     if db is not None:
-        await _republish_global_config(db, publisher)
+        await resync_config(db, publisher)

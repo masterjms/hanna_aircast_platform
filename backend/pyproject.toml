@@ -24,6 +24,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# TTS_ENGINE=google 일 때만 필요하다. 엔진에서 지연 import 하므로
+# 안 깔아도 서버는 뜨고, TTS 를 부를 때만 안내 메시지와 함께 실패한다.
+tts = [
+    "google-cloud-texttospeech>=2.16",
+]
 dev = [
     "ruff>=0.8",
     "pytest>=8.3",

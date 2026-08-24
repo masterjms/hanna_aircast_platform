@@ -27,6 +27,10 @@ from app.mqtt.connection import MqttConnection
 
 log = logging.getLogger(__name__)
 
+#: LIVE_START.stream_url 최대 길이. 단말 버퍼가 512B(NUL 포함)이고, 초과하면
+#: 단말이 잘라 쓰지 않고 방송을 거절한다 (ESP32 회신 260824 §1.2).
+STREAM_URL_MAX_BYTES = 512
+
 _QOS_CMD = 1
 _QOS_CONFIG = 1
 
@@ -75,36 +79,31 @@ class MqttPublisher:
         status_interval_sec: int,
         live_stats_interval_sec: int,
         event_qos: int,
-        village_id: int | None = None,
     ) -> None:
         """전 단말 공통 설정. retain=True 라서 나중에 붙는 단말도 즉시 받는다.
 
-        payload 에 type 필드가 없다 — 통신 사양 §3.5 의 실제 형식이다.
+        payload 에 type 필드가 없다 — 사양 §4.1 의 실제 형식이다.
         단말은 모르는 필드를 무시하고, clamp 범위를 벗어난 값은 그 필드만 버린다.
 
-        village_id 를 왜 공통 CONFIG 에 싣는가:
-            현재 펌웨어는 이 토픽 하나만 구독한다(통신 사양 §3.5). 단말별
-            토픽(publish_device_config)은 코덱스와 협의 중인 신규 항목이라
-            아직 아무도 안 듣는다. 그래서 여기에 안 실으면 단말이 영영
-            "00000000"(미배정)으로 남고 마을 명령 토픽을 구독하지 않는다.
-
-            토픽이 하나뿐이라 값도 하나뿐이다 — 여러 마을이 섞이면 전원이 같은
-            마을로 배정되므로, 호출자는 "배정된 단말이 전부 한 마을일 때만"
-            값을 넘긴다(config_reconcile.shared_village_id 참고).
-
-        village_id=None 이면 필드 자체를 뺀다. 사양상 단말은 모르는 필드를
-        무시하므로, 빼는 것과 빈 값을 보내는 것은 다르다.
+        ⚠ village_id 는 절대 여기 넣지 않는다.
+            이 토픽은 전 단말이 구독하고 retain 이라 나중에 붙는 단말도 받는다.
+            여기에 마을을 실으면 아직 배정 안 된 단말까지 그 값을 자기 것으로
+            읽고 남의 마을 방송을 구독한다 — 실제로 목 단말 3대 중 1대만
+            배정했는데 3대가 전부 응답했다. 현장이라면 새로 설치한 단말이
+            배정 전에 엉뚱한 마을 방송을 트는 사고다.
+            마을 배정은 publish_device_config() 로만 나간다(사양 §4.2).
         """
-        payload: dict[str, object] = {
-            "config_version": config_version,
-            "status_interval_sec": status_interval_sec,
-            "live_stats_interval_sec": live_stats_interval_sec,
-            "event_qos": event_qos,
-        }
-        if village_id is not None:
-            payload["village_id"] = topics.village_token(village_id)
-
-        await self._send(topics.all_config(), payload, qos=_QOS_CONFIG, retain=True)
+        await self._send(
+            topics.all_config(),
+            {
+                "config_version": config_version,
+                "status_interval_sec": status_interval_sec,
+                "live_stats_interval_sec": live_stats_interval_sec,
+                "event_qos": event_qos,
+            },
+            qos=_QOS_CONFIG,
+            retain=True,
+        )
 
     async def publish_device_config(
         self,
@@ -113,10 +112,15 @@ class MqttPublisher:
         village_id: int | None,
         config_version: int,
     ) -> None:
-        """단말별 오버라이드 — 마을 배정을 알려준다.
+        """단말별 마을 배정 (사양 §4.2).
 
-        ※ 이 토픽(iotradio/device/<mac>/config)은 코덱스 협의 중인 신규 항목이다.
-          단말이 아직 구독하지 않으면 이 발행은 무해하게 버려진다.
+        마을은 오직 이 토픽으로만 내려간다. 토픽 이름에 MAC 이 박혀 있어서
+        남의 배정값을 받을 수가 없다 — 그게 all/config 와의 결정적 차이다.
+
+        config_version 은 all/config 와 **같은 값**을 써야 한다. 단말은 토픽별로
+        버전을 따로 추적하지 않고 마지막에 받은 값을 그대로 쓰는 단일 카운터
+        구조라(사양 §4.3), 두 토픽의 버전이 어긋나면 단말이 낡은 값을 최종본으로
+        보고하게 된다.
 
         village_id=None(미배정)이면 retain 을 지운다 — 빈 payload 를 retain 으로 보내는 것이
         MQTT 에서 "이 토픽의 보관 메시지 삭제"를 뜻한다. 단말이 재접속해도
@@ -187,11 +191,28 @@ class MqttPublisher:
         codec/frame_ms/sample_rate 는 실제 Icecast 스트림 파라미터와 반드시
         일치해야 한다. 브라우저 opus-recorder 설정을 바꾸면 여기도 같이 바꾼다.
 
-        ※ stream_url 은 통신 사양에 아직 없는 신규 필드다(코덱스 협의 중).
-          세션마다 마운트가 다르므로(/live/<마을8>/<세션>) 단말이 어디로
-          붙어야 하는지 알려면 이게 필요하다. 필드를 모르는 펌웨어는 무시하고
-          기본 /live 로 붙는다 — 그 경우 마을 동시 방송이 되지 않는다.
+        stream_url 은 단말이 문자열 그대로 GET 하는 완성된 URL 이다
+        (ESP32 회신 260824: 펌웨어 반영 완료, 파싱/재조립 안 함).
+
+        제약 두 가지를 여기서 지킨다:
+          · 512 바이트 이하 — 단말 버퍼 크기다. 넘으면 단말이 잘라 쓰지 않고
+            방송을 거절하므로, 조용히 실패하기 전에 서버에서 끊는다.
+          · http:// 만 — 단말 Icecast 클라이언트에 TLS 인증서 검증이 아직 없다.
+            https 는 TLS 전환 때 함께 지원된다. 그전에 https 로 보내면 접속이
+            실패하고 LIVE_READY status=2 로만 드러난다.
         """
+        if len(stream_url.encode("utf-8")) > STREAM_URL_MAX_BYTES:
+            raise ApiError(
+                f"stream_url 이 단말 한계({STREAM_URL_MAX_BYTES}B)를 넘었습니다.",
+                code="STREAM_URL_TOO_LONG",
+            )
+        if stream_url.startswith("https://"):
+            # 지금 막지 않으면 현장에서 "LIVE_READY 는 오는데 소리가 안 난다"로만 보인다.
+            raise ApiError(
+                "단말이 아직 https Icecast 접속을 지원하지 않습니다. "
+                "ICECAST_PUBLIC_BASE_URL 을 http 로 설정하세요 (TLS 전환 시 해제).",
+                code="STREAM_URL_TLS_UNSUPPORTED",
+            )
         return {
             "type": "LIVE_START",
             "job_id": job_id,
@@ -215,14 +236,16 @@ class MqttPublisher:
         payload: Mapping[str, object],
         target_scope: TargetScope,
         scope: VillageScope,
-        village_id: int | None = None,
+        village_ids: Sequence[int] = (),
         macs: Sequence[str] = (),
     ) -> list[str]:
         """방송·OTA 명령을 대상에 맞는 토픽으로 발행한다.
 
         대상별 토픽 선택:
           all      → iotradio/all/cmd            (super_admin 만)
-          village  → iotradio/village/<id8>/cmd
+          village  → 마을마다 iotradio/village/<id8>/cmd — 같은 payload(같은
+                     job_id·stream_url)를 여러 마을 토픽에 발행한다. 단말들이
+                     같은 마운트로 모여 한 방송을 같이 듣는 구조다
           zone     → 소속 단말 MAC 별 개별 토픽으로 펼친다(구역은 단말이 모른다)
           device   → iotradio/device/<mac>/cmd
 
@@ -241,10 +264,11 @@ class MqttPublisher:
             targets = [topics.all_cmd()]
 
         elif target_scope is TargetScope.VILLAGE:
-            if village_id is None:
-                raise ApiError("마을 대상 명령에는 village_id 가 필요합니다.")
-            scope.ensure_allowed(village_id)
-            targets = [topics.village_cmd(village_id)]
+            if not village_ids:
+                raise ApiError("마을 대상 명령에는 village_ids 가 필요합니다.")
+            for village_id in village_ids:
+                scope.ensure_allowed(village_id)
+            targets = [topics.village_cmd(v) for v in village_ids]
 
         else:  # ZONE · DEVICE — 둘 다 MAC 단위로 펼쳐서 보낸다
             if not macs:

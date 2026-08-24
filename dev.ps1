@@ -24,7 +24,16 @@ param(
     [int]$Mock = 0,
 
     # 프론트를 빼고 띄운다 (API 만 만질 때).
-    [switch]$NoFront
+    [switch]$NoFront,
+
+    # 환경 프로파일. .env 를 읽은 뒤 .env.<프로파일> 이 덮어쓴다.
+    #   local  — 목 단말로 개발 (전부 localhost)
+    #   device — 실물 단말과 통신 (주소가 이 PC 의 LAN IP) 
+    # .\dev.ps1 up -EnvProfile local -Mock 3    # 목 단말로 개발
+    # .\dev.ps1 up -EnvProfile device           # 실물 단말과 통신
+    # 생략하면 .env 만 쓴다.
+    [ValidateSet('local', 'device', '')]
+    [string]$EnvProfile = ''
 )
 
 # 'Stop' 을 쓰면 안 된다. PowerShell 5.1 은 네이티브 exe(docker·npm)의 stderr 를
@@ -83,6 +92,49 @@ function Wait-Port([int]$Port, [string]$Label, [int]$Seconds = 40) {
     return $false
 }
 
+<#
+  Docker Desktop 이 고아 소켓 때문에 못 뜨는 상태를 풀어준다.
+
+  증상: "running services: ... OTel manager: removing stale socket:
+        ...\Docker\run\userAnalyticsOtlpHttp.sock: The file cannot be
+        accessed by the system." 이라며 Docker Desktop 이 죽는다.
+
+  원인: 비정상 종료 때 남은 AF_UNIX 소켓 파일이 고아 재분석 지점(reparse point)
+        이 되어 열지도 지우지도 못한다. Docker 가 기동 중 그걸 지우려다 실패해서
+        전체가 멈춘다. fsutil·del·Remove-Item 전부 오류 1920 으로 튕긴다.
+
+  해결: 파일을 못 여니 부모 폴더째 이름을 바꾼다. Docker 가 run 폴더를 새로
+        만들기 때문에 안전하다. 실제로 두 번 겪어서 자동화해 둔다.
+#>
+function Repair-DockerSockets {
+    $run = Join-Path $env:LOCALAPPDATA 'Docker\run'
+    if (-not (Test-Path $run)) { return $false }
+
+    # 열 수 없는 파일이 있는지 본다. 멀쩡하면 건드리지 않는다.
+    $orphan = $false
+    foreach ($f in (Get-ChildItem $run -Force -EA SilentlyContinue)) {
+        try { [IO.File]::Open($f.FullName, 'Open', 'Read', 'None').Close() }
+        catch { $orphan = $true; break }
+    }
+    if (-not $orphan) { return $false }
+
+    Warn '고아 소켓 발견 — Docker 가 이것 때문에 못 뜬다'
+    Get-Process -EA SilentlyContinue |
+        Where-Object { $_.ProcessName -match '^(Docker Desktop|com\.docker\.)' } |
+        ForEach-Object { Stop-Process -Id $_.Id -Force -EA SilentlyContinue }
+    Start-Sleep -Seconds 4
+
+    $bak = "run.broken-$(Get-Date -Format yyyyMMdd-HHmmss)"
+    try {
+        Rename-Item $run -NewName $bak -Force -EA Stop
+        Ok "소켓 폴더를 $bak 로 치웠다 (Docker 가 새로 만든다)"
+        return $true
+    } catch {
+        Fail "소켓 폴더 정리 실패: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 # ── 사전 점검 ────────────────────────────────────────────────────────
 function Test-Prereq {
     $missing = @()
@@ -99,9 +151,25 @@ function Test-Prereq {
     # stderr 에 한 줄만 써도 $? 를 false 로 만들어서, 성공을 실패로 오판한다.
     docker info 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Fail "Docker 엔진에 연결할 수 없다 — Docker Desktop 이 실행 중인지 확인하세요."
-        Write-Host "    소켓 오류로 안 뜨면: %LOCALAPPDATA%\Docker\run 폴더를 지우고 재시작"
-        return $false
+        # 고아 소켓이면 치우고 Docker 를 다시 띄운 뒤 한 번 더 본다.
+        if (Repair-DockerSockets) {
+            $exe = 'C:\Program Files\Docker\Docker\Docker Desktop.exe'
+            if (Test-Path $exe) {
+                Start-Process $exe
+                Step 'Docker 엔진을 기다린다 (최대 3분)'
+                for ($i = 0; $i -lt 36; $i++) {
+                    Start-Sleep -Seconds 5
+                    docker info 2>$null | Out-Null
+                    if ($LASTEXITCODE -eq 0) { Ok "엔진 준비됨 ($(($i+1)*5)초)"; break }
+                }
+            }
+        }
+        docker info 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Fail "Docker 엔진에 연결할 수 없다 — Docker Desktop 이 실행 중인지 확인하세요."
+            Write-Host "    그래도 안 되면: 도커 프로세스를 전부 끄고 wsl --shutdown 후 재시작"
+            return $false
+        }
     }
 
     if (-not (Test-Path (Join-Path $Root '.env'))) {
@@ -177,6 +245,33 @@ function Start-Infra {
     return $true
 }
 
+<#
+  프로파일 파일이 없으면 예시에서 만들어 준다.
+
+  같은 .env 하나를 목 단말용과 실물 단말용으로 번갈아 고치다 보면 반드시
+  한 번은 틀린 채로 돌린다 — 목 단말 시험인데 주소가 남의 PC 를 가리키거나
+  그 반대다. 파일을 나눠두면 그럴 일이 없다.
+#>
+function Initialize-Profile {
+    if (-not $EnvProfile) { return $true }
+
+    $file = Join-Path $Root ".env.$EnvProfile"
+    if (-not (Test-Path $file)) {
+        $sample = Join-Path $Root ".env.$EnvProfile.example"
+        if (-not (Test-Path $sample)) { Fail "$sample 이 없다"; return $false }
+        Copy-Item $sample $file
+        Ok "$(Split-Path $file -Leaf) 를 예시에서 만들었다"
+    }
+
+    # 자식 프로세스(백엔드)가 읽는다.
+    $env:XWIFI_PROFILE = $EnvProfile
+    Step "프로파일: $EnvProfile"
+    Get-Content $file | Where-Object { $_ -match '^\s*[A-Z]' } | ForEach-Object {
+        Write-Host "  $_" -ForegroundColor DarkGray
+    }
+    return $true
+}
+
 function Start-Backend {
     Step "백엔드 (:$PORT_API)"
     if (Test-Port $PORT_API) { Warn "이미 :$PORT_API 사용 중 — 건너뜀"; return }
@@ -184,7 +279,9 @@ function Start-Backend {
         Fail "venv 가 없다 — 먼저 .\dev.ps1 setup 을 실행하세요"
         return
     }
-    Start-InNewWindow 'xWIFI 백엔드' $BackDir ".\.venv\Scripts\python.exe run.py"
+    # 새 창은 현재 셸의 환경을 물려받지 않으므로 명시적으로 넘긴다.
+    $prefix = if ($EnvProfile) { "`$env:XWIFI_PROFILE='$EnvProfile'; " } else { '' }
+    Start-InNewWindow 'xWIFI 백엔드' $BackDir "$prefix.\.venv\Scripts\python.exe run.py"
     if (Wait-Port $PORT_API '백엔드' 45) {
         Ok "API 문서 http://localhost:$PORT_API/docs"
     }
@@ -212,8 +309,9 @@ function Start-Mock([int]$Count) {
         return
     }
     if (-not (Test-Path $Py)) { Fail 'venv 가 없다 — setup 먼저'; return }
+    $prefix = if ($EnvProfile) { "`$env:XWIFI_PROFILE='$EnvProfile'; " } else { '' }
     Start-InNewWindow 'xWIFI 목단말' $BackDir `
-        ".\.venv\Scripts\python.exe ..\scripts\mock_device.py --count $Count"
+        "$prefix.\.venv\Scripts\python.exe ..\scripts\mock_device.py --count $Count"
     Ok "$Count 대 기동 요청 (창에서 로그 확인)"
 }
 
@@ -262,6 +360,7 @@ function Invoke-Setup {
 
 function Invoke-Up {
     if (-not (Test-Prereq)) { return }
+    if (-not (Initialize-Profile)) { return }
     if (-not (Start-Infra)) { return }
     Start-Backend
     if (-not $NoFront) { Start-Frontend }
@@ -326,12 +425,14 @@ xWIFI 마을방송 — 개발 환경 실행기
   .\dev.ps1 restart   down 후 up.
 
 옵션
-  -Mock <N>     가짜 단말 수 (기본 0 = 안 띄움). 실물 없이 시험할 때만 쓴다.
-  -NoFront      프론트 없이 백엔드만
+  -EnvProfile local    목 단말로 개발 (.env.local 을 덮어씀 — 전부 localhost)
+  -EnvProfile device   실물 단말과 통신 (.env.device — 주소가 이 PC 의 LAN IP)
+  -Mock <N>         가짜 단말 수 (기본 0 = 안 띄움). 실물 없이 시험할 때만 쓴다.
+  -NoFront          프론트 없이 백엔드만
 
 예시
-  .\dev.ps1 up               실물 단말로 테스트 (가짜 단말 없음)
-  .\dev.ps1 up -Mock 5       실물 없이 가짜 단말 5대로 시험
+  .\dev.ps1 up -EnvProfile device       실물 단말로 테스트
+  .\dev.ps1 up -EnvProfile local -Mock 5  가짜 단말 5대로 개발
   
   # 모니터링 스크립트 실행(실물 단말이 MQTT 로 보내는 메시지 확인)
   cd xwifi-server\backend

@@ -16,7 +16,7 @@ ESP32(P4+C6) 마을방송 단말을 **MQTT + Icecast + HTTP** 로 제어하는 �
 | 2 | 조회계 API · 프론트 전체(로그인 · 대시보드 · 단말 · 마을 · 계정 · 설정) | 완료 |
 | 3 | 파일 업로드 · `/dl` 토큰 서빙 · `FILE_START` 발행 · 겹침 검사 409 · 파일함 · 방송 제어 | 완료 |
 | 4 | WSS `/ingest` · Icecast 세션별 마운트 · `LIVE_START` 발행 · 마이크 업링크 | 완료 |
-| 5 | AWS Polly TTS · 캐시 · 파일함 통합 | 완료 |
+| 5 | Google Cloud TTS · 캐시 · 파일함 통합 | 완료 |
 | 6~8 | 스케줄 · OTA · 비용 | 미착수 |
 
 프론트 사이드바에서 `준비` 로 표시된 메뉴가 아직 구현 전이다.
@@ -26,7 +26,7 @@ ESP32(P4+C6) 마을방송 단말을 **MQTT + Icecast + HTTP** 로 제어하는 �
 ```
 [브라우저] --POST /api/files/tts {text, language, voice}--> [백엔드]
                                         │ 캐시 확인 sha256(text|lang|voice)
-                                        │ 없으면 Polly 호출 → mp3 → 정규화
+                                        │ 없으면 Google TTS 호출 → mp3 → 정규화
                                         │ 디스크 저장 + files 행 생성
                           ◄─────────────┘
 [브라우저] <audio src=/api/files/<id>/audio>   미리듣기
@@ -38,7 +38,7 @@ ESP32(P4+C6) 마을방송 단말을 **MQTT + Icecast + HTTP** 로 제어하는 �
 같은 이유로 만든 문구를 재방송하거나 스케줄에 걸 수 있고, 겹침 검사·권한·이력이
 붙어 있는 방송 경로를 그대로 재사용한다.
 
-브라우저가 Polly 를 직접 부르지 않는다 — 자격증명이 노출되고, 미리듣기와 송출본이
+브라우저가 Google TTS 를 직접 부르지 않는다 — 자격증명이 노출되고, 미리듣기와 송출본이
 별개 합성이 되어 요금이 두 배 나가면서 내용까지 달라질 수 있다.
 
 ### 실시간 방송 흐름 (Phase 4)
@@ -100,7 +100,7 @@ xwifi-server/
 │   │   │   ├── broadcast/   대상 해석 · 겹침 검사 · FILE/LIVE START·STOP
 │   │   │   └── dashboard/   읽기 전용 집계(read model)
 │   │   ├── live/            mount · icecast(source) · registry · ingest(WSS)
-│   │   ├── tts/             engine(polly/dev) · voices · service(캐시)
+│   │   ├── tts/             engine(google/dev) · voices · service(캐시)
 │   │   ├── mqtt/            topics · connection · publisher · handlers
 │   │   └── tasks/           config_reconcile
 │   ├── alembic/versions/    0001_initial_schema.py
@@ -180,6 +180,35 @@ npm run dev
 
 <http://localhost:5173> — `/api` 는 Vite 프록시가 백엔드로 넘긴다.
 
+### 환경 프로파일 — 목 단말용 / 실물 단말용
+
+주소가 상황마다 달라야 한다. 목 단말은 같은 PC 에서 도니 `localhost` 가 맞고,
+실물 단말은 `localhost` 로 서버에 올 수 없으니(단말 입장에서 자기 자신이 된다)
+이 PC 의 LAN IP 가 필요하다. `.env` 하나를 번갈아 고치면 반드시 한 번은 틀린 채로
+돌리게 되므로 파일을 나눈다.
+
+```powershell
+.\dev.ps1 up -EnvProfile local -Mock 3    # 목 단말로 개발
+.\dev.ps1 up -EnvProfile device           # 실물 단말과 통신
+```
+
+`.env` 를 먼저 읽고 `.env.<프로파일>` 이 덮어쓴다. 파일이 없으면 `dev.ps1` 이
+`.env.<프로파일>.example` 에서 만들어 준다.
+
+| 프로파일 | 주소 | 쓰는 곳 |
+|---|---|---|
+| `local` | `http://localhost:8080` · `:8000` | 목 단말, 브라우저 마이크 |
+| `device` | `http://auto:8080` · `:8000` | 실물 ESP32 |
+
+**`auto` 는 기동할 때 이 PC 의 LAN IP 로 바뀐다.** 노트북과 데스크톱을 오가도
+파일을 고칠 필요가 없다. 자동 탐지가 엉뚱한 주소(가상 어댑터·VPN)를 고르면
+IP 를 직접 적으면 된다.
+
+프로파일 없이 `.\dev.ps1 up` 하면 `.env` 만 쓴다(기존과 동일).
+
+> 백엔드가 어떤 주소를 쓰는지는 기동 로그 맨 위에 프로파일과 함께 찍힌다.
+> 실물 단말이 파일을 못 받으면 여기부터 확인한다.
+
 ### 포트 배치
 
 | 포트 | 무엇 | 왜 이 번호인가 |
@@ -224,26 +253,35 @@ ICECAST_PUBLIC_BASE_URL=http://192.168.0.5:8000
 
 ### 마을 배정이 단말에 전달되는 경로
 
-현재 펌웨어는 `iotradio/all/config` **하나만** 구독한다(통신 사양 §3.5). 그래서
-마을 배정도 이 공통 토픽으로 나가야 단말이 받는다.
+CONFIG 는 두 토픽으로 나뉜다(사양 `SERVER_COMM_MQTT_ICECAST_HTTP_SPEC_2026-08-14.md` §4).
 
 ```
-iotradio/all/config   (QoS 1, retain)
-{"config_version":31,"status_interval_sec":45,"live_stats_interval_sec":10,
- "event_qos":0,"village_id":"00000001"}
+iotradio/all/config              (QoS 1, retain)   전 단말 공통 설정
+{"config_version":31,"status_interval_sec":45,"live_stats_interval_sec":10,"event_qos":0}
+
+iotradio/device/<mac>/config     (QoS 1, retain)   그 단말의 마을 배정
+{"config_version":31,"village_id":"00000001"}
 ```
 
-토픽이 하나라 `village_id` 도 하나뿐이다. 그래서 서버는 **배정된 단말이 전부 한
-마을일 때만** 값을 싣고, 마을이 둘 이상 섞이면 필드를 뺀다
-(`config_reconcile.shared_village_id`). 잘못 배정하느니 미배정으로 두는 편이
-안전하기 때문이다 — 필드를 잘못 실으면 A마을 단말이 B마을 방송을 받는다.
+**`village_id` 는 절대 `all/config` 에 넣지 않는다.** 그 토픽은 전 단말이 구독하고
+retain 이라 나중에 붙는 단말도 받는다. 거기 마을을 실으면 아직 배정 안 된 단말까지
+그 값을 자기 것으로 읽고 남의 마을 방송을 구독한다 — 실제로 목 단말 3대 중 1대만
+배정했는데 3대가 전부 응답했다. 현장이라면 새로 설치한 단말이 배정 전에 엉뚱한
+마을 방송을 트는 사고다. 단말별 토픽은 이름에 MAC 이 박혀 있어 남의 값을 받을 수 없다.
 
-배정이 바뀌면 `config_version` 을 올려서 다시 발행한다. 같은 토픽에 retain 으로
-덮어쓰는 구조라, 버전이 그대로면 단말이 "이미 적용한 설정"으로 보고 무시한다.
+두 토픽은 항상 **같은 `config_version`** 으로 함께 발행한다. 단말은 토픽별로 버전을
+따로 추적하지 않고 마지막에 받은 값을 쓰는 단일 카운터 구조라(사양 §4.3), 한쪽만
+올리면 낡은 값을 최종본으로 보고한다. 그래서 배정이 바뀌든 주기만 바뀌든
+`config_reconcile.publish_all()` 로 둘 다 내보낸다.
 
-단말별 토픽(`iotradio/device/<mac>/config`)도 함께 발행하고 있다. 코덱스와 협의
-중인 신규 항목이라 지금은 아무도 안 듣지만, 펌웨어가 이걸 구독하기 시작하면
-위의 "한 마을일 때만" 제약이 없어지고 다중 마을 운영이 가능해진다.
+배정을 해제하면 그 단말 토픽에 **빈 payload 를 retain 으로** 보내 보관본을 지운다.
+안 지우면 단말이 재접속할 때 없어진 배정을 다시 물려받는다. 재조정 주기도 DB 가
+미배정인 단말의 보관본을 매번 지워서 브로커를 DB 에 맞춘다.
+
+**자동 복구**(사양 §4.3 권장): 단말이 STATUS 에 echo 하는 `village_id`/`config_version`
+이 DB 와 다르면 그 단말 CONFIG 를 다시 내린다. 브로커 retained 유실이나 배정 시점의
+연결 끊김을 스스로 알아채고 복구한다. 같은 단말에 60초 안에는 다시 보내지 않는다 —
+적용하지 않는 낡은 펌웨어가 있으면 STATUS 마다 재발행이 나가기 때문이다.
 
 ### MQTT 감시 · 사양 검증
 
@@ -339,7 +377,7 @@ DB·브로커가 필요한 통합 검증은 별도 스크립트로 돌린다(백
 
 ### TTS
 
-캐시 키는 `sha256(문구|언어|보이스)` 다. 같은 문구를 다시 만들면 Polly 를 부르지
+캐시 키는 `sha256(문구|언어|보이스)` 다. 같은 문구를 다시 만들면 Google TTS 를 부르지
 않고 기존 파일을 돌려주므로, 미리듣기를 몇 번 눌러도 요금은 한 번만 나간다.
 합성하면 그 즉시 파일함에 저장된다 — 별도의 '저장' 단계가 없다.
 
@@ -347,10 +385,10 @@ DB·브로커가 필요한 통합 검증은 별도 스크립트로 돌린다(백
 
 | 값 | 용도 |
 |---|---|
-| `polly` | 실제 합성. 자격증명은 boto3 기본 체인(환경변수 → `~/.aws/credentials` → EC2 인스턴스 역할). 운영에서는 **인스턴스 역할**을 쓰는 게 가장 안전하다 — 키를 서버에 두지 않는다. |
+| `google` | 실제 합성. 자격증명은 google-auth 기본 체인(`GOOGLE_APPLICATION_CREDENTIALS` → gcloud 사용자 자격증명 → 인스턴스에 붙은 서비스 계정). 운영에서는 **인스턴스 서비스 계정**이 가장 안전하다 — 키 파일을 서버에 두지 않는다. 필요한 권한은 `roles/cloudtts.user` 하나. |
 | `dev` | ffmpeg 으로 톤을 만드는 가짜 엔진. AWS 없이 업로드→캐시→방송→단말 흐름을 끝까지 돌려볼 때 쓴다. `APP_ENV=prod` 에서는 거부된다. |
 
-⚠ **온프레미스(폐쇄망)에서는 Polly 를 부를 수 없다.** 엔진이 프로토콜로 분리돼
+⚠ **온프레미스(폐쇄망)에서는 Google TTS 를 부를 수 없다.** 엔진이 프로토콜로 분리돼
 있으니(`app/tts/engine.py`) 로컬 엔진을 하나 더 구현해 끼우면 된다.
 
 ### 실시간 방송
@@ -397,7 +435,7 @@ DB 세션은 의존성이 아니라 **미들웨어**가 관리한다. FastAPI �
 - `CORS_ORIGINS` 비우기 — nginx 가 같은 오리진으로 서빙하므로 필요 없다
 - `ICECAST_PUBLIC_BASE_URL` 을 실제 도메인으로 — 단말이 받는 `stream_url` 이 이 값으로 만들어진다
 - `ICECAST_SOURCE_PASSWORD` 교체
-- `TTS_ENGINE=polly` 로 전환 + Polly 권한(`polly:SynthesizeSpeech`) 부여
+- `TTS_ENGINE=google` 로 전환 + 서비스 계정에 `roles/cloudtts.user` 부여, 프로젝트에서 Cloud TTS API 활성화
 
 ---
 

@@ -63,7 +63,10 @@ export interface Village extends VillageBrief {
   created_at: string;
   /** MQTT 로 나가는 8자리 표현 */
   village_token: string;
+  /** 등록된 단말 수(설치 현황) */
   device_count: number;
+  /** 그중 지금 온라인인 수. 방송은 온라인 단말에만 나간다. */
+  online_count: number;
 }
 
 export interface Zone {
@@ -75,6 +78,7 @@ export interface Zone {
   lng: number | null;
   created_at: string;
   device_count: number;
+  online_count: number;
 }
 
 export interface Device {
@@ -119,7 +123,7 @@ export interface ActiveBroadcast {
   job_id: number | null;
   event_type: string;
   target_scope: string;
-  target_id: string | null;
+  target_ids: string[];
   triggered_at: string;
 }
 
@@ -127,7 +131,7 @@ export interface RecentEvent {
   id: number;
   event_type: string;
   target_scope: string;
-  target_id: string | null;
+  target_ids: string[];
   triggered_at: string;
   ended_at: string | null;
 }
@@ -237,7 +241,7 @@ export type TargetScope = 'device' | 'zone' | 'village' | 'all';
 export interface FileBroadcastRequest {
   file_id: number;
   target_scope: TargetScope;
-  target_id?: string | null;
+  target_ids: string[];
   store_flash?: boolean;
   autoplay?: boolean;
 }
@@ -249,6 +253,8 @@ export interface DeviceResult {
   result_type: string | null;
   ok: boolean | null;
   reason: string | null;
+  /** LIVE_STATS 요약(버퍼·끊김). 결과가 아니라 수신 품질. */
+  stats: string | null;
   received_at: string | null;
 }
 
@@ -257,7 +263,7 @@ export interface BroadcastDetail {
   job_id: number | null;
   event_type: string;
   target_scope: TargetScope;
-  target_id: string | null;
+  target_ids: string[];
   file_id: number | null;
   file_name: string | null;
   triggered_at: string;
@@ -267,7 +273,7 @@ export interface BroadcastDetail {
   results: DeviceResult[];
 
   // 실시간 방송에만 채워진다
-  /** 단말이 GET 하는 Icecast 주소. /live/<마을8자리>/<세션id> */
+  /** 단말이 GET 하는 Icecast 주소. /live/<job_id> */
   stream_url: string | null;
   /** 브라우저가 마이크를 밀어 넣을 WebSocket 경로 */
   ingest_path: string | null;
@@ -277,7 +283,7 @@ export interface BroadcastDetail {
 
 export interface LiveBroadcastRequest {
   target_scope: TargetScope;
-  target_id?: string | null;
+  target_ids: string[];
 }
 
 /** 겹침(409) 시 error.detail 에 담겨 오는 모양. */

@@ -56,7 +56,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for sub in (settings.upload_dir, settings.tts_dir, settings.update_dir):
         sub.mkdir(parents=True, exist_ok=True)
 
-    connection = MqttConnection(on_message=dispatch)
+    # 람다가 publisher 를 늦게 읽는다 — publisher 는 connection 을 필요로 해서
+    # 아래에서야 만들어지는데, 클로저라 호출 시점에 해결된다.
+    connection = MqttConnection(on_message=lambda t, raw: dispatch(t, raw, publisher))
     publisher = MqttPublisher(connection)
     # 라우터는 get_publisher 의존성으로 여기 붙은 인스턴스를 꺼내 쓴다.
     app.state.mqtt = connection

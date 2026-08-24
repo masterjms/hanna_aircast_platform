@@ -95,3 +95,8 @@ VILLAGE_ID_WIDTH = 8
 
 #: MAC 정규형: 콜론 없는 소문자 12자리.
 MAC_LENGTH = 12
+
+
+#: 주기적으로 계속 올라오는 telemetry. 1회성 "결과"와 달리 최신값만 뜻이 있다.
+#: 서버는 이력에 tick 마다 쌓지 않고 방송·단말당 1행만 두고 덮어쓴다.
+TELEMETRY_RESULTS = frozenset({"LIVE_STATS"})

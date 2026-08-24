@@ -56,14 +56,10 @@ async def update_config(
     await db.flush()
 
     try:
-        await publisher.publish_global_config(
-            config_version=config.config_version,
-            status_interval_sec=config.status_interval_sec,
-            live_stats_interval_sec=config.live_stats_interval_sec,
-            event_qos=config.event_qos,
-            # 주기만 바꿨는데 village_id 가 빠지면 단말이 미배정으로 되돌아간다.
-            village_id=await config_reconcile.shared_village_id(db),
-        )
+        # 공통 설정만 바뀌었어도 단말별 CONFIG 까지 같이 내보낸다. 단말이 토픽별로
+        # 버전을 따로 추적하지 않아서(사양 §4.3), 한쪽만 올리면 단말이 낡은 값을
+        # 최종본으로 보고하게 된다.
+        await config_reconcile.publish_all(publisher, db)
     except Exception:  # noqa: BLE001
         log.exception("CONFIG 발행 실패 (재조정 주기가 복구)")
 
