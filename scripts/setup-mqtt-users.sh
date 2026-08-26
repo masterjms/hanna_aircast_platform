@@ -48,6 +48,9 @@ docker run --rm -v "$CONF_DIR:/c" --entrypoint sh eclipse-mosquitto:2 -c "
     mosquitto_passwd    -b /c/passwd xwifi-device '$DEVICE_PW'
     chown 1883:1883 /c/passwd
     chmod 600 /c/passwd
+    # mosquitto 2.x 가 경고하고, 이후 버전은 로드를 거부한다.
+    chown 1883:1883 /c/aclfile
+    chmod 640 /c/aclfile
 "
 
 cat <<EOF
