@@ -36,3 +36,7 @@ Thumbs.db
 # TLS 인증서 · MQTT 비밀번호 — 서버에서 생성되며 저장소에 올리지 않는다
 infra/certs/
 infra/mosquitto/config/passwd
+# 디렉터리가 아니라 내용물을 제외한다 — 디렉터리를 제외하면
+# git 이 안으로 들어가지 않아 .gitkeep 예외가 먹지 않는다.
+infra/secrets/*
+!infra/secrets/.gitkeep

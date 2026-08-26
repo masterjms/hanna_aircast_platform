@@ -23,6 +23,10 @@ services:
       FILE_ROOT: /var/lib/iotradio/files
     volumes:
       - files:/var/lib/iotradio/files
+      # Google TTS 자격증명. scripts/setup-tts-credentials.sh 가 컨테이너 사용자
+      # 소유로 놓아준다. 저장소에는 들어가지 않는다(.gitignore).
+      # TTS 를 안 쓰면 빈 파일이라도 있으면 되고, .env 에서 경로를 비우면 무시된다.
+      - ./infra/secrets:/run/secrets:ro
     depends_on:
       mosquitto:
         condition: service_started
