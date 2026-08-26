@@ -12,7 +12,10 @@ services:
     env_file: .env
     environment:
       # 컨테이너 네트워크 안에서는 서비스명으로 붙는다(.env 의 localhost 를 덮어쓴다).
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-xwifi}:${POSTGRES_PASSWORD:?}@postgres:5432/${POSTGRES_DB:-xwifi}
+      # RDS 를 쓴다. .env 의 DATABASE_URL 을 그대로 따르므로 온프레미스 전환 때도
+      # 이 값 하나만 바꾸면 된다(개요 문서 이식 원칙).
+      # EC2 안에 Postgres 를 띄우려면: docker compose --profile local-db up -d
+      DATABASE_URL: ${DATABASE_URL:?}
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
       ICECAST_HOST: icecast
@@ -21,8 +24,6 @@ services:
     volumes:
       - files:/var/lib/iotradio/files
     depends_on:
-      postgres:
-        condition: service_healthy
       mosquitto:
         condition: service_started
 
@@ -35,10 +36,13 @@ services:
     volumes:
       - web:/out
 
+  # 기본으로는 뜨지 않는다 — 운영은 RDS 를 쓴다.
+  # RDS 없이 단독 구동할 때만: docker compose --profile local-db up -d
   postgres:
     image: postgres:16-alpine
     container_name: xwifi-postgres
     restart: unless-stopped
+    profiles: ["local-db"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-xwifi}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
@@ -56,8 +60,11 @@ services:
     container_name: xwifi-mosquitto
     restart: unless-stopped
     ports:
-      # 단말이 붙는 TLS 포트만 밖으로 연다. 평문 1883 은 내부 전용.
       - "8883:8883"
+      # 전환기 한시 개방. 펌웨어가 mqtts 를 지원하면 이 줄과 보안그룹 1883 을
+      # 함께 지운다. 평문이라 CONNECT 패킷에 ID/PW 가 그대로 실린다 —
+      # 전환 시점에 MQTT 비밀번호를 반드시 교체할 것.
+      - "1883:1883"
     volumes:
       - ./infra/mosquitto/config:/mosquitto/config:ro
       - ./infra/certs:/mosquitto/certs:ro
@@ -68,9 +75,11 @@ services:
     container_name: xwifi-icecast
     restart: unless-stopped
     environment:
+      # 소스와 관리자 비밀번호를 분리한다. 같은 값이면 하나가 유출될 때
+      # 마운트 탈취와 관리자 접근이 동시에 열린다.
       ICECAST_SOURCE_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?}
-      ICECAST_ADMIN_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?}
-      ICECAST_RELAY_PASSWORD: ${ICECAST_SOURCE_PASSWORD:?}
+      ICECAST_ADMIN_PASSWORD: ${ICECAST_ADMIN_PASSWORD:?}
+      ICECAST_RELAY_PASSWORD: ${ICECAST_ADMIN_PASSWORD:?}
     volumes:
       # 템플릿을 읽기전용으로 넣고 컨테이너가 /etc/icecast.xml 로 복사해 쓴다.
       # 직접 마운트하면 안 되는 이유: 이미지 entrypoint 가 비밀번호를 그 파일에
@@ -86,9 +95,13 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      # 전환기 평문 스트림. Icecast 를 직접 노출하지 않고 nginx 가 /live/ 만
+      # 프록시한다(관리 인터페이스 차단). 펌웨어 TLS 반영 후 제거.
+      - "8000:8000"
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./infra/certs:/etc/nginx/certs:ro
+      - ./infra/certbot-webroot:/var/www/certbot:ro
       - web:/usr/share/nginx/html:ro
     depends_on:
       - backend

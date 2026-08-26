@@ -274,6 +274,30 @@ class TestPublisher:
         # telemetry 는 실패 사유 칸에 들어가지 않는다
         assert _reason_text("LIVE_STATS", {"p4_buffer_ms": 1320}) is None
 
+    def test_uplink_grace_is_under_icecast_source_timeout(self):
+        """워치독 유예시간은 Icecast source-timeout 보다 작아야 한다.
+
+        순서가 뒤집히면 Icecast 가 먼저 mount 를 지운다. 그러면 단말은 정상
+        종료가 아니라 스트림 단절로 끝나고(재접속하지 않는다 — ESP32 정정
+        260824), 서버는 mount 가 사라진 것도 모른 채 ON AIR 를 유지한다.
+        서버가 LIVE_STOP 을 먼저 보내야 단말이 깨끗하게 정리한다.
+        """
+        import re
+        from pathlib import Path as _P
+
+        from app.config import settings
+
+        xml = _P(__file__).resolve().parents[2] / "infra" / "icecast" / "icecast.xml"
+        raw = xml.read_text(encoding="utf-8")
+        found = re.search(r"<source-timeout>(\d+)</source-timeout>", raw)
+        assert found, "icecast.xml 에 source-timeout 이 없다"
+        source_timeout = int(found.group(1))
+
+        grace = settings.live_uplink_grace_sec
+        assert 0 < grace < source_timeout, (
+            f"유예 {grace}s 는 source-timeout {source_timeout}s 보다 작아야 한다"
+        )
+
     def test_cmd_payloads_use_job_id_only(self):
         """CMD 의 job 식별자는 job_id 하나다 (통신 사양 2026-08-20 통일).
 

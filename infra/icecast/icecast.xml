@@ -22,7 +22,17 @@
         <queue-size>16384</queue-size>
         <client-timeout>30</client-timeout>
         <header-timeout>15</header-timeout>
-        <source-timeout>10</source-timeout>
+        <!--
+          소스가 데이터를 멈추면 Icecast 가 마운트를 지우는 시간.
+          10초는 너무 짧다 — 단말은 스트림이 끊기면 재접속하지 않고 방송을
+          끝내버리므로(ESP32 정정 260824), 마운트가 잠깐 사라지는 것만으로
+          그 방송은 영구히 죽는다. 게다가 Icecast 가 조용히 지워버리면 서버는
+          그 사실조차 모른다.
+          여유를 크게 두고, "오디오가 안 온다"는 판단은 서버가 직접 한다
+          (live_uplink_grace_sec 워치독이 LIVE_STOP 을 먼저 내보낸다).
+          그래서 이 값은 워치독보다 반드시 커야 한다.
+        -->
+        <source-timeout>60</source-timeout>
         <!--
           burst-on-connect 를 끈다. 켜면 단말이 붙는 순간 과거 오디오를 몰아주는데,
           그만큼 지연이 고정으로 붙고 P4 지터 버퍼가 하드캡까지 차오른다.

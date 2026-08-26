@@ -526,44 +526,63 @@ async def start_live_broadcast(
     log.info("실시간 방송 시작 session=%d mount=%s 대상 %d대", session_id, mount, len(macs))
 
     if settings.live_uplink_grace_sec > 0:
-        # 유예시간 안에 마이크가 안 붙으면 자동 종료한다. 무음이 "정상 방송"으로
-        # 나가는 게 최악이다 — 화면에는 ON AIR 로 보이는데 스피커는 조용한 상태.
         asyncio.create_task(
-            _stop_if_never_uplinked(session_id, publisher, registry),
-            name=f"live-grace-{session_id}",
+            _watch_uplink(session_id, publisher, registry),
+            name=f"live-uplink-watch-{session_id}",
         )
 
     return await _to_out(db, event, registry)
 
 
-async def _stop_if_never_uplinked(
+async def _watch_uplink(
     session_id: int, publisher: MqttPublisher, registry: LiveRegistry
 ) -> None:
-    """유예시간 뒤에도 업링크가 한 번도 안 붙었으면 방송을 끈다.
+    """오디오가 끊긴 실시간 방송을 서버가 직접 끝낸다.
 
-    '한 번도'가 기준이다(uplink_seen). 붙었다 잠깐 끊긴 방송은 재연결 여지가
-    있으므로 끄지 않는다 — 그건 운영자 부재가 아니라 네트워크 문제다.
+    왜 "끊기면 기다린다"가 아니라 "끊기면 끝낸다"인가:
+
+      · 단말은 스트림이 끊겨도 **재접속하지 않는다**(ESP32 정정 260824).
+        단절을 감지하면 LIVE_READY status=2 를 올리고 IDLE 로 돌아가며,
+        그 방송은 그 단말에서 영영 끝난다. 서버가 마운트를 붙들고 기다려도
+        돌아올 단말이 없다.
+      · 화면(useMicUplink)도 업링크가 끊기면 재연결하지 않고 "방송을 다시
+        시작해 주세요"를 띄운다. 양쪽 다 회복 경로가 없다.
+      · 그런데도 서버가 방송을 열어두면 ON AIR 인데 소리는 안 나가고,
+        대상 단말이 겹침 검사에 묶여 재방송까지 막힌다.
+
+    Icecast 가 먼저 마운트를 지워버리기 전에 우리가 LIVE_STOP 을 보내야 한다 —
+    그래야 단말이 오류가 아니라 정상 종료로 정리한다. 그래서 icecast.xml 의
+    source-timeout 은 이 유예시간보다 크게 잡혀 있다.
+
+    기준은 "마지막 오디오 바이트 이후 경과 시간"이다. 한 번도 안 붙은 방송과
+    붙었다 끊긴 방송을 같은 잣대로 잰다 — 결과가 같기 때문이다.
     """
-    await asyncio.sleep(settings.live_uplink_grace_sec)
+    grace = settings.live_uplink_grace_sec
+    while True:
+        session = registry.get(session_id)
+        if session is None:
+            return  # 이미 종료됐다
 
-    session = registry.get(session_id)
-    if session is None or session.uplink_seen:
-        return  # 이미 끝났거나, 마이크가 붙었(었)다
+        silent = session.silent_for_sec
+        if silent < grace:
+            await asyncio.sleep(min(grace - silent, 5.0) or 1.0)
+            continue
 
-    log.warning(
-        "무음 방송 자동 종료 session=%d — %d초 동안 업링크가 붙지 않았다",
-        session_id, settings.live_uplink_grace_sec,
-    )
-    try:
-        async with session_scope() as db:
-            event = await db.get(BroadcastEvent, session.event_id)
-            if event is None or event.ended_at is not None:
-                return
-            await stop_live_broadcast(
-                db, event.id, VillageScope.for_super_admin(), publisher, registry
-            )
-    except Exception:  # noqa: BLE001 - 실패해도 화면의 무음 경고는 남는다
-        log.exception("무음 방송 자동 종료 실패 session=%d", session_id)
+        log.warning(
+            "실시간 방송 자동 종료 session=%d — 오디오가 %.0f초간 끊겼다 (업링크 연결된 적 %s)",
+            session_id, silent, "있음" if session.uplink_seen else "없음",
+        )
+        try:
+            async with session_scope() as db:
+                event = await db.get(BroadcastEvent, session.event_id)
+                if event is None or event.ended_at is not None:
+                    return
+                await stop_live_broadcast(
+                    db, event.id, VillageScope.for_super_admin(), publisher, registry
+                )
+        except Exception:  # noqa: BLE001 - 실패해도 화면의 무음 경고는 남는다
+            log.exception("실시간 방송 자동 종료 실패 session=%d", session_id)
+        return
 
 
 async def stop_live_broadcast(

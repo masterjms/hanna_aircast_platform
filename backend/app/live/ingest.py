@@ -118,6 +118,7 @@ async def ingest_endpoint(ws: WebSocket, session_id: int, registry: LiveRegistry
             # 파싱하지 않는다. 받은 Ogg 페이지를 그대로 흘려보낸다.
             session.source.feed(chunk)
             received += len(chunk)
+            session.touch_audio()
     except WebSocketDisconnect:
         pass
     except Exception:  # noqa: BLE001

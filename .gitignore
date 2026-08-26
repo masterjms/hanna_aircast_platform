@@ -19,6 +19,7 @@ dist/
 !.env.example
 !.env.local.example
 !.env.device.example
+!.env.prod.example
 
 # 런타임 데이터 (로컬 개발용 볼륨)
 /data/
@@ -31,3 +32,7 @@ dist/
 .idea/
 .DS_Store
 Thumbs.db
+
+# TLS 인증서 · MQTT 비밀번호 — 서버에서 생성되며 저장소에 올리지 않는다
+infra/certs/
+infra/mosquitto/config/passwd

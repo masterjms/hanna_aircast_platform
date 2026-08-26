@@ -141,7 +141,7 @@ export function DashboardPage() {
                     </td>
                     <td className="strong">
                       {b.target_scope}
-                      {b.target_id ? ` · ${b.target_id}` : ''}
+                      {b.target_ids.length > 0 ? ` · ${b.target_ids.join(', ')}` : ''}
                     </td>
                     <td className="mono">{b.job_id ?? '—'}</td>
                     <td className="dim">{formatTime(b.triggered_at)}</td>
@@ -213,7 +213,7 @@ export function DashboardPage() {
                     <td className="mono">{e.event_type}</td>
                     <td className="strong">
                       {e.target_scope}
-                      {e.target_id ? ` · ${e.target_id}` : ''}
+                      {e.target_ids.length > 0 ? ` · ${e.target_ids.join(', ')}` : ''}
                     </td>
                     <td className="dim">{formatTime(e.triggered_at)}</td>
                     <td className="dim">{e.ended_at ? formatTime(e.ended_at) : '진행 중'}</td>
