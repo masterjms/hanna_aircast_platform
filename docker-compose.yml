@@ -49,7 +49,11 @@ services:
     profiles: ["local-db"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-xwifi}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      # :? 를 쓰지 않는다 — compose 는 프로파일을 적용하기 *전에* 파일 전체를
+      # 해석하므로, 운영(RDS)에서 이 서비스가 뜨지 않아도 값을 요구해 버린다.
+      # local-db 프로파일을 쓸 때만 .env 에 POSTGRES_PASSWORD 를 넣으면 되고,
+      # 비어 있으면 postgres 가 기동 시점에 스스로 명확히 거부한다.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: ${POSTGRES_DB:-xwifi}
     volumes:
       - pgdata:/var/lib/postgresql/data
