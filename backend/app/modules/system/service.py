@@ -79,10 +79,13 @@ async def health(db: AsyncSession, publisher: MqttPublisher) -> HealthOut:
     """
     db_ok = True
     try:
-        await db.execute(text("SELECT 1"))
+        # SELECT 1 만으로는 부족하다 — 스키마가 통째로 사라져도 통과한다
+        # (복구 리허설에서 실제로 테이블 0개인데 ok 가 나왔다).
+        # alembic_version 을 읽어 "접속되고 마이그레이션도 적용됐다" 까지 확인한다.
+        await db.execute(text("SELECT 1 FROM alembic_version LIMIT 1"))
     except Exception:  # noqa: BLE001
         db_ok = False
-        log.exception("헬스체크: DB 접속 실패")
+        log.exception("헬스체크: DB 접속 또는 스키마 확인 실패")
 
     mqtt_ok = publisher.connection.is_connected
     return HealthOut(
