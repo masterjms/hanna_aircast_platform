@@ -15,7 +15,7 @@ chmod 400 hanna-aircast.pem
 ```
 
 ```bash
-ssh -i hanna-aircast.pem ubuntu@<탄력적IP>
+ssh -i hanna-aircast.pem ubuntu@13.124.26.85
 ```
 
 프롬프트가 `ubuntu@ip-...:~$` 로 바뀌면 서버 안이다.

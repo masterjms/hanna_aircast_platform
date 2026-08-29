@@ -81,7 +81,7 @@ Multi-AZ는 비용 2배라 이 규모에선 과함 — 단일 AZ + 자동백업�
 
 1. 도메인 구입 + AWS 계정 정리 (루트 MFA, IAM 사용자, Budget $150 알림)
 2. 네트워크: 기본 VPC, EIP, 보안그룹 2개(EC2/RDS)
-3. RDS 생성 (Postgres 16, 자동백업 7일, 퍼블릭 차단)
+3. RDS 생성 (Postgres 18 — 로컬 컨테이너와 **같은 메이저 버전**이어야 pg_dump 가 동작한다, 자동백업 7일, 퍼블릭 차단)
 4. EC2 생성 (t3.medium, gp3 50GB, EIP) + Docker 설치
 5. 배포: clone → 운영 .env → compose up → alembic → 시드
 6. DNS A레코드 + certbot + deploy-hook

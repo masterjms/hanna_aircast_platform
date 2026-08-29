@@ -43,7 +43,7 @@ services:
   # 기본으로는 뜨지 않는다 — 운영은 RDS 를 쓴다.
   # RDS 없이 단독 구동할 때만: docker compose --profile local-db up -d
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: xwifi-postgres
     restart: unless-stopped
     profiles: ["local-db"]
