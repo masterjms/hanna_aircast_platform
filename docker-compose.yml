@@ -56,7 +56,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: ${POSTGRES_DB:-xwifi}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # PostgreSQL 18 부터 마운트 지점이 바뀌었다.
+      # /var/lib/postgresql/data 에 걸면 18 이미지는 "쓰지 않는 볼륨" 으로 무시하고
+      # 기동에 실패한다. 상위 디렉터리에 걸어야 하고, 실제 데이터는 그 아래
+      # 버전별 하위 디렉터리에 들어간다(pg_upgrade 를 위한 구조).
+      - pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-xwifi}"]
       interval: 10s
