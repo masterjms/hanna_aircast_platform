@@ -5,10 +5,11 @@
  * 속하지 않으므로 village_admin 의 담당 범위에 들어올 수 없다(백엔드가 걸러낸다).
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { api } from '../api/client';
-import type { Device, DeviceStatusFilter } from '../api/types';
+import { Modal } from '../components/Modal';
+import type { Device, DeviceStatusFilter, Village, Zone } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
 
@@ -37,7 +38,150 @@ const TONE_VAR = {
   idle: 'var(--text-muted)',
 } as const;
 
-function DeviceTable({ devices, showVillage }: { devices: Device[]; showVillage: boolean }) {
+/** 마을·구역 배정.
+ *
+ * 배정이 곧 방송 대상이다 — 마을이 없는 단말에는 서버가 village_id 를 안 내려주고,
+ * 그러면 단말이 마을 topic 을 구독하지 않아 방송이 아예 도달하지 않는다.
+ * 그동안 이 화면에 배정 수단이 없어서 API 를 직접 호출해야 했다.
+ */
+function AssignDialog({
+  device,
+  villages,
+  onClose,
+  onSaved,
+}: {
+  device: Device;
+  villages: Village[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [villageId, setVillageId] = useState<number | ''>(device.village_id ?? '');
+  const [zoneId, setZoneId] = useState<number | ''>(device.zone_id ?? '');
+  const [label, setLabel] = useState(device.label ?? '');
+  const [zones, setZones] = useState<Zone[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // 구역은 마을에 딸린 값이라 마을이 바뀌면 다시 불러온다.
+  useEffect(() => {
+    if (villageId === '') {
+      setZones([]);
+      return;
+    }
+    let alive = true;
+    api.villages
+      .zones(villageId)
+      .then((z) => alive && setZones(z))
+      .catch(() => alive && setZones([]));
+    return () => {
+      alive = false;
+    };
+  }, [villageId]);
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.devices.update(device.mac, {
+        label: label.trim() || null,
+        village_id: villageId === '' ? null : villageId,
+        // 마을을 바꾸면 이전 마을의 구역은 남아 있을 수 없다.
+        zone_id: villageId === '' ? null : zoneId === '' ? null : zoneId,
+      });
+      onSaved();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '저장에 실패했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="단말 배정"
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>
+            취소
+          </button>
+          <button type="button" className="btn btn--primary" onClick={save} disabled={busy}>
+            {busy ? '저장 중…' : '저장'}
+          </button>
+        </>
+      }
+    >
+      <p className="mono dim" style={{ marginTop: 0 }}>
+        {device.mac}
+      </p>
+
+      <div className="field">
+        <label htmlFor="a-village">마을</label>
+        <select
+          id="a-village"
+          value={villageId}
+          onChange={(e) => {
+            setVillageId(e.target.value === '' ? '' : Number(e.target.value));
+            setZoneId('');
+          }}
+        >
+          <option value="">미배정</option>
+          {villages.map((v) => (
+            <option key={v.id} value={v.id}>
+              {v.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="field">
+        <label htmlFor="a-zone">구역 (선택)</label>
+        <select
+          id="a-zone"
+          value={zoneId}
+          disabled={villageId === ''}
+          onChange={(e) => setZoneId(e.target.value === '' ? '' : Number(e.target.value))}
+        >
+          <option value="">지정 안 함</option>
+          {zones.map((z) => (
+            <option key={z.id} value={z.id}>
+              {z.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="field">
+        <label htmlFor="a-label">별칭 (선택)</label>
+        <input
+          id="a-label"
+          value={label}
+          maxLength={40}
+          placeholder="비우면 목록에 MAC 이 표시됩니다"
+          onChange={(e) => setLabel(e.target.value)}
+        />
+      </div>
+
+      <p className="hint">
+        마을을 배정하면 서버가 CONFIG 로 단말에 알려주고, 단말이 그 마을 방송을 구독합니다.
+        단말 STATUS 에 반영되는 데 몇 초 걸립니다.
+      </p>
+
+      {error && <p className="hint hint--warn">{error}</p>}
+    </Modal>
+  );
+}
+
+function DeviceTable({
+  devices,
+  showVillage,
+  onAssign,
+}: {
+  devices: Device[];
+  showVillage: boolean;
+  onAssign: (d: Device) => void;
+}) {
   if (devices.length === 0) {
     return <div className="empty">조건에 맞는 단말이 없습니다.</div>;
   }
@@ -53,13 +197,15 @@ function DeviceTable({ devices, showVillage }: { devices: Device[]; showVillage:
           <th className="num">RSSI</th>
           <th className="num">CFG</th>
           <th className="num">마지막 통신</th>
+          <th />
         </tr>
       </thead>
       <tbody>
         {devices.map((d) => (
           <tr key={d.mac}>
             <td className="mono">{d.mac}</td>
-            <td className="strong">{d.label ?? '—'}</td>
+            {/* 이름이 비면 MAC 을 쓴다 — 목록에 빈 칸이 생기지 않게 (등록 사양 §3.3) */}
+            <td className="strong">{d.label || <span className="mono dim">{d.mac}</span>}</td>
             {showVillage && <td>{d.village_name ?? '미배정'}</td>}
             <td>{d.zone_name ?? '—'}</td>
             <td>
@@ -72,6 +218,11 @@ function DeviceTable({ devices, showVillage }: { devices: Device[]; showVillage:
             </td>
             <td className="num">{d.config_version ?? '—'}</td>
             <td className="num dim">{formatTime(d.last_seen_at)}</td>
+            <td className="num">
+              <button type="button" className="btn btn--sm" onClick={() => onAssign(d)}>
+                배정
+              </button>
+            </td>
           </tr>
         ))}
       </tbody>
@@ -84,6 +235,7 @@ export function DevicesPage() {
   const [villageId, setVillageId] = useState<number | ''>('');
   const [statusFilter, setStatusFilter] = useState<DeviceStatusFilter | ''>('');
   const [search, setSearch] = useState('');
+  const [assigning, setAssigning] = useState<Device | null>(null);
 
   const villages = usePolling(() => api.villages.list(), 60_000);
 
@@ -161,7 +313,11 @@ export function DevicesPage() {
         {devices.loading && !devices.data ? (
           <div className="empty">불러오는 중…</div>
         ) : (
-          <DeviceTable devices={devices.data ?? []} showVillage={(user?.villages.length ?? 0) > 1} />
+          <DeviceTable
+            devices={devices.data ?? []}
+            showVillage={(user?.villages.length ?? 0) > 1}
+            onAssign={setAssigning}
+          />
         )}
       </div>
 
@@ -176,9 +332,25 @@ export function DevicesPage() {
             서버가 CONFIG 로 단말에 알려줍니다.
           </p>
           <div className="table-wrap table-wrap--scroll" style={{ marginTop: 14 }}>
-            <DeviceTable devices={unassigned.data ?? []} showVillage={false} />
+            <DeviceTable
+              devices={unassigned.data ?? []}
+              showVillage={false}
+              onAssign={setAssigning}
+            />
           </div>
         </section>
+      )}
+
+      {assigning && (
+        <AssignDialog
+          device={assigning}
+          villages={villages.data ?? []}
+          onClose={() => setAssigning(null)}
+          onSaved={() => {
+            devices.reload();
+            unassigned.reload();
+          }}
+        />
       )}
     </>
   );

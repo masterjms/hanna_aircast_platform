@@ -1373,3 +1373,10 @@ tr.is-selected td {
 .count--none {
   color: var(--danger-text);
 }
+
+/* 표 안에 들어가는 작은 버튼. 행 높이를 늘리지 않는 것이 목적이다. */
+.btn--sm {
+  padding: 3px 10px;
+  font-size: 12.5px;
+  border-radius: var(--r-sm);
+}

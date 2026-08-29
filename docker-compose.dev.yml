@@ -17,7 +17,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata-dev:/var/lib/postgresql/data
+      # PostgreSQL 18 부터 마운트 지점이 상위 디렉터리로 바뀌었다
+      # (운영 compose 와 동일 — /data 에 걸면 18 이 무시하고 기동에 실패한다).
+      - pgdata-dev:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-xwifi}"]
       interval: 5s
