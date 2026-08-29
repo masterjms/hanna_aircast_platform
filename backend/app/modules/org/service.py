@@ -82,14 +82,14 @@ async def get_village(db: AsyncSession, village_id: int, scope: VillageScope) ->
     if village is None:
         raise VillageNotFound()
     counts = await _village_device_counts(db, [village_id])
-    return _to_village_out(village, counts.get(village_id, 0))
+    return _to_village_out(village, counts.get(village_id, (0, 0)))
 
 
 async def create_village(db: AsyncSession, payload: VillageCreate) -> VillageOut:
     village = Village(**payload.model_dump())
     db.add(village)
     await db.flush()
-    return _to_village_out(village, 0)
+    return _to_village_out(village, (0, 0))
 
 
 async def update_village(
@@ -103,7 +103,7 @@ async def update_village(
         setattr(village, key, value)
     await db.flush()
     counts = await _village_device_counts(db, [village_id])
-    return _to_village_out(village, counts.get(village_id, 0))
+    return _to_village_out(village, counts.get(village_id, (0, 0)))
 
 
 async def delete_village(db: AsyncSession, village_id: int) -> None:
