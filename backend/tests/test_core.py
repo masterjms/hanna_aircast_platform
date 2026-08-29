@@ -189,23 +189,25 @@ class TestPublisher:
         _, raw, _, retain = conn.sent[0]
         assert raw == b"" and retain is True
 
-    def test_stream_url_rejects_https_until_tls(self):
-        """단말 Icecast 클라이언트에 TLS 검증이 아직 없다 (ESP32 회신 260824 §3).
+    def test_stream_url_must_be_https(self):
+        """단말 운영 빌드는 http 스트림을 거절한다 (2026-08-29 실물 확인).
 
-        보내면 접속이 실패하고 LIVE_READY status=2 로만 드러난다 — 발행 전에 끊는다.
-        TLS 전환으로 단말이 https 를 지원하면 이 테스트와 검사를 함께 푼다.
+        평문으로 보내면 LIVE_READY ok=false code=BAD_FIELD 로 방송이 아예 시작되지
+        않는다. 현장에서는 "준비 완료 0대"로만 보여 원인 파악이 어려우므로
+        발행 전에 끊는다.
         """
         from app.mqtt.publisher import STREAM_URL_MAX_BYTES
 
+        # https 는 정상 (포트 없이 — 443)
+        ok = MqttPublisher.live_start_payload(job_id=1, stream_url="https://x.co.kr/live/1")
+        assert ok["stream_url"] == "https://x.co.kr/live/1"
+
+        # 평문은 거절
         with pytest.raises(ApiError):
-            MqttPublisher.live_start_payload(job_id=1, stream_url="https://x.co.kr/live/1")
+            MqttPublisher.live_start_payload(job_id=1, stream_url="http://x.co.kr/live/1")
 
-        # http 는 정상
-        p = MqttPublisher.live_start_payload(job_id=1, stream_url="http://x.co.kr/live/1")
-        assert p["stream_url"] == "http://x.co.kr/live/1"
-
-        # 512B 초과는 거절 — 단말이 잘라 쓰지 않고 방송을 거절하기 때문
-        too_long = "http://x.co.kr/live/" + "9" * STREAM_URL_MAX_BYTES
+        # 512B 초과도 거절 — 단말이 잘라 쓰지 않고 방송을 거절하기 때문
+        too_long = "https://x.co.kr/live/" + "9" * STREAM_URL_MAX_BYTES
         with pytest.raises(ApiError):
             MqttPublisher.live_start_payload(job_id=1, stream_url=too_long)
 
@@ -316,7 +318,7 @@ class TestPublisher:
                 autoplay=True,
             ),
             MqttPublisher.file_stop_payload(job_id=7),
-            MqttPublisher.live_start_payload(job_id=7, stream_url="http://x/live/00000001/7"),
+            MqttPublisher.live_start_payload(job_id=7, stream_url="https://x/live/00000001/7"),
             MqttPublisher.live_stop_payload(job_id=7),
         ]
         for p in payloads:

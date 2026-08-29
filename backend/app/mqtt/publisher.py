@@ -197,21 +197,23 @@ class MqttPublisher:
         제약 두 가지를 여기서 지킨다:
           · 512 바이트 이하 — 단말 버퍼 크기다. 넘으면 단말이 잘라 쓰지 않고
             방송을 거절하므로, 조용히 실패하기 전에 서버에서 끊는다.
-          · http:// 만 — 단말 Icecast 클라이언트에 TLS 인증서 검증이 아직 없다.
-            https 는 TLS 전환 때 함께 지원된다. 그전에 https 로 보내면 접속이
-            실패하고 LIVE_READY status=2 로만 드러난다.
+          · https:// 만 — 단말 운영 빌드는 http 를 거절한다(2026-08-29 확인,
+            LIVE_READY ok=false code=BAD_FIELD). 통신 사양 §6.3 의 "TLS 전환 이후"
+            시점이 지났다. 평문으로 보내면 방송이 아예 시작되지 않는다.
+            포트는 붙이지 않는다 — 443 이라 생략이 정상이고, nginx 가 /live/ 를
+            Icecast 로 프록시한다.
         """
         if len(stream_url.encode("utf-8")) > STREAM_URL_MAX_BYTES:
             raise ApiError(
                 f"stream_url 이 단말 한계({STREAM_URL_MAX_BYTES}B)를 넘었습니다.",
                 code="STREAM_URL_TOO_LONG",
             )
-        if stream_url.startswith("https://"):
+        if not stream_url.startswith("https://"):
             # 지금 막지 않으면 현장에서 "LIVE_READY 는 오는데 소리가 안 난다"로만 보인다.
             raise ApiError(
-                "단말이 아직 https Icecast 접속을 지원하지 않습니다. "
-                "ICECAST_PUBLIC_BASE_URL 을 http 로 설정하세요 (TLS 전환 시 해제).",
-                code="STREAM_URL_TLS_UNSUPPORTED",
+                "단말은 https 스트림만 받습니다. "
+                "ICECAST_PUBLIC_BASE_URL 을 https://<도메인> 으로 설정하세요(포트 없이).",
+                code="STREAM_URL_MUST_BE_HTTPS",
             )
         return {
             "type": "LIVE_START",
