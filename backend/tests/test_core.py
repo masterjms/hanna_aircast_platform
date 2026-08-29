@@ -300,6 +300,31 @@ class TestPublisher:
             f"유예 {grace}s 는 source-timeout {source_timeout}s 보다 작아야 한다"
         )
 
+    def test_live_ready_accepts_both_result_formats(self):
+        """LIVE_READY 성공 판정은 두 형식을 모두 받아야 한다.
+
+            옛  {"status": 0, "reason": 0}
+            새  {"ok": true,  "code": "..."}
+
+        새 형식만 오는데 status 로만 판정하면 필드가 없어 항상 실패로 표시된다 —
+        소리는 정상인데 화면만 "실패"로 나오는 상태가 된다(2026-08-29 실제 발생).
+        """
+        from app.modules.broadcast.service import _live_ready_ok
+
+        # 옛 형식
+        assert _live_ready_ok({"status": 0, "reason": 0}) is True
+        assert _live_ready_ok({"status": 2, "reason": 1}) is False
+
+        # 새 형식
+        assert _live_ready_ok({"ok": True}) is True
+        assert _live_ready_ok({"ok": False, "code": "BAD_FIELD"}) is False
+
+        # 둘 다 있으면 새 형식이 우선
+        assert _live_ready_ok({"ok": True, "status": 2}) is True
+
+        # 판정 근거가 없으면 단정하지 않는다
+        assert _live_ready_ok({"job_id": 1}) is None
+
     def test_cmd_payloads_use_job_id_only(self):
         """CMD 의 job 식별자는 job_id 하나다 (통신 사양 2026-08-20 통일).
 

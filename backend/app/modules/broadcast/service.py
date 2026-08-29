@@ -159,11 +159,32 @@ async def _assert_no_overlap(db: AsyncSession, macs: list[str]) -> None:
         raise BroadcastOverlap(detail={"conflicts": conflicts})
 
 
+def _live_ready_ok(payload: dict) -> bool | None:
+    """LIVE_READY 성공 판정. 두 가지 형식을 모두 받는다.
+
+    펌웨어가 결과 표현을 바꿨다:
+        옛  {"status": 0, "reason": 0}          status 0 이면 준비 완료
+        새  {"ok": true,  "code": "..."}        불리언 + 사유 문자열
+
+    새 형식만 보고 status 로 판정하면 필드가 없어 None != 0 → **항상 실패**로
+    표시된다. 실제로 소리는 나오는데 화면만 "실패 1"로 나왔다(2026-08-29).
+    둘 다 받아 두면 펌웨어 버전이 섞여 있어도 화면이 맞는다.
+    """
+    if "ok" in payload:
+        return bool(payload["ok"])
+    if "status" in payload:
+        return payload["status"] == _LIVE_READY_OK
+    return None
+
+
 def _reason_text(result_type: str | None, payload: dict) -> str | None:
     """실패 사유 등 결과에 붙는 짧은 설명."""
     if result_type in TELEMETRY_RESULTS:
         return None
-    return str(payload.get("reason") or payload.get("fail_reason") or "") or None
+    # code 는 새 형식(문자열 사유), reason/fail_reason 은 옛 형식.
+    return str(
+        payload.get("code") or payload.get("reason") or payload.get("fail_reason") or ""
+    ) or None
 
 
 def _stats_text(payload: dict) -> str | None:
@@ -259,7 +280,7 @@ async def _to_out(
             # verify_ok 가 있으면 그 값을 믿는다(sha256 검증 결과).
             ok = bool(payload.get("verify_ok", True))
         elif de.result_type == "LIVE_READY":
-            ok = payload.get("status") == _LIVE_READY_OK
+            ok = _live_ready_ok(payload)
         elif de.result_type in _FAILURE_RESULTS:
             ok = False
 
