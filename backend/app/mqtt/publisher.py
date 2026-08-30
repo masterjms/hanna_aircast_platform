@@ -184,6 +184,7 @@ class MqttPublisher:
         *,
         job_id: int,
         stream_url: str,
+        record_flash: bool = True,
         ready_timeout_sec: int = 30,
     ) -> dict[str, object]:
         """LIVE_START.
@@ -222,7 +223,10 @@ class MqttPublisher:
             "codec": "opus",
             "frame_ms": 40,
             "sample_rate": 16000,
-            "record_flash": 0,
+            # 기본 1(저장). 단말은 이 값을 그대로 따르고 길이를 재서 뒤집지 않는다.
+            # 사양 §11.2: 10분을 넘길 방송은 서버가 0으로 보내야 한다 — 길이를
+            # 아는 쪽이 서버뿐이라서다. 화면에서 끌 수 있다.
+            "record_flash": 1 if record_flash else 0,
             "ready_timeout_sec": ready_timeout_sec,
         }
 

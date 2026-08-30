@@ -119,16 +119,18 @@ iotradio/device/<mac_nocolon>/config      (마을 배정, village_id)
 URL 형식:
 
 ```text
-http://<icecast_host>:<icecast_port>/live/<job_id>
+https://<host>/live/<job_id>
 ```
 
 예:
 
 ```text
-http://192.168.0.5:8000/live/9
+https://hanna-aircast.co.kr/live/9
 ```
 
-TLS 전환 후에는 `https://<도메인>/live/9` 형태가 되지만, **단말 Icecast 클라이언트의 TLS 지원이 아직 없어 그때까지는 `http://`로 발행해야 한다**(SERVER_COMM §6.3).
+**단말 Icecast 클라이언트에도 인증서 검증이 붙어 있다.** MQTT·파일 다운로드와 같은 커스텀 번들을 쓰므로 인증서 요건도 같다(SERVER_COMM §6.3).
+
+**운영 TLS 빌드는 `http://` URL을 거절한다**(2026-08-27 반영). 평문은 TLS를 끈 사내 시험 빌드에서만 쓰고, 그때 URL은 `http://<사설IP>:8000/live/<job_id>` 형태다.
 
 LIVE_START 예:
 

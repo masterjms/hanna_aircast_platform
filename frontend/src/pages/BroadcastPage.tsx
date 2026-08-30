@@ -164,6 +164,8 @@ export function BroadcastPage() {
 
   // 진행 중인 실시간 방송의 event id. 마이크는 이 세션에 물린다.
   const [liveId, setLiveId] = useState<number | null>(null);
+  // 단말 flash 녹음. 기본 켬 — 10분을 넘길 긴 방송만 끄면 된다(사양 §11.2).
+  const [recordFlash, setRecordFlash] = useState(true);
   const mic = useMicUplink();
   /**
    * 실시간 방송을 시작한 시각(ms). 아래 감시 효과가 "이 시각 이후에 받은
@@ -250,6 +252,7 @@ export function BroadcastPage() {
       const b = await api.broadcast.liveStart({
         target_scope: scope,
         target_ids: targetIds(),
+        record_flash: recordFlash,
       });
       // 아래 감시 효과가 오판하지 않도록 시작 시각을 먼저 찍는다.
       liveStartedAt.current = Date.now();
@@ -510,6 +513,18 @@ export function BroadcastPage() {
                   </div>
                 )}
 
+                <label className="check-list__item" style={{ marginBottom: 8 }}>
+                  <input
+                    type="checkbox"
+                    checked={recordFlash}
+                    onChange={(e) => setRecordFlash(e.target.checked)}
+                    disabled={liveId !== null}
+                  />
+                  단말에 녹음 저장
+                  <span className="dim" style={{ fontSize: 12 }}>
+                    (10분 넘길 방송은 끄세요)
+                  </span>
+                </label>
                 <button
                   type="button"
                   className="btn btn--primary btn--block"

@@ -25,6 +25,8 @@ class FileBroadcastRequest(BaseModel):
 class LiveBroadcastRequest(BaseModel):
     target_scope: TargetScope
     target_ids: list[str] = Field(default_factory=list, max_length=200)
+    #: 단말 flash 에 방송을 녹음할지. 10분을 넘길 방송은 꺼야 한다(사양 §11.2).
+    record_flash: bool = True
 
 
 class BroadcastStopRequest(BaseModel):

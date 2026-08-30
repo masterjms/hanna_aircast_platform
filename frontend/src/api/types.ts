@@ -284,6 +284,8 @@ export interface BroadcastDetail {
 export interface LiveBroadcastRequest {
   target_scope: TargetScope;
   target_ids: string[];
+  /** 단말 flash 녹음 여부. 10분을 넘길 방송은 꺼야 한다(통신 사양 §11.2). */
+  record_flash: boolean;
 }
 
 /** 겹침(409) 시 error.detail 에 담겨 오는 모양. */
