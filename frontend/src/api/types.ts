@@ -101,6 +101,29 @@ export interface Device {
   ip: string | null;
   /** 단말별 MQTT 계정 발행 여부. false = 「미등록*」(계정 미발행 — 발행 필요) */
   has_credential: boolean;
+  /** 등록(QR 스캔) 시점의 하드웨어 식별값 — 출하 당시 값, 실행 중 버전과 별개 */
+  p4_model: string | null;
+  p4_version: string | null;
+  c6_model: string | null;
+  c6_version: string | null;
+}
+
+/** 신규 단말 등록용 사전 발급 비밀번호 — 등록 요청의 mqtt_password 로 되돌려 보내야 확정 */
+export interface NewDevicePassword {
+  password: string;
+}
+
+/** 신규 단말 등록 요청 (QR 스캔 5필드 + 사전 발급 비밀번호) */
+export interface DeviceCreateRequest {
+  mac: string;
+  label?: string | null;
+  village_id?: number | null;
+  zone_id?: number | null;
+  p4_model?: string | null;
+  p4_version?: string | null;
+  c6_model?: string | null;
+  c6_version?: string | null;
+  mqtt_password?: string | null;
 }
 
 export interface DeviceDetail extends Device {

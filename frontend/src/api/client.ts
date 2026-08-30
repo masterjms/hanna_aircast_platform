@@ -16,8 +16,10 @@ import type {
   BroadcastDetail,
   DashboardSummary,
   Device,
+  DeviceCreateRequest,
   DeviceCredential,
   DeviceDetail,
+  NewDevicePassword,
   DeviceStatusFilter,
   FileBroadcastRequest,
   LiveBroadcastRequest,
@@ -229,6 +231,12 @@ export const api = {
       q?: string;
     } = {}) => request<Device[]>(`/api/devices${query(filters)}`),
     unassigned: () => request<Device[]>('/api/devices/unassigned'),
+    /** 신규 단말 등록 (QR 스캔/수동) */
+    create: (body: DeviceCreateRequest) =>
+      request<Device>('/api/devices', { method: 'POST', body: JSON.stringify(body) }),
+    /** 등록 전 비밀번호 사전 발급 — 등록 요청의 mqtt_password 로 되돌려 보내야 확정 */
+    newPassword: () =>
+      request<NewDevicePassword>('/api/devices/credential', { method: 'POST' }),
     get: (mac: string) => request<DeviceDetail>(`/api/devices/${mac}`),
     update: (
       mac: string,

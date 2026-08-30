@@ -1,0 +1,520 @@
+/**
+ * 신규 단말 등록 — 서버가 MAC 을 모르는 단말을 처음 넣는 화면.
+ *
+ * 흐름 (생산 사양 §3.2, 등록 흐름 사양 §B):
+ *   모달 열림 → 비밀번호 사전 발급 → QR 스캔(또는 직접 쓰기) → [등록]
+ *   → 시리얼 주입(USB 또는 복사) → (옵션) 재부팅 테스트 → 테스트 방송
+ *
+ * 스캔 모드는 입력칸 하나로 받는다(생산 사양 §3.2.1 B 권장) — HID 스캐너가
+ * 키보드처럼 문자열을 치고 Enter(기본 접미사)로 끝낸다. 붙여넣기도 같은 칸.
+ * QR 은 `|` 구분 — 앞 5개만 해석하고 뒤는 무시한다(항목이 늘어도 안 깨지게).
+ */
+
+import { useEffect, useRef, useState } from 'react';
+
+import { api } from '../api/client';
+import { Modal } from './Modal';
+import type { AudioFile } from '../api/types';
+
+/* Web Serial 은 Chrome/Edge 전용이라 표준 DOM 타입에 없다 — 최소한만 선언 */
+interface SerialPortLike {
+  open(options: { baudRate: number }): Promise<void>;
+  close(): Promise<void>;
+  readable: ReadableStream<Uint8Array> | null;
+  writable: WritableStream<Uint8Array> | null;
+}
+
+function webSerial(): { requestPort(): Promise<SerialPortLike> } | null {
+  return (navigator as unknown as { serial?: { requestPort(): Promise<SerialPortLike> } })
+    .serial ?? null;
+}
+
+const MAC_RE = /^[0-9a-fA-F]{12}$/;
+
+/** QR 문자열 → 5필드. 앞 5개만 해석, 뒤는 무시(생산 사양 §3.2.2). */
+function parseScan(raw: string): {
+  mac: string;
+  p4Model: string;
+  p4Version: string;
+  c6Model: string;
+  c6Version: string;
+  warning: string | null;
+} | null {
+  const parts = raw
+    .trim()
+    .split('|')
+    .map((s) => s.trim());
+  const mac = (parts[0] ?? '').replace(/[:-]/g, '').toLowerCase();
+  if (!MAC_RE.test(mac)) return null;
+  return {
+    mac,
+    p4Model: parts[1] ?? '',
+    p4Version: parts[2] ?? '',
+    c6Model: parts[3] ?? '',
+    c6Version: parts[4] ?? '',
+    warning:
+      parts.length < 5
+        ? `항목이 ${parts.length}개입니다 (기준 5개) — 스캔이 잘렸거나 구형 펌웨어일 수 있습니다.`
+        : null,
+  };
+}
+
+/** 시리얼 주입 명령. 줄 끝은 LF — 파서가 @MQTTPW 값의 공백류를 다듬지 않으므로
+ *  CRLF 로 보내면 \r 이 비밀번호에 붙을 수 있다(생산 사양 §4.4 값 안의 공백). */
+function serialCommands(mac: string, password: string): string {
+  return `@MQTTID=${mac}\n@MQTTPW=${password}\n@END\n`;
+}
+
+/** 응답을 잠깐 읽는다 — @END 나 @RESULT 가 오거나 타임아웃까지. */
+async function readResponse(port: SerialPortLike, timeoutMs: number): Promise<string> {
+  if (!port.readable) return '';
+  const reader = port.readable.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  const deadline = Date.now() + timeoutMs;
+  try {
+    while (Date.now() < deadline) {
+      const remain = deadline - Date.now();
+      const chunk = await Promise.race([
+        reader.read(),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), remain)),
+      ]);
+      if (chunk === null) break; // 타임아웃
+      if (chunk.done) break;
+      buf += decoder.decode(chunk.value, { stream: true });
+      if (/@END/.test(buf) || /@RESULT=/.test(buf)) {
+        // 결과 줄 뒤 꼬리까지 잠깐 더 받는다
+        await new Promise((r) => setTimeout(r, 150));
+        break;
+      }
+    }
+  } finally {
+    // cancel 을 해야 다음 getReader() 가 잠기지 않는다
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+  return buf;
+}
+
+async function writeSerial(port: SerialPortLike, text: string): Promise<void> {
+  if (!port.writable) throw new Error('포트에 쓸 수 없습니다.');
+  const writer = port.writable.getWriter();
+  try {
+    await writer.write(new TextEncoder().encode(text));
+  } finally {
+    writer.releaseLock();
+  }
+}
+
+type TestPhase = 'idle' | 'waiting' | 'connected' | 'timeout';
+
+export function RegisterDeviceDialog({
+  onClose,
+  onRegistered,
+}: {
+  onClose: () => void;
+  onRegistered: () => void;
+}) {
+  const [mode, setMode] = useState<'scan' | 'manual'>('scan');
+  const [password, setPassword] = useState<string | null>(null);
+  const [pwError, setPwError] = useState<string | null>(null);
+
+  const [mac, setMac] = useState('');
+  const [p4Model, setP4Model] = useState('');
+  const [p4Version, setP4Version] = useState('');
+  const [c6Model, setC6Model] = useState('');
+  const [c6Version, setC6Version] = useState('');
+  const [scanned, setScanned] = useState(false);
+  const [scanWarning, setScanWarning] = useState<string | null>(null);
+
+  const [registering, setRegistering] = useState(false);
+  const [registered, setRegistered] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const portRef = useRef<SerialPortLike | null>(null);
+  const [injectMsg, setInjectMsg] = useState<string | null>(null);
+  const [injected, setInjected] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const [testPhase, setTestPhase] = useState<TestPhase>('idle');
+  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const testStartRef = useRef<number>(0);
+  const [files, setFiles] = useState<AudioFile[]>([]);
+  const [fileId, setFileId] = useState<number | ''>('');
+  const [broadcastMsg, setBroadcastMsg] = useState<string | null>(null);
+
+  const scanInputRef = useRef<HTMLInputElement>(null);
+
+  // 비밀번호는 모달을 여는 시점에 서버에서 사전 발급받는다(사용자가 못 정한다 —
+  // 스캔/수동 모드 공통. 시스템 난수, 사양 문자 집합 8자).
+  const fetchPassword = async () => {
+    setPwError(null);
+    try {
+      setPassword((await api.devices.newPassword()).password);
+    } catch (e) {
+      setPwError(e instanceof Error ? e.message : '비밀번호 발급에 실패했습니다.');
+    }
+  };
+  useEffect(() => {
+    void fetchPassword();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 스캔 모드에서는 스캐너 입력칸에 포커스를 붙잡아 둔다.
+  useEffect(() => {
+    if (mode === 'scan' && !scanned) scanInputRef.current?.focus();
+  }, [mode, scanned]);
+
+  // 모달이 닫힐 때 포트를 정리한다.
+  useEffect(
+    () => () => {
+      void portRef.current?.close().catch(() => undefined);
+    },
+    [],
+  );
+
+  const applyScan = (raw: string) => {
+    const parsed = parseScan(raw);
+    if (!parsed) {
+      setScanWarning('MAC(12자리 hex)을 읽지 못했습니다 — 다시 스캔해 주세요.');
+      if (scanInputRef.current) scanInputRef.current.value = '';
+      return;
+    }
+    setMac(parsed.mac);
+    setP4Model(parsed.p4Model);
+    setP4Version(parsed.p4Version);
+    setC6Model(parsed.c6Model);
+    setC6Version(parsed.c6Version);
+    setScanned(true);
+    setScanWarning(parsed.warning);
+  };
+
+  const macNormalized = mac.replace(/[:-]/g, '').toLowerCase();
+  const macValid = MAC_RE.test(macNormalized);
+  const canRegister =
+    !registered && !registering && macValid && password !== null && (mode === 'manual' || scanned);
+
+  const register = async () => {
+    if (!password) return;
+    setRegistering(true);
+    setError(null);
+    try {
+      await api.devices.create({
+        mac: macNormalized,
+        p4_model: p4Model.trim() || null,
+        p4_version: p4Version.trim() || null,
+        c6_model: c6Model.trim() || null,
+        c6_version: c6Version.trim() || null,
+        mqtt_password: password,
+      });
+      setRegistered(true);
+      onRegistered();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : '등록에 실패했습니다.';
+      setError(
+        msg.includes('이미') || msg.toUpperCase().includes('EXISTS')
+          ? '이미 등록된 단말입니다 — 목록의 [계정] 버튼으로 기존 계정을 확인하세요.'
+          : msg,
+      );
+    } finally {
+      setRegistering(false);
+    }
+  };
+
+  const injectUsb = async () => {
+    if (!password) return;
+    const serial = webSerial();
+    if (!serial) {
+      setInjectMsg('이 브라우저는 Web Serial 을 지원하지 않습니다 — Chrome/Edge 를 쓰거나 [시리얼 명령 복사]로 넣어 주세요.');
+      return;
+    }
+    setInjectMsg('전송 중…');
+    try {
+      if (!portRef.current) {
+        const port = await serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        portRef.current = port;
+      }
+      await writeSerial(portRef.current, serialCommands(macNormalized, password));
+      const resp = await readResponse(portRef.current, 3000);
+      if (/@RESULT=OK/.test(resp) || /@MQTTPW=SET/.test(resp)) {
+        setInjected(true);
+        setInjectMsg('전송 완료 ✓ — 단말이 @RESULT=OK 로 응답했습니다.');
+      } else if (/@RESULT=FAIL/.test(resp)) {
+        setInjectMsg('단말이 @RESULT=FAIL 로 거절했습니다 — 값을 확인하고 다시 시도하세요.');
+      } else {
+        // 응답이 안 잡혀도 전송 자체는 됐을 수 있다 — 확인 방법을 안내하고 다음 단계는 열어 둔다.
+        setInjected(true);
+        setInjectMsg('전송했지만 응답을 읽지 못했습니다 — 단말 화면 또는 @GET 으로 확인하세요.');
+      }
+    } catch (e) {
+      setInjectMsg(
+        e instanceof Error && e.name === 'NotFoundError'
+          ? '포트 선택이 취소됐습니다.'
+          : `전송 실패: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  };
+
+  const copyCommands = async () => {
+    if (!password) return;
+    try {
+      await navigator.clipboard.writeText(serialCommands(macNormalized, password).trimEnd());
+      setCopied(true);
+      setInjected(true); // 수동 붙여넣기 경로 — 작업자가 터미널로 넣는다
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* 클립보드 권한이 없으면 사용자가 직접 드래그해 복사한다 */
+    }
+  };
+
+  // 테스트: @OFF 재부팅 → 재부팅 후 첫 STATUS(=last_seen_at 갱신)를 기다린다.
+  const startTest = async () => {
+    setTestMsg(null);
+    setBroadcastMsg(null);
+    if (portRef.current) {
+      try {
+        await writeSerial(portRef.current, '@OFF\n@END\n');
+        setTestMsg('재부팅 명령(@OFF)을 보냈습니다 — 서버 연결을 기다립니다 (보통 10초 안팎)…');
+        // 재부팅되면 포트가 죽는다 — 정리해 둔다.
+        await portRef.current.close().catch(() => undefined);
+        portRef.current = null;
+      } catch {
+        setTestMsg('재부팅 명령 전송에 실패했습니다 — 단말 전원을 껐다 켜 주세요. 연결을 기다립니다…');
+      }
+    } else {
+      setTestMsg('USB 연결이 없어 재부팅 명령을 못 보냈습니다 — 단말 전원을 껐다 켜 주세요. 연결을 기다립니다…');
+    }
+    testStartRef.current = Date.now();
+    setTestPhase('waiting');
+  };
+
+  // 연결 대기 폴링 — 30초 시한(등록 흐름 요구). 시한이 지나면 계속 대기/종료 선택.
+  useEffect(() => {
+    if (testPhase !== 'waiting') return;
+    const timer = setInterval(async () => {
+      if (Date.now() - testStartRef.current > 30_000) {
+        setTestPhase('timeout');
+        return;
+      }
+      try {
+        const d = await api.devices.get(macNormalized);
+        if (d.last_seen_at && new Date(d.last_seen_at).getTime() >= testStartRef.current) {
+          setTestPhase('connected');
+          setTestMsg('서버 연결 확인 ✓ — 발행한 계정으로 브로커에 붙었습니다.');
+          api.files
+            .list()
+            .then((f) => {
+              setFiles(f);
+              if (f.length > 0) setFileId(f[0].id);
+            })
+            .catch(() => setFiles([]));
+        }
+      } catch {
+        /* 일시적 조회 실패는 다음 주기에 재시도 */
+      }
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [testPhase, macNormalized]);
+
+  // 테스트 방송 — 단말별 topic 1대에만, store_flash:0 (등록 흐름 사양 §B3.
+  // all/cmd 로 보내면 현장 전 단말이 울린다 — 반드시 device 대상).
+  const sendTestBroadcast = async () => {
+    if (fileId === '') return;
+    setBroadcastMsg('전송 중…');
+    try {
+      await api.broadcast.fileStart({
+        file_id: fileId,
+        target_scope: 'device',
+        target_ids: [macNormalized],
+        store_flash: false,
+        autoplay: true,
+      });
+      setBroadcastMsg('테스트 방송을 보냈습니다 — 소리가 나는지 귀로 확인하세요. (flash 에 저장되지 않습니다)');
+    } catch (e) {
+      setBroadcastMsg(`테스트 방송 실패: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const fieldRow = (
+    label: string,
+    value: string,
+    setter: (v: string) => void,
+    placeholder = '',
+  ) => (
+    <div className="field">
+      <label>{label}</label>
+      <input
+        className="mono"
+        value={value}
+        readOnly={mode === 'scan' || registered}
+        placeholder={mode === 'scan' ? '스캔하면 채워집니다' : placeholder}
+        onChange={(e) => setter(e.target.value)}
+      />
+    </div>
+  );
+
+  return (
+    <Modal
+      title="신규 단말 등록"
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn btn--ghost" onClick={onClose}>
+            닫기
+          </button>
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={register}
+            disabled={!canRegister}
+          >
+            {registered ? '등록됨 ✓' : registering ? '등록 중…' : '등록'}
+          </button>
+        </>
+      }
+    >
+      {/* ── 1. 단말 정보 (스캔 / 직접 쓰기) ── */}
+      {mode === 'scan' && !registered && (
+        <div className="field">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span className="strong">{scanned ? '스캔 완료 ✓ — 다시 스캔하면 덮어씁니다' : '스캔을 해주세요.'}</span>
+            <button type="button" className="btn btn--sm" onClick={() => setMode('manual')}>
+              직접 쓰기
+            </button>
+          </div>
+          <input
+            ref={scanInputRef}
+            className="mono"
+            placeholder="여기에 포커스를 두고 QR/바코드를 스캔 (붙여넣기도 가능)"
+            onKeyDown={(e) => {
+              // HID 스캐너는 문자열 끝에 Enter(기본 접미사)를 보낸다.
+              if (e.key === 'Enter') {
+                applyScan((e.target as HTMLInputElement).value);
+                (e.target as HTMLInputElement).value = '';
+              }
+            }}
+            style={{ marginTop: 8 }}
+          />
+        </div>
+      )}
+      {mode === 'manual' && !registered && (
+        <p className="hint" style={{ marginTop: 0 }}>
+          직접 입력 모드 — MAC 만 필수이고 모델/버전은 비워도 됩니다.{' '}
+          <button type="button" className="btn btn--sm" onClick={() => setMode('scan')}>
+            스캔 모드로
+          </button>
+        </p>
+      )}
+      {scanWarning && <p className="hint hint--warn">{scanWarning}</p>}
+
+      {fieldRow('MAC (콜론 없이 12자리)', mac, setMac, '58e6c5f2cc74')}
+      {mac && !macValid && <p className="hint hint--warn">MAC 은 hex 12자리여야 합니다.</p>}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
+        {fieldRow('P4 모델 번호', p4Model, setP4Model, 'IOT-1000')}
+        {fieldRow('P4 모델 버전', p4Version, setP4Version, 'V.260823-1')}
+        {fieldRow('C6 모델 번호', c6Model, setC6Model, 'IOT-1000C6')}
+        {fieldRow('C6 모델 버전', c6Version, setC6Version, 'V.260823-1')}
+      </div>
+
+      {/* ── 2. 계정 (시스템 난수 — 사용자가 못 정한다) ── */}
+      <div className="field">
+        <label>MQTT 비밀번호 (자동 생성)</label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input className="mono" readOnly value={password ?? '발급 중…'} />
+          {!registered && (
+            <button type="button" className="btn btn--sm" onClick={fetchPassword} title="새 난수로 다시 발급">
+              재생성
+            </button>
+          )}
+        </div>
+      </div>
+      {pwError && <p className="hint hint--warn">{pwError}</p>}
+      {error && <p className="hint hint--warn">{error}</p>}
+
+      {/* ── 3. 시리얼 주입 — 등록 뒤에만 (등록 전에 넣고 재부팅하면 인증 실패) ── */}
+      {registered && (
+        <>
+          <hr style={{ margin: '14px 0', opacity: 0.2 }} />
+          <p className="strong" style={{ margin: '0 0 8px' }}>
+            단말에 계정 넣기
+          </p>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <button type="button" className="btn" onClick={injectUsb}>
+              USB로 단말에 넣기 (COM)
+            </button>
+            <button type="button" className="btn" onClick={copyCommands}>
+              {copied ? '복사됨 ✓' : '시리얼 명령 복사 (@END 포함)'}
+            </button>
+          </div>
+          {injectMsg && <p className="hint">{injectMsg}</p>}
+
+          {/* ── 4. 테스트 (옵션) — 주입 후에만 ── */}
+          <hr style={{ margin: '14px 0', opacity: 0.2 }} />
+          <p className="strong" style={{ margin: '0 0 8px' }}>
+            테스트 (옵션)
+          </p>
+          {testPhase === 'idle' && (
+            <button type="button" className="btn" onClick={startTest} disabled={!injected}>
+              테스트 시작 (재부팅 → 연결 확인)
+            </button>
+          )}
+          {!injected && testPhase === 'idle' && (
+            <p className="hint">먼저 계정을 단말에 넣어야 테스트할 수 있습니다.</p>
+          )}
+          {testPhase === 'waiting' && <p className="hint">⏳ {testMsg}</p>}
+          {testPhase === 'timeout' && (
+            <>
+              <p className="hint hint--warn">
+                30초 안에 연결이 확인되지 않았습니다 — 전원·Wi-Fi 설정을 확인하세요.
+              </p>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={() => {
+                    testStartRef.current = Date.now() - 1; // 이미 붙었으면 다음 폴링에 잡힌다
+                    setTestPhase('waiting');
+                  }}
+                >
+                  연결 계속 대기
+                </button>
+                <button type="button" className="btn btn--sm" onClick={() => setTestPhase('idle')}>
+                  테스트 종료
+                </button>
+              </div>
+            </>
+          )}
+          {testPhase === 'connected' && (
+            <>
+              <p className="hint" style={{ color: 'var(--ok-text)' }}>
+                {testMsg}
+              </p>
+              {files.length > 0 ? (
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <select
+                    value={fileId}
+                    onChange={(e) => setFileId(e.target.value === '' ? '' : Number(e.target.value))}
+                    aria-label="테스트 음원"
+                  >
+                    {files.map((f) => (
+                      <option key={f.id} value={f.id}>
+                        {f.filename}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn btn--sm" onClick={sendTestBroadcast}>
+                    테스트 방송 (이 단말만)
+                  </button>
+                </div>
+              ) : (
+                <p className="hint">테스트 방송을 하려면 파일 관리에서 음원을 먼저 올려 두세요.</p>
+              )}
+              {broadcastMsg && <p className="hint">{broadcastMsg}</p>}
+            </>
+          )}
+        </>
+      )}
+    </Modal>
+  );
+}

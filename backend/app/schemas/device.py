@@ -14,18 +14,40 @@ DeviceStatusFilter = Literal["online", "offline", "unassigned"]
 
 
 class DeviceCreate(BaseModel):
-    """사전 등록. 보통은 단말이 STATUS 를 보내면서 자동 등록되므로 잘 쓰지 않는다."""
+    """단말 등록 — 신규 단말 등록 화면(QR 스캔/수동)과 사전 등록이 쓴다.
+
+    p4/c6 모델·버전은 QR 5필드에서 오고, 수동 등록에서는 비워도 된다
+    (생산 사양 §3.2 — 강제 입력은 MAC 하나뿐).
+    """
 
     mac: str
     label: str | None = Field(default=None, max_length=100)
     village_id: int | None = None
     zone_id: int | None = None
+    p4_model: str | None = Field(default=None, max_length=50)
+    p4_version: str | None = Field(default=None, max_length=50)
+    c6_model: str | None = Field(default=None, max_length=50)
+    c6_version: str | None = Field(default=None, max_length=50)
+    #: 등록 화면이 모달을 열 때 미리 발급받은 비밀번호(POST /api/devices/credential)를
+    #: 그대로 저장하려고 넘긴다 — 시리얼로 이미 단말에 넣은 값과 DB 가 어긋나면
+    #: 안 되기 때문. 비우면 서버가 새로 생성한다.
+    mqtt_password: str | None = Field(default=None, min_length=1, max_length=16)
 
     @field_validator("mac")
     @classmethod
     def _normalize_mac(cls, v: str) -> str:
         # 58:E6:C5:F2:CC:74 로 입력해도 58e6c5f2cc74 로 저장된다.
         return normalize_mac(v)
+
+    @field_validator("mqtt_password")
+    @classmethod
+    def _password_charset(cls, v: str | None) -> str | None:
+        """사양 §1 문자 집합 밖의 문자를 거른다 — `@` 가 섞이면 시리얼 전송이 잘린다."""
+        from app.core.mqtt_accounts import PASSWORD_CHARSET
+
+        if v is not None and any(c not in PASSWORD_CHARSET for c in v):
+            raise ValueError("비밀번호에 허용되지 않는 문자가 있습니다 (사양 문자 집합 밖).")
+        return v
 
 
 class DeviceUpdate(BaseModel):
@@ -51,6 +73,11 @@ class DeviceOut(ApiModel):
     zone_id: int | None
     zone_name: str | None = None
     firmware_version: str | None
+    #: 등록(QR 스캔) 시점의 하드웨어 식별값. 출하 당시 값 — 실행 중 버전과 별개.
+    p4_model: str | None = None
+    p4_version: str | None = None
+    c6_model: str | None = None
+    c6_version: str | None = None
     last_seen_at: dt.datetime | None
     registered_at: dt.datetime
 
@@ -87,6 +114,10 @@ class DeviceOut(ApiModel):
             zone_id=device.zone_id,
             zone_name=zone_name,
             firmware_version=device.firmware_version,
+            p4_model=device.p4_model,
+            p4_version=device.p4_version,
+            c6_model=device.c6_model,
+            c6_version=device.c6_version,
             last_seen_at=device.last_seen_at,
             registered_at=device.registered_at,
             online=online,
@@ -103,6 +134,16 @@ class DeviceDetail(DeviceOut):
     """상세 모달용. 최근 STATUS payload 원본을 그대로 붙인다."""
 
     last_status: dict[str, Any] | None = None
+
+
+class NewDevicePasswordOut(ApiModel):
+    """신규 단말 등록 모달이 열릴 때 미리 발급받는 비밀번호.
+
+    서버가 아직 MAC 을 모르는 시점이라 계정이 아니라 값만 준다. 등록(POST
+    /api/devices)에 mqtt_password 로 되돌려 보내야 DB 에 확정된다.
+    """
+
+    password: str
 
 
 class DeviceCredentialIssue(BaseModel):

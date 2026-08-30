@@ -38,6 +38,14 @@ class Device(Base):
 
     firmware_version: Mapped[str | None] = mapped_column(String(50))
 
+    #: 등록(QR 스캔) 시점의 하드웨어 식별값 — QR 5필드 중 MAC 뒤 4개
+    #: (생산 사양 §3.2). 출하 당시 값이라 이후 OTA 로 바뀌는 실행 중 버전
+    #: (STATUS 의 p4_fw/c6_fw)과는 별개다. 수동 등록에서는 비워도 된다.
+    p4_model: Mapped[str | None] = mapped_column(String(50))
+    p4_version: Mapped[str | None] = mapped_column(String(50))
+    c6_model: Mapped[str | None] = mapped_column(String(50))
+    c6_version: Mapped[str | None] = mapped_column(String(50))
+
     #: 단말별 MQTT 계정 비밀번호 (username 은 MAC 그 자체라 열이 없다).
     #: 평문 보관이 맞다 — 등록 화면에 보여줘서 시리얼로 단말에 넣어야 하는 값이다
     #: (사양 §2.1). 브로커 쪽은 해시로 저장되므로 브로커가 뚫려도 평문이 안 나온다.

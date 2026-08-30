@@ -268,7 +268,12 @@ async def create_device(db: AsyncSession, payload: DeviceCreate, scope: VillageS
     await _validate_assignment(db, payload.village_id, payload.zone_id, scope)
 
     # 등록 = DB 기록 + 브로커 계정 발행, 한 묶음이다(레지스트리 사양 §3.6).
-    device = Device(**payload.model_dump(), mqtt_password=mqtt_accounts.generate_device_password())
+    # 등록 화면이 모달을 열며 미리 발급받은 비밀번호(이미 시리얼로 단말에 넣었을 수
+    # 있는 값)를 보내오면 그대로 쓰고, 없으면 여기서 생성한다.
+    data = payload.model_dump()
+    if not data.get("mqtt_password"):
+        data["mqtt_password"] = mqtt_accounts.generate_device_password()
+    device = Device(**data)
     db.add(device)
     await db.flush()
     await export_broker_accounts(db)

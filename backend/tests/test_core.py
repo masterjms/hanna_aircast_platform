@@ -626,3 +626,21 @@ class TestMqttAccounts:
         assert _device_accounts_enforced() is True  # 전환 완료
         monkeypatch.setattr(settings, "mosquitto_passwd_export", None)
         assert _device_accounts_enforced() is False  # 개발·테스트
+
+    def test_device_create_rejects_bad_password_chars(self):
+        """등록 payload 의 사전 발급 비밀번호 — `@` 등 사양 밖 문자는 400."""
+        import pydantic
+
+        from app.schemas.device import DeviceCreate
+
+        ok = DeviceCreate(mac="58e6c5f2cc74", mqtt_password="aB3#x9._")
+        assert ok.mqtt_password == "aB3#x9._"
+        with pytest.raises(pydantic.ValidationError):
+            DeviceCreate(mac="58e6c5f2cc74", mqtt_password="aB3@x9._")
+        # 스캔 필드도 같이 실리는 형태
+        d = DeviceCreate(
+            mac="58e6c5f55230",
+            p4_model="IOT-1000", p4_version="V.260823-1",
+            c6_model="IOT-1000C6", c6_version="V.260823-1",
+        )
+        assert d.p4_model == "IOT-1000" and d.mqtt_password is None

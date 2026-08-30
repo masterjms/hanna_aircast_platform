@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 
 import { api } from '../api/client';
 import { Modal } from '../components/Modal';
+import { RegisterDeviceDialog } from '../components/RegisterDeviceDialog';
 import type { Device, DeviceCredential, DeviceStatusFilter, Village, Zone } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
@@ -207,7 +208,7 @@ function CredentialDialog({ device, onClose }: { device: Device; onClose: () => 
     if (!cred) return;
     try {
       await navigator.clipboard.writeText(
-        `@MQTTID=${cred.username}\n@MQTTPW=${cred.password}`,
+        `@MQTTID=${cred.username}\n@MQTTPW=${cred.password}\n@END`,
       );
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -368,6 +369,7 @@ export function DevicesPage() {
   const [search, setSearch] = useState('');
   const [assigning, setAssigning] = useState<Device | null>(null);
   const [credentialFor, setCredentialFor] = useState<Device | null>(null);
+  const [registering, setRegistering] = useState(false);
 
   const villages = usePolling(() => api.villages.list(), 60_000);
 
@@ -424,6 +426,13 @@ export function DevicesPage() {
           {isSuperAdmin && <option value="unassigned">미배정</option>}
         </select>
 
+        {/* 서버가 MAC 을 모르는 단말을 처음 넣는 입구 — QR 스캔/수동 + 계정 발행 + 시리얼 주입 */}
+        {isSuperAdmin && (
+          <button type="button" className="btn btn--primary" onClick={() => setRegistering(true)}>
+            + 신규 단말 등록
+          </button>
+        )}
+
         <div className="filters__spacer" />
 
         <input
@@ -473,6 +482,20 @@ export function DevicesPage() {
             />
           </div>
         </section>
+      )}
+
+      {registering && (
+        <RegisterDeviceDialog
+          onClose={() => {
+            setRegistering(false);
+            devices.reload();
+            unassigned.reload();
+          }}
+          onRegistered={() => {
+            devices.reload();
+            unassigned.reload();
+          }}
+        />
       )}
 
       {credentialFor && (

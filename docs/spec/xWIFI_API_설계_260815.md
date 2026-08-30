@@ -21,7 +21,8 @@ GET  /api/auth/me          -> {username, role, villages: [...]}
 GET    /api/devices                 목록 (역할 범위로 자동 필터)
 GET    /api/devices/unassigned      미배정 단말(village_id NULL) 목록
 GET    /api/devices/:mac            상세 (last_status 포함)
-POST   /api/devices                 등록 {mac, label, village_id, zone_id}
+POST   /api/devices                 등록 {mac, label, village_id, zone_id, p4/c6 모델·버전, mqtt_password}
+POST   /api/devices/credential      신규 등록용 비밀번호 사전 발급 (super_admin, DB 미기록)
 PATCH  /api/devices/:mac            수정/재배정
 DELETE /api/devices/:mac            삭제 (DB 행 + 브로커 계정을 한 묶음으로 제거)
 POST   /api/devices/:mac/credential 단말별 MQTT 계정 발행/조회 {reissue} (super_admin)

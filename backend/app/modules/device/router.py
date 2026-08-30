@@ -7,6 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 
 from app.core.deps import Db, Publisher, Scope, SuperAdmin
+from app.core import mqtt_accounts
 from app.modules.device import service
 from app.modules.system import service as system_service
 from app.mqtt.topics import normalize_mac
@@ -18,6 +19,7 @@ from app.schemas.device import (
     DeviceOut,
     DeviceStatusFilter,
     DeviceUpdate,
+    NewDevicePasswordOut,
 )
 
 router = APIRouter(prefix="/api/devices", tags=["device"])
@@ -57,6 +59,19 @@ async def list_unassigned(db: Db, _: SuperAdmin) -> list[DeviceOut]:
 @router.post("", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
 async def create_device(payload: DeviceCreate, db: Db, scope: Scope) -> DeviceOut:
     return await service.create_device(db, payload, scope)
+
+
+@router.post("/credential", response_model=NewDevicePasswordOut)
+async def new_device_password(_: SuperAdmin) -> NewDevicePasswordOut:
+    """신규 단말 등록용 비밀번호 사전 발급 (모달을 여는 시점에 호출).
+
+    서버가 아직 MAC 을 모르는 시점이라 값만 만들어 준다 — DB 에는 아무것도
+    안 남고, 등록(POST /api/devices)의 mqtt_password 로 돌아와야 확정된다.
+
+    ⚠ 라우트 순서 — /{mac}/credential 보다 위에 있어야 'credential' 이 MAC 으로
+    잡히지 않는다 (/unassigned 와 같은 이유).
+    """
+    return NewDevicePasswordOut(password=mqtt_accounts.generate_device_password())
 
 
 @router.post("/{mac}/credential", response_model=DeviceCredentialOut)
