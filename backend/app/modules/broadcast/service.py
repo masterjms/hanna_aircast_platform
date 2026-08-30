@@ -362,6 +362,36 @@ async def get_broadcast(
 
 
 # ── 파일 방송 ────────────────────────────────────────────────────────────
+#: 단말 파일 수신 상한 (사양 §11, 2026-08-30). 넘으면 단말이 FILE_META 단계에서
+#: 거절해 다운로드조차 시작되지 않는다. 현재 24kbps 기준 약 14분 33초 분량이다.
+FILE_MAX_BYTES = 2_621_440  # 2.5 MiB
+
+#: 방송 길이 약속 (사양 §11). 단말 재생 워치독이 10분 30초에서 끊으므로
+#: 이보다 긴 파일은 크기가 상한 안이어도 뒷부분이 나오지 않는다.
+FILE_MAX_DURATION_SEC = 600
+
+
+def _validate_file_for_broadcast(size_bytes: int, duration_sec: float | None) -> None:
+    """발행 전 파일 검사. 단말이 거절하거나 잘려 나갈 파일을 서버에서 먼저 끊는다.
+
+    여기서 안 막으면 현장에서는 "방송이 안 나간다" 또는 "10분에서 뚝 끊긴다"로만
+    보이고, 단말 로그를 열어야 원인이 나온다.
+    """
+    if size_bytes > FILE_MAX_BYTES:
+        raise ApiError(
+            f"파일이 단말 상한(2.5MB)을 넘습니다({size_bytes / 1048576:.1f}MB). "
+            "24kbps 로 다시 인코딩하거나 나눠서 올려 주세요.",
+            code="FILE_TOO_LARGE",
+        )
+    if duration_sec is not None and duration_sec > FILE_MAX_DURATION_SEC:
+        minutes = duration_sec / 60
+        raise ApiError(
+            f"방송은 10분을 넘길 수 없습니다(이 파일 {minutes:.1f}분). "
+            "단말이 10분 30초에서 재생을 끊어 뒷부분이 나가지 않습니다.",
+            code="FILE_TOO_LONG",
+        )
+
+
 async def start_file_broadcast(
     db: AsyncSession,
     payload: FileBroadcastRequest,
@@ -371,6 +401,9 @@ async def start_file_broadcast(
     user_id: int,
 ) -> BroadcastOut:
     audio = await file_service.get_file(db, payload.file_id)
+    _validate_file_for_broadcast(
+        audio.size_bytes, float(audio.duration_sec) if audio.duration_sec is not None else None
+    )
     if not file_service.absolute_path(audio).exists():
         raise ApiError(
             "파일 원본이 디스크에 없습니다. 다시 업로드해 주세요.",

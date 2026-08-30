@@ -380,6 +380,29 @@ class TestPublisher:
         # 구형식 fail_reason 도 여전히 읽는다
         assert _reason_text("FILE_END", {"fail_reason": "SHA256_FAIL"}) == "SHA256_FAIL"
 
+    def test_file_broadcast_size_and_duration_limits(self):
+        """FILE_START 발행 전에 단말 상한을 서버가 먼저 검사한다 (사양 §11).
+
+        크기 2.5MiB 초과는 단말이 다운로드 전에 거절하고, 10분 초과는 크기가
+        상한 안이어도 단말 워치독(10분 30초)이 재생을 끊는다. 어느 쪽이든
+        현장에서는 원인 없는 실패로만 보이므로 발행 전에 끊는다.
+        """
+        from app.modules.broadcast.service import (
+            FILE_MAX_BYTES,
+            FILE_MAX_DURATION_SEC,
+            _validate_file_for_broadcast,
+        )
+
+        # 정상: 상한 이내
+        _validate_file_for_broadcast(FILE_MAX_BYTES, float(FILE_MAX_DURATION_SEC))
+        # 길이를 모르는 파일(ffprobe 실패)은 크기만 본다
+        _validate_file_for_broadcast(1024, None)
+
+        with pytest.raises(ApiError):
+            _validate_file_for_broadcast(FILE_MAX_BYTES + 1, 60.0)
+        with pytest.raises(ApiError):
+            _validate_file_for_broadcast(1024, FILE_MAX_DURATION_SEC + 1.0)
+
     def test_cmd_payloads_use_job_id_only(self):
         """CMD 의 job 식별자는 job_id 하나다 (통신 사양 2026-08-20 통일).
 
