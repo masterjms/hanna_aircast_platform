@@ -209,8 +209,17 @@ function DeviceTable({
             {showVillage && <td>{d.village_name ?? '미배정'}</td>}
             <td>{d.zone_name ?? '—'}</td>
             <td>
-              <span className={`badge badge--${d.online ? 'ok' : 'danger'}`}>
-                {d.online ? (d.state ?? '온라인') : '오프라인'}
+              {/* RECONNECTING = 방송은 살아 있는데 스피커가 무음(사양 §5) — 경고색으로 */}
+              <span
+                className={`badge badge--${
+                  !d.online ? 'danger' : d.live === 'RECONNECTING' ? 'warn' : 'ok'
+                }`}
+              >
+                {!d.online
+                  ? '오프라인'
+                  : d.live === 'RECONNECTING'
+                    ? '무음(재접속)'
+                    : (d.state ?? '온라인')}
               </span>
             </td>
             <td className="num" style={{ color: TONE_VAR[signalTone(d.rssi)], fontWeight: 600 }}>

@@ -202,9 +202,19 @@ class TestPublisher:
         ok = MqttPublisher.live_start_payload(job_id=1, stream_url="https://x.co.kr/live/1")
         assert ok["stream_url"] == "https://x.co.kr/live/1"
 
-        # 평문은 거절
-        with pytest.raises(ApiError):
-            MqttPublisher.live_start_payload(job_id=1, stream_url="http://x.co.kr/live/1")
+        # 평문은 운영에서만 거절한다 — 사내 시험(목 단말)은 평문 Icecast 를 쓴다(§6.3)
+        from app.config import settings
+
+        original = settings.app_env
+        try:
+            settings.app_env = "prod"
+            with pytest.raises(ApiError):
+                MqttPublisher.live_start_payload(job_id=1, stream_url="http://x.co.kr/live/1")
+            settings.app_env = "dev"
+            dev_ok = MqttPublisher.live_start_payload(job_id=1, stream_url="http://x/live/1")
+            assert dev_ok["stream_url"] == "http://x/live/1"
+        finally:
+            settings.app_env = original
 
         # 512B 초과도 거절 — 단말이 잘라 쓰지 않고 방송을 거절하기 때문
         too_long = "https://x.co.kr/live/" + "9" * STREAM_URL_MAX_BYTES
@@ -351,6 +361,24 @@ class TestPublisher:
             assert out.isascii(), out
             # epoch 와 -W 는 단말이 붙인다 — 서버가 미리 붙이지 않는다
             assert not out.endswith("-W.mp3")
+
+    def test_result_judgment_new_format(self):
+        """신형식(2026-08-27) 결과는 ok 불리언 하나가 성패를 정한다 (사양 §5.4).
+
+        FILE_RESULT 가 FILE_END/FILE_ABORT/FILE_STOP_RESULT 를 대체했고,
+        LIVE_RESULT 의 정상 종료는 ok=true code=STOPPED_BY_SERVER 다.
+        code 로 판정을 뒤집으면 안 된다 — 정상 종료가 실패로 표시된다.
+        """
+        from app.modules.broadcast.service import _reason_text
+
+        # 정상 코드는 표시하지 않는다 — 매 행 "OK" 는 실패 사유를 묻는다
+        assert _reason_text("FILE_RESULT", {"ok": True, "code": "OK"}) is None
+        assert _reason_text("LIVE_RESULT", {"ok": True, "code": "STOPPED_BY_SERVER"}) is None
+        # 실패 사유는 그대로 보여준다
+        assert _reason_text("FILE_RESULT", {"ok": False, "code": "VERIFY_FAIL"}) == "VERIFY_FAIL"
+        assert _reason_text("LIVE_RESULT", {"ok": False, "code": "ABORTED"}) == "ABORTED"
+        # 구형식 fail_reason 도 여전히 읽는다
+        assert _reason_text("FILE_END", {"fail_reason": "SHA256_FAIL"}) == "SHA256_FAIL"
 
     def test_cmd_payloads_use_job_id_only(self):
         """CMD 의 job 식별자는 job_id 하나다 (통신 사양 2026-08-20 통일).

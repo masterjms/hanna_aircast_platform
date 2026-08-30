@@ -42,6 +42,8 @@ class DeviceResultOut(BaseModel):
     #: True=성공, False=실패, None=아직 응답 없음.
     ok: bool | None = None
     reason: str | None = None
+    #: 단말 STATUS 의 live 값. RECONNECTING 이면 "방송 중인데 무음" — 재접속 중이다.
+    live: str | None = None
     #: LIVE_STATS 요약(버퍼·끊김). 결과가 아니라 수신 품질이라 따로 둔다.
     stats: str | None = None
     received_at: dt.datetime | None = None

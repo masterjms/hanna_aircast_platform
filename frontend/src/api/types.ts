@@ -95,6 +95,8 @@ export interface Device {
   online: boolean;
   rssi: number | null;
   state: string | null;
+  /** 라이브 수신 상태 — OFF/PLAYING/RECONNECTING. RECONNECTING = 방송 중 무음 */
+  live: string | null;
   config_version: number | null;
   ip: string | null;
 }
@@ -253,6 +255,8 @@ export interface DeviceResult {
   result_type: string | null;
   ok: boolean | null;
   reason: string | null;
+  /** 단말 STATUS 의 live. RECONNECTING 이면 무음 재접속 중 */
+  live: string | null;
   /** LIVE_STATS 요약(버퍼·끊김). 결과가 아니라 수신 품질. */
   stats: string | null;
   received_at: string | null;

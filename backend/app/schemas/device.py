@@ -59,6 +59,9 @@ class DeviceOut(ApiModel):
     #: 최근 STATUS 원본에서 뽑은 표시용 필드.
     rssi: int | None = None
     state: str | None = None
+    #: 라이브 수신 상태 — OFF / PLAYING / RECONNECTING (사양 §5).
+    #: RECONNECTING = 방송은 살아 있는데 스피커가 무음인 상태. 화면이 경고한다.
+    live: str | None = None
     config_version: int | None = None
     ip: str | None = None
 
@@ -85,6 +88,7 @@ class DeviceOut(ApiModel):
             online=online,
             rssi=status.get("rssi"),
             state=status.get("state"),
+            live=status.get("live"),
             config_version=status.get("config_version"),
             ip=status.get("ip"),
         )

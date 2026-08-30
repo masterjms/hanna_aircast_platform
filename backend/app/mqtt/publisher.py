@@ -19,6 +19,7 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 
+from app.config import settings
 from app.constants import MQTT_MAX_PAYLOAD_BYTES, TargetScope
 from app.core.scope import VillageScope
 from app.errors import ApiError, PayloadTooLarge
@@ -209,8 +210,11 @@ class MqttPublisher:
                 f"stream_url 이 단말 한계({STREAM_URL_MAX_BYTES}B)를 넘었습니다.",
                 code="STREAM_URL_TOO_LONG",
             )
-        if not stream_url.startswith("https://"):
-            # 지금 막지 않으면 현장에서 "LIVE_READY 는 오는데 소리가 안 난다"로만 보인다.
+        if settings.is_prod and not stream_url.startswith("https://"):
+            # 운영 빌드 단말은 http 를 거절한다(사양 §6.3) — 지금 막지 않으면
+            # 현장에서 "LIVE_READY 는 오는데 소리가 안 난다"로만 보인다.
+            # 평문은 사내 시험(목 단말, TLS 끈 빌드)에서만 허용되므로
+            # dev 환경은 통과시킨다.
             raise ApiError(
                 "단말은 https 스트림만 받습니다. "
                 "ICECAST_PUBLIC_BASE_URL 을 https://<도메인> 으로 설정하세요(포트 없이).",

@@ -45,12 +45,16 @@ from app.schemas.broadcast import (
 
 log = logging.getLogger(__name__)
 
-#: 단말이 "성공"으로 보고하는 result_type.
-#: LIVE_READY 는 status 로 성패가 갈려서 별도 처리한다.
+#: 신형식(2026-08-27~) — 성패를 `ok` 불리언 하나가 정한다(사양 §5.4).
+#: FILE_RESULT 는 FILE_END/FILE_ABORT/FILE_STOP_RESULT 셋을 대체했고,
+#: LIVE_RESULT 는 라이브 종료 결과(정상 종료 ok=true STOPPED_BY_SERVER)다.
+_OK_FIELD_RESULTS = {"FILE_RESULT", "LIVE_RESULT", "OTA_RESULT", "LIVE_READY"}
+
+#: 구형식 호환 — 신형식 이전 펌웨어와 목 단말이 아직 보낸다.
+#: LIVE_READY 의 status 판정은 _live_ready_ok() 가 함께 처리한다.
 _SUCCESS_RESULTS = {"FILE_END"}
-#: "실패/중단"으로 보고하는 result_type.
 _FAILURE_RESULTS = {"FILE_ABORT", "FILE_STOP_RESULT"}
-#: LIVE_READY.status — 0 만 준비 완료다(1=TIMEOUT, 2=ABORT, 3=FAIL/BUSY).
+#: (구형식) LIVE_READY.status — 0 만 준비 완료(1=TIMEOUT, 2=ABORT, 3=FAIL/BUSY).
 _LIVE_READY_OK = 0
 
 #: 방송 시작을 직렬화하는 어드바이저리 락 키.
@@ -182,9 +186,13 @@ def _reason_text(result_type: str | None, payload: dict) -> str | None:
     if result_type in TELEMETRY_RESULTS:
         return None
     # code 는 새 형식(문자열 사유), reason/fail_reason 은 옛 형식.
-    return str(
+    text = str(
         payload.get("code") or payload.get("reason") or payload.get("fail_reason") or ""
-    ) or None
+    )
+    # 정상 코드는 표시하지 않는다 — 매 행에 "OK" 가 붙으면 실패 사유가 묻힌다.
+    if text in ("OK", "STOPPED_BY_SERVER", "0"):
+        return None
+    return text or None
 
 
 def _stats_text(payload: dict) -> str | None:
@@ -244,7 +252,7 @@ async def _to_out(
 
     rows = (
         await db.execute(
-            select(DeviceEvent, Device.label)
+            select(DeviceEvent, Device.label, Device.last_status)
             .outerjoin(Device, DeviceEvent.mac == Device.mac)
             .where(DeviceEvent.event_id == event.id)
             .order_by(DeviceEvent.received_at)
@@ -265,7 +273,10 @@ async def _to_out(
     # 그 단말은 실패다(ESP32 회신 260824 §5.2).
     latest: dict[str, tuple[DeviceEvent, str | None]] = {}
     telemetry: dict[str, DeviceEvent] = {}
-    for de, label in rows:
+    #: 단말별 최근 STATUS 의 live 값. RECONNECTING = 방송은 사는데 무음(사양 §5).
+    live_state: dict[str, str | None] = {}
+    for de, label, last_status in rows:
+        live_state[de.mac] = (last_status or {}).get("live")
         if de.result_type in TELEMETRY_RESULTS:
             telemetry[de.mac] = de
             latest.setdefault(de.mac, (de, label))
@@ -276,8 +287,12 @@ async def _to_out(
     for mac, (de, label) in latest.items():
         payload = de.payload or {}
         ok: bool | None = None
-        if de.result_type in _SUCCESS_RESULTS:
-            # verify_ok 가 있으면 그 값을 믿는다(sha256 검증 결과).
+        if de.result_type in _OK_FIELD_RESULTS and "ok" in payload:
+            # 신형식: ok 하나가 성패를 정한다. code 는 사유일 뿐 판정을 뒤집지 않는다
+            # (사양 §5.4 규칙 2). STOPPED_BY_SERVER 도 ok=true = 정상 종료다.
+            ok = bool(payload["ok"])
+        elif de.result_type in _SUCCESS_RESULTS:
+            # 구형식: verify_ok 가 있으면 그 값을 믿는다(sha256 검증 결과).
             ok = bool(payload.get("verify_ok", True))
         elif de.result_type == "LIVE_READY":
             ok = _live_ready_ok(payload)
@@ -292,6 +307,8 @@ async def _to_out(
                 result_type=de.result_type,
                 ok=ok,
                 reason=_reason_text(de.result_type, payload),
+                # 진행 중인 라이브에서만 의미가 있다 — 끝난 방송의 live 는 노이즈다.
+                live=live_state.get(mac) if event.ended_at is None else None,
                 stats=_stats_text(stats.payload or {}) if stats is not None else None,
                 received_at=de.received_at,
             )

@@ -52,6 +52,12 @@ class ResultType(StrEnum):
 
     LIVE_READY = "LIVE_READY"
     LIVE_STATS = "LIVE_STATS"
+    # 신형식 (2026-08-27~, 사양 §5.4) — 성패는 payload 의 ok 불리언이 정한다.
+    LIVE_RESULT = "LIVE_RESULT"      # 라이브 종료 결과 (정상 종료 = ok:true STOPPED_BY_SERVER)
+    FILE_RESULT = "FILE_RESULT"      # FILE_END/FILE_ABORT/FILE_STOP_RESULT 셋을 대체
+    OTA_PROGRESS = "OTA_PROGRESS"    # 진행 알림 (25% 단위, 최종 아님)
+    OTA_RESULT = "OTA_RESULT"        # OTA 최종 결과
+    # 구형식 — 신형식 이전 펌웨어 호환으로 남긴다.
     FILE_END = "FILE_END"
     FILE_ABORT = "FILE_ABORT"
     FILE_STOP_RESULT = "FILE_STOP_RESULT"
@@ -99,4 +105,5 @@ MAC_LENGTH = 12
 
 #: 주기적으로 계속 올라오는 telemetry. 1회성 "결과"와 달리 최신값만 뜻이 있다.
 #: 서버는 이력에 tick 마다 쌓지 않고 방송·단말당 1행만 두고 덮어쓴다.
-TELEMETRY_RESULTS = frozenset({"LIVE_STATS"})
+# OTA_PROGRESS 는 25% 단위로 여러 번 오는 진행 알림이라 최신값만 의미가 있다.
+TELEMETRY_RESULTS = frozenset({"LIVE_STATS", "OTA_PROGRESS"})

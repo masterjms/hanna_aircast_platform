@@ -131,6 +131,9 @@ function ActiveCard({
               <span className="mono dim">{r.mac}</span>
               <span className="strong">{r.label ?? ''}</span>
               {r.reason && <span className="dim">{r.reason}</span>}
+              {r.live === 'RECONNECTING' && (
+                <span className="badge badge--warn">🔇 재접속 중 · 무음</span>
+              )}
               {r.stats && <span className="dim">{r.stats}</span>}
             </li>
           ))}
