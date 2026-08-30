@@ -325,6 +325,33 @@ class TestPublisher:
         # 판정 근거가 없으면 단정하지 않는다
         assert _live_ready_ok({"job_id": 1}) is None
 
+    def test_device_file_name_strips_non_ascii(self):
+        """단말에 보내는 파일명에는 한글이 들어가면 안 된다 (통신 사양 §11.2).
+
+        단말은 `0-9 A-Z a-z - _` 외의 **바이트**를 전부 '_' 로 바꾼다. UTF-8 한글은
+        글자당 3바이트라 '___' 가 되고, 바이트 길이가 같은 다른 제목끼리
+        구분이 사라진다 — 단말 저장소에 밑줄만 남는다.
+        """
+        from app.modules.file.service import device_file_name
+
+        # ASCII 는 살리고 뒤에 id 를 붙여 되짚을 수 있게 한다
+        assert device_file_name("notice.mp3", 73) == "notice-73.mp3"
+        assert device_file_name("test-tone.mp3", 5) == "test-tone-5.mp3"
+
+        # 한글이 섞이면 ASCII 부분만 남긴다
+        assert device_file_name("공지 notice.mp3", 73) == "notice-73.mp3"
+
+        # 남는 ASCII 가 없으면 id 로만 식별한다
+        assert device_file_name("산불방재 안내.mp3", 73) == "file-73.mp3"
+        assert device_file_name("마을회의.mp3", 12) == "file-12.mp3"
+
+        # 어떤 입력이든 결과는 ASCII 여야 한다
+        for raw in ("한글.mp3", "공지 notice.mp3", "a b c.mp3", "!!!.mp3"):
+            out = device_file_name(raw, 1)
+            assert out.isascii(), out
+            # epoch 와 -W 는 단말이 붙인다 — 서버가 미리 붙이지 않는다
+            assert not out.endswith("-W.mp3")
+
     def test_cmd_payloads_use_job_id_only(self):
         """CMD 의 job 식별자는 job_id 하나다 (통신 사양 2026-08-20 통일).
 

@@ -63,6 +63,41 @@ def safe_filename(raw: str) -> str:
     return f"{stem[:60]}{suffix or '.mp3'}"
 
 
+#: 단말이 파일명에서 그대로 두는 문자. 나머지는 전부 '_' 로 바꾼다
+#: (통신 사양 §11.2). UTF-8 한글은 바이트마다 걸려서 글자당 '_' 세 개가 된다.
+_DEVICE_SAFE = re.compile(r"[^0-9A-Za-z_-]+")
+
+
+def device_file_name(filename: str, file_id: int) -> str:
+    """단말에 보낼 파일명. 화면에 보이는 이름과 다르다.
+
+    단말은 받은 이름을 그대로 저장하지 않고 `0-9 A-Z a-z - _` 외의 **바이트**를
+    전부 '_' 로 바꾼다(통신 사양 §11.2). 그래서 한글 제목을 그대로 보내면:
+
+        산불방재 안내.mp3  →  ___________________-<epoch>-W.mp3
+        마을회의.mp3       →  ____________-<epoch>-W.mp3
+
+    읽을 수 없을 뿐 아니라 **바이트 길이가 같은 다른 제목끼리 구분이 사라진다.**
+    현장에서 단말 저장소를 열어보면 밑줄만 늘어선 파일들이 남는다.
+
+    사양의 권고대로 한글 제목은 서버가 들고 있고(File.filename), 단말에는
+    ASCII 만 보낸다. file_id 를 붙여 어느 파일인지 되짚을 수 있게 한다.
+
+        notice.mp3        →  notice-73.mp3
+        공지 notice.mp3   →  notice-73.mp3
+        산불방재 안내.mp3 →  file-73.mp3      (남는 ASCII 가 없을 때)
+
+    epoch 와 '-W' 는 붙이지 않는다 — 단말이 알아서 붙인다.
+    """
+    stem = Path(filename).stem
+    safe = _DEVICE_SAFE.sub("-", stem).strip("-")
+    safe = re.sub(r"-{2,}", "-", safe)
+    # 한글만 있던 이름은 여기서 빈 문자열이 된다. 그때는 id 로만 식별한다.
+    if len(safe) < 3:
+        return f"file-{file_id}.mp3"
+    return f"{safe[:30]}-{file_id}.mp3"
+
+
 def probe_duration(path: Path) -> Decimal | None:
     """ffprobe 로 길이(초)를 구한다.
 

@@ -379,7 +379,9 @@ async def start_file_broadcast(
         size=audio.size_bytes,
         sha256=audio.sha256,
         url=url,
-        file_name=audio.filename,
+        # 화면에 보이는 이름(한글 가능)이 아니라 단말이 저장할 수 있는 이름을 보낸다.
+        # 한글을 그대로 보내면 단말에서 밑줄만 남고 파일끼리 구분이 사라진다(§11.2).
+        file_name=file_service.device_file_name(audio.filename, audio.id),
         store_flash=payload.store_flash,
         autoplay=payload.autoplay,
     )
@@ -530,7 +532,9 @@ async def start_live_broadcast(
 
     try:
         await publisher.publish_command(
-            payload=publisher.live_start_payload(job_id=session_id, stream_url=url),
+            payload=publisher.live_start_payload(
+                job_id=session_id, stream_url=url, record_flash=payload.record_flash
+            ),
             target_scope=payload.target_scope,
             scope=scope,
             village_ids=_village_ids(payload.target_scope, payload.target_ids),
