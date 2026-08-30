@@ -62,6 +62,10 @@ class DeviceOut(ApiModel):
     #: 라이브 수신 상태 — OFF / PLAYING / RECONNECTING (사양 §5).
     #: RECONNECTING = 방송은 살아 있는데 스피커가 무음인 상태. 화면이 경고한다.
     live: str | None = None
+    #: 단말별 MQTT 계정 발행 여부. False 면 화면에 「미등록*」 — 붙긴 하는데
+    #: 서버가 발행한 계정이 없는 단말이다(레지스트리 사양 §3.6, 동기화 어긋남).
+    #: 비밀번호 자체는 여기 싣지 않는다 — 전용 엔드포인트(super_admin)로만 준다.
+    has_credential: bool = False
     config_version: int | None = None
     ip: str | None = None
 
@@ -91,6 +95,7 @@ class DeviceOut(ApiModel):
             live=status.get("live"),
             config_version=status.get("config_version"),
             ip=status.get("ip"),
+            has_credential=device.mqtt_password is not None,
         )
 
 
@@ -98,3 +103,22 @@ class DeviceDetail(DeviceOut):
     """상세 모달용. 최근 STATUS payload 원본을 그대로 붙인다."""
 
     last_status: dict[str, Any] | None = None
+
+
+class DeviceCredentialIssue(BaseModel):
+    """계정 발행 요청. 기본은 재사용 — 이미 있으면 그 값을 돌려준다(계정 사양 §4).
+
+    reissue=True 는 라인 재작업 전용: 새 비밀번호를 만들어 덮어쓴다. 현장에 나가
+    있는 단말에 쓰면 그 단말은 다시는 브로커에 못 붙는다(새 값을 넣을 케이블이 없다).
+    """
+
+    reissue: bool = False
+
+
+class DeviceCredentialOut(ApiModel):
+    """등록 화면이 표시하고 생산 라인이 시리얼(@MQTTID/@MQTTPW)로 넣는 값."""
+
+    username: str
+    password: str
+    #: 이번 호출에서 새로 만들었는가. False = 기존 값 재사용.
+    issued: bool

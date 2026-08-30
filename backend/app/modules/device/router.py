@@ -12,6 +12,8 @@ from app.modules.system import service as system_service
 from app.mqtt.topics import normalize_mac
 from app.schemas.device import (
     DeviceCreate,
+    DeviceCredentialIssue,
+    DeviceCredentialOut,
     DeviceDetail,
     DeviceOut,
     DeviceStatusFilter,
@@ -55,6 +57,18 @@ async def list_unassigned(db: Db, _: SuperAdmin) -> list[DeviceOut]:
 @router.post("", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
 async def create_device(payload: DeviceCreate, db: Db, scope: Scope) -> DeviceOut:
     return await service.create_device(db, payload, scope)
+
+
+@router.post("/{mac}/credential", response_model=DeviceCredentialOut)
+async def issue_credential(
+    mac: MacPath, payload: DeviceCredentialIssue, db: Db, _: SuperAdmin
+) -> DeviceCredentialOut:
+    """단말별 MQTT 계정 발행/조회. super_admin 전용 — 비밀번호가 응답에 실린다.
+
+    이미 발행된 단말이면 기존 값을 돌려준다(재사용이 기본, 계정 사양 §4).
+    reissue=true 는 라인 재작업 전용이다.
+    """
+    return await service.issue_credential(db, mac, reissue=payload.reissue)
 
 
 @router.get("/{mac}", response_model=DeviceDetail)

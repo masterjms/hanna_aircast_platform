@@ -1,0 +1,2 @@
+# sh 스크립트는 항상 LF — CRLF 가 섞이면 컨테이너(busybox sh)에서 조용히 깨진다.
+*.sh text eol=lf

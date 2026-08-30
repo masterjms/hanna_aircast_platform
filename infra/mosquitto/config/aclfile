@@ -1,28 +1,42 @@
-# 토픽 접근 제어.
+# 토픽 접근 제어 — 단말별 계정 기준 (2026-08-30 %c → %u 전환).
 #
-# ⚠ %c 치환은 `pattern` 지시자에서만 동작한다.
-#   `user` 블록 안의 `topic` 에 쓰면 "%c" 를 리터럴 문자열로 취급해서
-#   모든 단말의 발행·구독이 조용히 거부된다.
-#   (LAN 데모는 allow_anonymous 라 ACL 을 안 거쳐 2026-08-26 운영 전환에서야 드러났다.)
+# 판정 축은 username(%u)이다. username 은 비밀번호로 증명된 값이라 사칭이 안 되고,
+# client_id(%c)는 클라이언트가 그냥 주장하는 값이라 사칭을 못 막는다
+# (계정 사양 SERVER_DEVICE_CREDENTIAL_SPEC_2026-08-27.md §2.2).
+#
+# ⚠ %c/%u 치환은 `pattern` 지시자에서만 동작한다.
+#   `user` 블록 안의 `topic` 에 쓰면 리터럴로 취급돼 조용히 전부 거부된다
+#   (2026-08-26 운영 전환에서 실제로 겪음).
+#
+# 치환 문자가 없는 `pattern` 은 "접속한 모든 클라이언트 공통 허용"으로 동작한다
+# (mosquitto 2.1.2 실측, 2026-08-30). allow_anonymous false 라 익명은 없으므로
+# 이것이 "인증된 전 계정 공통 토픽"을 만드는 방법이다. 파일 첫머리의 `topic` 규칙은
+# 익명 전용이라 여기서는 못 쓴다.
 
 # 서버 계정 — cmd/config 발행은 여기서만 한다.
 user xwifi-server
 topic readwrite iotradio/#
 
-# 단말 공통 계정 — 공용 토픽.
-#
-# 마을 명령은 마을이 배정된 단말만 구독해야 하지만 마을 id 를 ACL 로 좁힐 수 없어
-# (단말별 계정을 만들지 않는 한) 전체 마을 토픽 읽기를 허용한다.
-user xwifi-device
-topic read  iotradio/all/cmd
-topic read  iotradio/all/config
-topic read  iotradio/village/+/cmd
+# 공통 토픽 — 전 단말 계정. 마을 명령은 마을이 배정된 단말만 구독해야 하지만
+# 마을 id 를 계정별 ACL 로 좁힐 수 없어 전체 마을 토픽 읽기를 허용한다.
+pattern read iotradio/all/cmd
+pattern read iotradio/all/config
+pattern read iotradio/village/+/cmd
 
-# 단말별 토픽. %c = client_id.
-#
-# 단말은 접속할 때 client_id 를 **자기 MAC(콜론 없는 소문자)** 으로 설정해야 한다.
-#   OK   58e6c5f2cc74
-#   NG   iotradio-58e6c5f2cc74   ← 토픽의 MAC 과 달라서 거부된다
+# 단말별 토픽. %u = username = 콜론 없는 소문자 MAC.
+# 단말은 username 을 자기 MAC 으로 설정해야 한다 (client_id 도 같은 값 권장).
+pattern write iotradio/device/%u/result
+pattern write iotradio/device/%u/status
+pattern read  iotradio/device/%u/cmd
+pattern read  iotradio/device/%u/config
+
+# ── 이행기 한시: %c 규칙 (공유 계정 xwifi-device 용) ──────────────────────
+# 공유 계정 단말은 username 이 MAC 이 아니라서 %u 규칙에 안 잡힌다.
+# client_id(=MAC) 기준의 옛 규칙을 임시로 남긴다. 이 블록이 있는 동안은
+# 유효 계정 하나만 알면 client_id 를 바꿔 다른 단말을 사칭할 수 있는 옛 구멍이
+# 그대로다 — 전 단말이 단말별 계정으로 넘어가면:
+#   1) .env 의 MQTT_DEVICE_PASSWORD 삭제 (공유 계정 제거)
+#   2) 아래 4줄 삭제 + docker compose restart mosquitto
 pattern write iotradio/device/%c/result
 pattern write iotradio/device/%c/status
 pattern read  iotradio/device/%c/cmd

@@ -28,6 +28,7 @@ from app.live.registry import LiveRegistry
 from app.modules.auth.router import router as auth_router
 from app.modules.broadcast.router import router as broadcast_router
 from app.modules.dashboard.router import router as dashboard_router
+from app.modules.device import service as device_service
 from app.modules.device.router import router as device_router
 from app.modules.file.router import router as file_router
 from app.modules.org.router import router as org_router
@@ -88,6 +89,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # 기동 직후 1회. 브로커 retain 이 유실됐을 수 있으므로 항상 다시 밀어 넣는다.
     await config_reconcile.run(publisher)
+
+    # 단말별 MQTT 계정도 기동 때마다 다시 내보낸다 — DB 복구·볼륨 재생성 뒤에도
+    # 브로커 passwd 가 DB(정본)와 같아진다. 실패해도 기동은 계속한다.
+    try:
+        async with SessionFactory() as session:
+            await device_service.export_broker_accounts(session)
+    except Exception:  # noqa: BLE001
+        log.exception("기동 시 MQTT 계정 내보내기 실패 (다음 계정 발행 때 재시도)")
+
     log.info("기동 완료 (env=%s)", settings.app_env)
 
     yield

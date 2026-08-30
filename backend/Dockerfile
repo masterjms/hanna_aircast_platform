@@ -29,8 +29,8 @@ COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app
 
-# 파일 스토리지 마운트 지점. compose 에서 볼륨을 붙인다.
-RUN mkdir -p /var/lib/iotradio/files
+# 파일 스토리지·MQTT 계정 내보내기 마운트 지점. compose 에서 볼륨을 붙인다.
+RUN mkdir -p /var/lib/iotradio/files /var/lib/iotradio/mqtt
 
 # root 로 돌리지 않는다.
 RUN useradd --system --uid 10001 xwifi \

@@ -518,3 +518,111 @@ class TestSecurity:
         token, _ = create_access_token(user_id=1, username="a", role="village_admin")
         with pytest.raises(Unauthorized):
             decode_access_token(token[:-4] + "AAAA")
+
+
+# ── 단말별 MQTT 계정 ─────────────────────────────────────────────────────
+class TestMqttAccounts:
+    """계정 사양(SERVER_DEVICE_CREDENTIAL_SPEC §1)과 passwd 재생성 규칙.
+
+    비밀번호 규칙이 틀리면 시리얼 전송이 `@END` 에서 잘리거나(@) 단말 화면에서
+    입력할 수 없는 문자가 나온다 — 라인에서만 드러나는 실패라 여기서 잡는다.
+    """
+
+    def test_password_is_8_chars_from_fixed_charset(self):
+        from app.core import mqtt_accounts
+
+        for _ in range(200):
+            pw = mqtt_accounts.generate_device_password()
+            assert len(pw) == 8
+            assert all(c in mqtt_accounts.PASSWORD_CHARSET for c in pw)
+
+    def test_charset_excludes_serial_breakers(self):
+        """`@` 는 시리얼 @END 충돌, `!` 는 서버가 쓰지 않기로 확정(사양 §1)."""
+        from app.core import mqtt_accounts
+
+        assert "@" not in mqtt_accounts.PASSWORD_CHARSET
+        assert "!" not in mqtt_accounts.PASSWORD_CHARSET
+
+    def test_hash_is_mosquitto_pbkdf2_format(self):
+        """$7$101$<salt>$<hash> — eclipse-mosquitto:2 인증 실측 통과 형식."""
+        import base64
+
+        from app.core import mqtt_accounts
+
+        h = mqtt_accounts.mosquitto_hash("aB3#x9._")
+        _, ident, iterations, salt, digest = h.split("$")
+        assert ident == "7"
+        assert iterations == "101"
+        assert len(base64.b64decode(salt)) == 12
+        assert len(base64.b64decode(digest)) == 64
+
+    def test_render_passwd_has_server_shared_and_devices(self, monkeypatch):
+        from app.config import settings
+        from app.core import mqtt_accounts
+
+        monkeypatch.setattr(settings, "mqtt_username", "xwifi-server")
+        monkeypatch.setattr(settings, "mqtt_password", "serverpw")
+        monkeypatch.setattr(settings, "mqtt_device_password", "sharedpw")
+        content = mqtt_accounts.render_passwd({"58e6c5f2cc74": "aB3#x9._", "aabbccddeeff": "zZ9~q.-1"})
+        users = [line.split(":", 1)[0] for line in content.splitlines() if ":" in line]
+        assert users == ["xwifi-server", "xwifi-device", "58e6c5f2cc74", "aabbccddeeff"]
+        # 평문 비밀번호가 파일에 실리면 안 된다 — 해시만 나간다.
+        assert "aB3#x9._" not in content
+        assert "serverpw" not in content
+
+    def test_render_passwd_drops_shared_account_when_unset(self, monkeypatch):
+        """.env 에서 MQTT_DEVICE_PASSWORD 를 지우면 공유 계정이 빠진다(이행 종료)."""
+        from app.config import settings
+        from app.core import mqtt_accounts
+
+        monkeypatch.setattr(settings, "mqtt_username", "xwifi-server")
+        monkeypatch.setattr(settings, "mqtt_password", "serverpw")
+        monkeypatch.setattr(settings, "mqtt_device_password", None)
+        content = mqtt_accounts.render_passwd({"58e6c5f2cc74": "aB3#x9._"})
+        assert "xwifi-device" not in content
+
+    def test_export_noop_when_disabled(self, monkeypatch):
+        """경로 미설정(개발·테스트)이면 아무 파일도 만들지 않는다."""
+        from app.config import settings
+        from app.core import mqtt_accounts
+
+        monkeypatch.setattr(settings, "mosquitto_passwd_export", None)
+        assert mqtt_accounts.export_passwd({"58e6c5f2cc74": "pw"}) is False
+
+    def test_export_writes_file_atomically(self, monkeypatch, tmp_path):
+        from app.config import settings
+        from app.core import mqtt_accounts
+
+        target = tmp_path / "passwd.generated"
+        monkeypatch.setattr(settings, "mqtt_username", "xwifi-server")
+        monkeypatch.setattr(settings, "mqtt_password", "serverpw")
+        monkeypatch.setattr(settings, "mqtt_device_password", None)
+        monkeypatch.setattr(settings, "mosquitto_passwd_export", str(target))
+        assert mqtt_accounts.export_passwd({"58e6c5f2cc74": "aB3#x9._"}) is True
+        content = target.read_text(encoding="utf-8")
+        assert "58e6c5f2cc74:$7$101$" in content
+        # 임시 파일이 남지 않는다.
+        assert [p.name for p in tmp_path.iterdir()] == ["passwd.generated"]
+
+    def test_export_failure_returns_false_not_raise(self, monkeypatch):
+        """파일을 못 써도 등록 API 가 500 이 되면 안 된다 — DB 가 정본이다."""
+        from app.config import settings
+        from app.core import mqtt_accounts
+
+        monkeypatch.setattr(
+            settings, "mosquitto_passwd_export", "/no/such/dir/passwd.generated"
+        )
+        assert mqtt_accounts.export_passwd({"58e6c5f2cc74": "pw"}) is False
+
+    def test_enforcement_only_after_shared_account_removed(self, monkeypatch):
+        """이행기(공유 계정 유지)에는 계정 미발행 단말을 방송 대상에서 빼지 않는다."""
+        from app.config import settings
+        from app.modules.device.service import _device_accounts_enforced
+
+        monkeypatch.setattr(settings, "mosquitto_passwd_export", "/x/passwd.generated")
+        monkeypatch.setattr(settings, "mqtt_device_password", "sharedpw")
+        assert _device_accounts_enforced() is False  # 이행기
+        monkeypatch.setattr(settings, "mqtt_device_password", None)
+        assert _device_accounts_enforced() is True  # 전환 완료
+        monkeypatch.setattr(settings, "mosquitto_passwd_export", None)
+        assert _device_accounts_enforced() is False  # 개발·테스트

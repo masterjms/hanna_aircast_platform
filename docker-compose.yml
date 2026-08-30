@@ -21,8 +21,13 @@ services:
       ICECAST_HOST: icecast
       ICECAST_PORT: "8000"
       FILE_ROOT: /var/lib/iotradio/files
+      # 단말별 MQTT 계정 passwd 내보내기 경로. mosquitto 의 entrypoint.sh 가
+      # 이 파일을 감시해서 설치+리로드한다. 비우면 기능 꺼짐(개발).
+      MOSQUITTO_PASSWD_EXPORT: /var/lib/iotradio/mqtt/passwd.generated
     volumes:
       - files:/var/lib/iotradio/files
+      # 단말별 MQTT 계정 전달용 공유 볼륨 (backend 쓰기 → mosquitto 읽기)
+      - mqtt-dynamic:/var/lib/iotradio/mqtt
       # Google TTS 자격증명. scripts/setup-tts-credentials.sh 가 컨테이너 사용자
       # 소유로 놓아준다. 저장소에는 들어가지 않는다(.gitignore).
       # TTS 를 안 쓰면 빈 파일이라도 있으면 되고, .env 에서 경로를 비우면 무시된다.
@@ -77,10 +82,15 @@ services:
       # 함께 지운다. 평문이라 CONNECT 패킷에 ID/PW 가 그대로 실린다 —
       # 전환 시점에 MQTT 비밀번호를 반드시 교체할 것.
       - "1883:1883"
+    # 단말별 계정 감시 루프를 얹은 래퍼. passwd.generated 가 바뀌면 권한을 맞춰
+    # /mosquitto/data/passwd 로 설치하고 SIGHUP 리로드한다.
+    entrypoint: ["/bin/sh", "/mosquitto/entrypoint.sh"]
     volumes:
       - ./infra/mosquitto/config:/mosquitto/config:ro
+      - ./infra/mosquitto/entrypoint.sh:/mosquitto/entrypoint.sh:ro
       - ./infra/certs:/mosquitto/certs:ro
       - mosquitto-data:/mosquitto/data
+      - mqtt-dynamic:/mosquitto/dynamic
 
   icecast:
     image: libretime/icecast:latest
@@ -124,3 +134,6 @@ volumes:
   mosquitto-data:
   files:
   web:
+  # 단말별 MQTT 계정 passwd 전달 통로. mosquitto entrypoint 가 기동 때 소유자를
+  # 백엔드 사용자(uid 10001)로 넘겨준다.
+  mqtt-dynamic:

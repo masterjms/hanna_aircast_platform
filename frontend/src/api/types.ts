@@ -99,10 +99,20 @@ export interface Device {
   live: string | null;
   config_version: number | null;
   ip: string | null;
+  /** 단말별 MQTT 계정 발행 여부. false = 「미등록*」(계정 미발행 — 발행 필요) */
+  has_credential: boolean;
 }
 
 export interface DeviceDetail extends Device {
   last_status: Record<string, unknown> | null;
+}
+
+/** 등록 화면이 표시하고 생산 라인이 시리얼(@MQTTID/@MQTTPW)로 단말에 넣는 값 */
+export interface DeviceCredential {
+  username: string;
+  password: string;
+  /** 이번 호출에서 새로 발행했는가. false = 기존 값 재사용 */
+  issued: boolean;
 }
 
 export interface DeviceCounts {

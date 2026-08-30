@@ -9,12 +9,19 @@
 #
 # 계정 두 개:
 #   xwifi-server  백엔드용. iotradio/# 전체 읽기·쓰기
-#   xwifi-device  단말용.   자기 MAC 토픽만 (ACL 의 %c 치환)
+#   xwifi-device  단말용 공유 계정 — 이행기 한시 (아래 참고)
 #
-# ⚠ 단말 계정은 300대가 공유한다. 비밀번호가 유출되면 client id 를 바꿔 다른
-#   단말을 사칭할 수 있다(보안 검토 HIGH 항목). 단말별 계정 전환은 펌웨어
-#   변경이 필요해 ESP32 팀과 협의 중이다. 그전까지는 길게 잡고, 평문(1883)
-#   구간을 쓴 뒤에는 TLS 전환 시점에 반드시 교체한다.
+# 2026-08-30 부터 단말은 단말별 계정(username=MAC)이 기본이다. 단말별 계정은
+# 이 스크립트가 아니라 **백엔드가 발행·관리**한다(등록 API → DB → passwd 재생성
+# → mosquitto entrypoint 감시 루프가 설치+리로드). 이 스크립트는 최초 구축 때
+# 서버 계정과 이행기 공유 계정만 만든다. 여기서 만든 passwd 는 첫 기동 때
+# /mosquitto/data/passwd 로 복사돼 시드가 되고, 백엔드가 뜨면 재생성본으로
+# 대체된다 — 그때 공유 계정이 유지되려면 .env 에 MQTT_DEVICE_PASSWORD 가
+# 있어야 한다(없으면 공유 계정이 빠진 채 재생성된다).
+#
+# ⚠ 공유 계정은 유효 계정 하나만 알면 client_id 를 바꿔 다른 단말을 사칭할 수
+#   있는 구멍이 있다. 전 단말이 단말별 계정을 받으면 .env 에서
+#   MQTT_DEVICE_PASSWORD 를 지우고 aclfile 의 %c 블록을 삭제한다.
 #
 set -euo pipefail
 
@@ -60,8 +67,9 @@ cat <<EOF
   .env 에 넣을 값
     MQTT_USERNAME=xwifi-server
     MQTT_PASSWORD=$SERVER_PW
+    MQTT_DEVICE_PASSWORD=$DEVICE_PW   # 이행기 공유 계정 유지용. 전환 완료 후 삭제
 
-  ESP32 팀에 전달할 단말 계정
+  ESP32 팀에 전달할 단말 공유 계정 (이행기 한시 — 단말별 계정이 기본)
     username: xwifi-device
     password: $DEVICE_PW
 

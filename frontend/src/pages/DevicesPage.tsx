@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 
 import { api } from '../api/client';
 import { Modal } from '../components/Modal';
-import type { Device, DeviceStatusFilter, Village, Zone } from '../api/types';
+import type { Device, DeviceCredential, DeviceStatusFilter, Village, Zone } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
 
@@ -173,14 +173,115 @@ function AssignDialog({
   );
 }
 
+/** 단말별 MQTT 계정 — 발행·표시.
+ *
+ * 열면 발행 API 를 부른다. 이미 발행된 단말이면 기존 값을 그대로 돌려받는다
+ * (재사용이 기본 — 계정은 단말이 폐기될 때까지 안 바꾼다).
+ * [재발행]은 라인 재작업 전용이다: 새 값은 케이블로 단말에 다시 넣어야 하므로,
+ * 현장에 나가 있는 단말에 쓰면 그 단말은 다시는 브로커에 못 붙는다.
+ */
+function CredentialDialog({ device, onClose }: { device: Device; onClose: () => void }) {
+  const [cred, setCred] = useState<DeviceCredential | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const load = async (reissue: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setCred(await api.devices.credential(device.mac, reissue));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '계정 발행에 실패했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    void load(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [device.mac]);
+
+  const copy = async () => {
+    if (!cred) return;
+    try {
+      await navigator.clipboard.writeText(
+        `@MQTTID=${cred.username}\n@MQTTPW=${cred.password}`,
+      );
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* 클립보드 권한이 없으면 사용자가 직접 드래그해 복사한다 */
+    }
+  };
+
+  const reissue = () => {
+    if (
+      window.confirm(
+        '새 비밀번호를 발행하면 이전 값은 즉시 무효가 됩니다.\n' +
+          '케이블이 꽂힌 단말(라인 재작업)에만 쓰세요 — 현장 단말에 쓰면 그 단말은 접속이 끊깁니다.\n' +
+          '계속할까요?',
+      )
+    ) {
+      void load(true);
+    }
+  };
+
+  return (
+    <Modal
+      title="MQTT 계정"
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn btn--ghost" onClick={reissue} disabled={busy}>
+            재발행 (라인 전용)
+          </button>
+          <button type="button" className="btn btn--primary" onClick={onClose}>
+            닫기
+          </button>
+        </>
+      }
+    >
+      <p className="mono dim" style={{ marginTop: 0 }}>
+        {device.mac}
+      </p>
+      {error && <p className="hint hint--warn">{error}</p>}
+      {busy && !cred && <p className="hint">발행 중…</p>}
+      {cred && (
+        <>
+          <div className="field">
+            <label>username (= MAC)</label>
+            <input className="mono" readOnly value={cred.username} />
+          </div>
+          <div className="field">
+            <label>password</label>
+            <input className="mono" readOnly value={cred.password} />
+          </div>
+          <button type="button" className="btn btn--sm" onClick={copy} disabled={busy}>
+            {copied ? '복사됨 ✓' : '시리얼 명령 복사 (@MQTTID/@MQTTPW)'}
+          </button>
+          <p className="hint">
+            생산 라인에서 시리얼로 단말에 넣는 값입니다. 발행된 계정은 단말 폐기 전까지 바뀌지
+            않습니다{cred.issued ? ' — 방금 새로 발행됐습니다.' : ' — 기존 값을 다시 표시했습니다.'}
+          </p>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 function DeviceTable({
   devices,
   showVillage,
   onAssign,
+  onCredential,
 }: {
   devices: Device[];
   showVillage: boolean;
   onAssign: (d: Device) => void;
+  /** super_admin 에게만 넘어온다 — 비밀번호가 응답에 실리는 기능이라서 */
+  onCredential?: (d: Device) => void;
 }) {
   if (devices.length === 0) {
     return <div className="empty">조건에 맞는 단말이 없습니다.</div>;
@@ -203,7 +304,21 @@ function DeviceTable({
       <tbody>
         {devices.map((d) => (
           <tr key={d.mac}>
-            <td className="mono">{d.mac}</td>
+            <td className="mono">
+              {d.mac}
+              {/* 계정 미발행 = 「미등록*」. 브로커에 붙긴 하는데 서버가 발행한
+                  계정이 없는 단말 — 단말별 계정 전환이 끝나면 방송 대상에서도
+                  빠진다(레지스트리 사양 §3.6). 계정 버튼으로 발행하면 사라진다. */}
+              {!d.has_credential && (
+                <span
+                  className="badge badge--warn badge--plain"
+                  style={{ marginLeft: 6 }}
+                  title="MQTT 계정 미발행 — 단말별 계정 전환 후에는 브로커 접속과 방송 대상에서 제외됩니다. [계정] 버튼으로 발행하세요."
+                >
+                  미등록*
+                </span>
+              )}
+            </td>
             {/* 이름이 비면 MAC 을 쓴다 — 목록에 빈 칸이 생기지 않게 (등록 사양 §3.3) */}
             <td className="strong">{d.label || <span className="mono dim">{d.mac}</span>}</td>
             {showVillage && <td>{d.village_name ?? '미배정'}</td>}
@@ -228,9 +343,16 @@ function DeviceTable({
             <td className="num">{d.config_version ?? '—'}</td>
             <td className="num dim">{formatTime(d.last_seen_at)}</td>
             <td className="num">
-              <button type="button" className="btn btn--sm" onClick={() => onAssign(d)}>
-                배정
-              </button>
+              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                {onCredential && (
+                  <button type="button" className="btn btn--sm" onClick={() => onCredential(d)}>
+                    계정
+                  </button>
+                )}
+                <button type="button" className="btn btn--sm" onClick={() => onAssign(d)}>
+                  배정
+                </button>
+              </div>
             </td>
           </tr>
         ))}
@@ -245,6 +367,7 @@ export function DevicesPage() {
   const [statusFilter, setStatusFilter] = useState<DeviceStatusFilter | ''>('');
   const [search, setSearch] = useState('');
   const [assigning, setAssigning] = useState<Device | null>(null);
+  const [credentialFor, setCredentialFor] = useState<Device | null>(null);
 
   const villages = usePolling(() => api.villages.list(), 60_000);
 
@@ -326,6 +449,7 @@ export function DevicesPage() {
             devices={devices.data ?? []}
             showVillage={(user?.villages.length ?? 0) > 1}
             onAssign={setAssigning}
+            onCredential={isSuperAdmin ? setCredentialFor : undefined}
           />
         )}
       </div>
@@ -345,9 +469,21 @@ export function DevicesPage() {
               devices={unassigned.data ?? []}
               showVillage={false}
               onAssign={setAssigning}
+              onCredential={isSuperAdmin ? setCredentialFor : undefined}
             />
           </div>
         </section>
+      )}
+
+      {credentialFor && (
+        <CredentialDialog
+          device={credentialFor}
+          onClose={() => {
+            setCredentialFor(null);
+            devices.reload();
+            unassigned.reload();
+          }}
+        />
       )}
 
       {assigning && (

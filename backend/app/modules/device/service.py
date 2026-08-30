@@ -12,6 +12,8 @@ from sqlalchemy import Select, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.config import settings
+from app.core import mqtt_accounts
 from app.core.presence import is_online, online_clause, online_cutoff
 from app.core.scope import VillageScope
 from app.errors import ApiError, DeviceAlreadyExists, DeviceNotFound, VillageNotFound
@@ -20,7 +22,13 @@ from app.models.org import Village, Zone
 from app.models.system import CurrentConfig
 from app.modules.org import service as org_service
 from app.mqtt.publisher import MqttPublisher
-from app.schemas.device import DeviceCreate, DeviceDetail, DeviceOut, DeviceUpdate
+from app.schemas.device import (
+    DeviceCreate,
+    DeviceCredentialOut,
+    DeviceDetail,
+    DeviceOut,
+    DeviceUpdate,
+)
 from app.tasks import config_reconcile
 
 log = logging.getLogger(__name__)
@@ -198,7 +206,59 @@ async def macs_for_target(
     if online_only:
         stmt = stmt.where(online_clause(online_cutoff()))
 
+    # 단말별 계정만 쓰는 단계(공유 계정 제거 후)에서는 계정 미발행 단말을 대상에서
+    # 뺀다 — 「미등록*」(동기화 어긋남) 단말이다. 레지스트리 사양 §3.6:
+    # "어느 쪽이든 그 전까지는 방송 대상 목록에 넣지 않는다".
+    # 이행기(공유 계정이 살아 있는 동안)에는 걸지 않는다 — 현장 단말이 아직
+    # 공유 계정으로 붙어 있어서, 걸면 정상 단말이 방송에서 빠진다.
+    if _device_accounts_enforced():
+        stmt = stmt.where(Device.mqtt_password.is_not(None))
+
     return list((await db.scalars(stmt)).all())
+
+
+def _device_accounts_enforced() -> bool:
+    """단말별 계정이 유일한 접속 경로인가.
+
+    passwd 내보내기가 켜져 있고(운영) 공유 계정이 제거된 뒤에만 True.
+    개발·테스트는 anonymous 브로커라 항상 False.
+    """
+    return bool(settings.mosquitto_passwd_export) and not settings.mqtt_device_password
+
+
+# ── 단말별 MQTT 계정 ─────────────────────────────────────────────────────
+async def export_broker_accounts(db: AsyncSession) -> None:
+    """DB 의 계정 전체를 mosquitto passwd 로 내보낸다(등록/삭제/기동 때 호출).
+
+    실패해도 예외를 던지지 않는다 — 정본은 DB 이고 다음 호출이 따라잡는다.
+    """
+    rows = await db.execute(
+        select(Device.mac, Device.mqtt_password).where(Device.mqtt_password.is_not(None))
+    )
+    mqtt_accounts.export_passwd(dict(rows.all()))
+
+
+async def issue_credential(
+    db: AsyncSession, mac: str, *, reissue: bool = False
+) -> DeviceCredentialOut:
+    """계정 발행/조회. 이미 있으면 재사용이 기본이다(계정 사양 §4 — 계정 불변).
+
+    reissue=True 는 라인 재작업 전용 — 케이블이 꽂힌 단말에 그 자리에서 새 값을
+    넣을 때만 쓴다. 현장에 나가 있는 단말의 계정을 바꾸는 기능이 아니다.
+    """
+    device = await db.get(Device, mac)
+    if device is None:
+        raise DeviceNotFound()
+
+    issued = False
+    if device.mqtt_password is None or reissue:
+        device.mqtt_password = mqtt_accounts.generate_device_password()
+        await db.flush()
+        issued = True
+        # DB 와 브로커는 한 묶음이다(레지스트리 사양 §3.6). flush 직후 바로 내보낸다.
+        await export_broker_accounts(db)
+
+    return DeviceCredentialOut(username=device.mac, password=device.mqtt_password, issued=issued)
 
 
 # ── 변경 ─────────────────────────────────────────────────────────────────
@@ -207,9 +267,11 @@ async def create_device(db: AsyncSession, payload: DeviceCreate, scope: VillageS
         raise DeviceAlreadyExists(detail={"mac": payload.mac})
     await _validate_assignment(db, payload.village_id, payload.zone_id, scope)
 
-    device = Device(**payload.model_dump())
+    # 등록 = DB 기록 + 브로커 계정 발행, 한 묶음이다(레지스트리 사양 §3.6).
+    device = Device(**payload.model_dump(), mqtt_password=mqtt_accounts.generate_device_password())
     db.add(device)
     await db.flush()
+    await export_broker_accounts(db)
     return DeviceOut.from_row(device, online=False)
 
 
@@ -320,6 +382,9 @@ async def delete_device(
 
     await db.delete(device)
     await db.flush()
+    # 삭제 = DB 제거 + 브로커 계정 제거, 한 묶음(레지스트리 사양 §3.6).
+    # 도난·회수 실패 단말을 막는 유일한 수단이 이 계정 삭제다(계정 사양 §4.1).
+    await export_broker_accounts(db)
     await clear_device_configs(publisher, [mac], db)
 
 

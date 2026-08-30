@@ -38,6 +38,12 @@ class Device(Base):
 
     firmware_version: Mapped[str | None] = mapped_column(String(50))
 
+    #: 단말별 MQTT 계정 비밀번호 (username 은 MAC 그 자체라 열이 없다).
+    #: 평문 보관이 맞다 — 등록 화면에 보여줘서 시리얼로 단말에 넣어야 하는 값이다
+    #: (사양 §2.1). 브로커 쪽은 해시로 저장되므로 브로커가 뚫려도 평문이 안 나온다.
+    #: NULL = 계정 미발행. 브로커에는 붙는데 이 값이 없으면 「미등록*」(동기화 어긋남).
+    mqtt_password: Mapped[str | None] = mapped_column(String(16))
+
     #: 최근 STATUS payload 원본. 대시보드가 이력 테이블을 뒤지지 않게 하는 캐시다.
     last_status: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     #: 온라인 판정 기준. now() - last_seen_at < DEVICE_ONLINE_THRESHOLD_SEC 이면 온라인.

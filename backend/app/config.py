@@ -99,6 +99,13 @@ class Settings(BaseSettings):
     mqtt_password: str | None = None
     mqtt_tls: bool = False
     mqtt_topic_root: str = "iotradio"
+    #: 이행기 한시 — 단말 공유 계정(xwifi-device)의 비밀번호. 값이 있으면 passwd
+    #: 재생성 때 공유 계정을 유지한다. 전 단말이 단말별 계정으로 넘어가면 .env 에서
+    #: 지운다 → 다음 재생성 때 공유 계정이 사라지고 단말별 계정만 남는다.
+    mqtt_device_password: str | None = None
+    #: 단말별 MQTT 계정 passwd 파일을 내보낼 경로(공유 볼륨). 비우면 기능 꺼짐.
+    #: 운영 compose 가 /var/lib/iotradio/mqtt/passwd.generated 로 지정한다.
+    mosquitto_passwd_export: str | None = None
 
     # ── Icecast (Phase 4) ──────────────────────────────
     icecast_host: str = "localhost"

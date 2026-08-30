@@ -16,6 +16,7 @@ import type {
   BroadcastDetail,
   DashboardSummary,
   Device,
+  DeviceCredential,
   DeviceDetail,
   DeviceStatusFilter,
   FileBroadcastRequest,
@@ -238,6 +239,12 @@ export const api = {
         body: JSON.stringify(patch),
       }),
     remove: (mac: string) => request<void>(`/api/devices/${mac}`, { method: 'DELETE' }),
+    /** 계정 발행/조회 (super_admin). 이미 있으면 재사용, reissue 는 라인 재작업 전용 */
+    credential: (mac: string, reissue = false) =>
+      request<DeviceCredential>(`/api/devices/${mac}/credential`, {
+        method: 'POST',
+        body: JSON.stringify({ reissue }),
+      }),
   },
 
   dashboard: {
