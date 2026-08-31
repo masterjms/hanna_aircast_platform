@@ -167,6 +167,15 @@ jobs:
 
       - name: 마이그레이션 · 시드
         run: |
+          # up -d 는 컨테이너가 "뜨는 것"까지만 보장한다 — postgres 초기화가
+          # 끝나기 전에 마이그레이션이 붙으면 Connection refused 로 죽는다
+          # (2026-08-31 두 번 연속 실제 발생. 그전까지는 타이밍 운이었다).
+          for i in $(seq 1 30); do
+            if docker compose exec -T postgres pg_isready -U xwifi >/dev/null 2>&1; then
+              echo "postgres ready (${i})"; break
+            fi
+            sleep 2
+          done
           docker compose exec -T backend python -m alembic upgrade head
           docker compose exec -T backend python -m app.seed --demo
 
