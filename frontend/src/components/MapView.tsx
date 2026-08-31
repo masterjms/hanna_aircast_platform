@@ -54,6 +54,7 @@ export function MapView({
   const mapRef = useRef<any>(null);
   const mapsRef = useRef<any>(null);
   const entriesRef = useRef<Map<string, Entry>>(new Map());
+  const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const fittedRef = useRef(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -78,11 +79,20 @@ export function MapView({
         });
         // 빈 곳 클릭 = 선택 해제.
         maps.event.addListener(mapRef.current, 'click', () => onSelectRef.current(null));
+        // flex 레이아웃이 자리를 잡은 뒤나 창 크기가 바뀐 뒤에는 relayout 을
+        // 불러야 한다 — 안 부르면 지도의 일부 영역이 타일을 안 받아온 회색으로 남는다.
+        const observer = new ResizeObserver(() => {
+          mapRef.current?.relayout();
+        });
+        observer.observe(containerRef.current);
+        resizeObserverRef.current = observer;
         setReady(true);
       })
       .catch((e) => alive && setSdkError(e instanceof Error ? e.message : String(e)));
     return () => {
       alive = false;
+      resizeObserverRef.current?.disconnect();
+      resizeObserverRef.current = null;
     };
   }, [jsKey]);
 
@@ -131,11 +141,22 @@ export function MapView({
     }
 
     // 첫 데이터에서 한 번만 전체 핀이 보이게 맞춘다 — 폴링마다 하면 지도가 널뛴다.
+    // setBounds 전에 relayout — flex 레이아웃이 자리 잡기 전의 크기로 맞추면
+    // 실제 뷰포트와 어긋난 범위가 나온다.
     if (!fittedRef.current && pins.length > 0) {
       fittedRef.current = true;
+      map.relayout();
       const bounds = new maps.LatLngBounds();
       for (const pin of pins) bounds.extend(new maps.LatLng(pin.lat, pin.lng));
       map.setBounds(bounds);
+      // flex 레이아웃이 완전히 자리 잡은 뒤 범위를 한 번 더 맞춘다 — 생성 직후의
+      // 크기로 맞춘 범위는 실제 뷰포트와 약간 어긋날 수 있다.
+      // (개발 중 보였던 "절반 회색" 은 내장 브라우저 패널의 합성 아티팩트로
+      //  확인됨 — no-op 스크립트 평가만으로 풀렸다. 실제 Chrome 에는 없는 현상.)
+      setTimeout(() => {
+        map.relayout();
+        map.setBounds(bounds);
+      }, 300);
     }
   }, [ready, pins, selectedMac, hoveredMac]);
 

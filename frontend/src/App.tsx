@@ -15,7 +15,7 @@ import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
 import { useAuth } from './auth/AuthContext';
 import { DashboardPage } from './pages/DashboardPage';
-import { MapPage } from './pages/MapPage';
+import { EventsPage } from './pages/EventsPage';
 import { BroadcastPage } from './pages/BroadcastPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { FilesPage } from './pages/FilesPage';
@@ -26,7 +26,7 @@ import { VillagesPage } from './pages/VillagesPage';
 
 /** 상단바에 띄울 화면 이름. 경로가 유일한 출처라 페이지가 따로 알릴 필요가 없다. */
 const PAGE_TITLES: Record<string, [string, string]> = {
-  '/': ['전체 개요', '단말 상태와 진행 중인 방송'],
+  '/': ['전체 개요', '단말 상태와 지도'],
   '/devices': ['단말 관리', '등록 · 배정 · 상태'],
   '/broadcast': ['방송 제어', '실시간 · 파일 송출'],
   '/files': ['파일함', '업로드 · TTS'],
@@ -92,11 +92,10 @@ export function App() {
     <AppShell>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
-        <Route path="/map" element={<MapPage />} />
         <Route path="/devices" element={<DevicesPage />} />
         <Route path="/broadcast" element={<BroadcastPage />} />
         <Route path="/files" element={<FilesPage />} />
-        <Route path="/events" element={<ComingSoon title="이력" phase="Phase 6" />} />
+        <Route path="/events" element={<EventsPage />} />
         <Route path="/schedules" element={<ComingSoon title="스케줄" phase="Phase 6" />} />
         <Route path="/costs" element={<ComingSoon title="비용" phase="Phase 8" />} />
 
