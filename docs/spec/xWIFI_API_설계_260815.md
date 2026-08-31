@@ -37,12 +37,12 @@ STATUS 메시지를 백엔드가 구독하다가, devices 테이블에 없는 MA
 **시리얼 주입 프레임 (2026-08-31 확정)**: 두 계정 API 응답에는 `server_host`(`PUBLIC_BASE_URL`에서 스킴·포트를 뗀 호스트)가 함께 실린다. 등록 화면은 이것으로 아래 한 프레임을 만들어 USB(Web Serial, 115200) 또는 복사·붙여넣기로 단말에 넣는다.
 
 ```text
-@SERVER=hanna-aircast.co.kr\n@MQTTID=58e6c5f2cc74\n@MQTTPW=tA$UAcG2@END\n
+@SERVER=hanna-aircast.co.kr\n@MQTTID=58e6c5f2cc74\n@MQTTPW=tA$UAcG2\n@END\n
 ```
 
 (\n = 개행 `0x0A`. 위 한 줄이 실제로 나가는 바이트 전부다.)
 
-개행은 LF(`0x0A`) 고정이고 **비밀번호와 `@END` 사이에는 개행을 넣지 않는다.** 파서가 `@`로 명령을 구분하는데 `@MQTTPW`·`@PASSWORD`만은 값의 앞뒤 공백을 다듬지 않아(생산 사양 §4.4 「값 안의 공백」), `@MQTTPW=<값>\n@END`로 보내면 그 개행까지 비밀번호가 되어 브로커 인증이 조용히 실패한다. 값이 다듬어지는 `@SERVER`·`@MQTTID`는 개행으로 끊어도 안전하다. 구현은 `frontend/src/lib/serial.ts` 한 곳에 모아 두 화면이 갈라지지 않게 했다.
+개행은 LF(`0x0A`) 고정이고 **모든 명령 줄은 개행으로 끝난다 — `@END` 앞에도 개행이 필요하다** (2026-08-31 실물 단말 로그로 확정: 파서는 줄 단위로 먼저 자른 뒤 `@KEY=VALUE`를 읽는다). `@MQTTPW=<값>@END`처럼 한 줄에 붙이면 `@END`까지 비밀번호에 들어가 브로커 인증이 조용히 실패한다 — 신규 등록 첫 실물 테스트에서 실제로 발생했던 사고다. 구현은 `frontend/src/lib/serial.ts` 한 곳에 모아 두 화면이 갈라지지 않게 했다.
 
 ## 3. 마을 / 구역
 
