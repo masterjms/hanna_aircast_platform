@@ -6,8 +6,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.core.deps import Db, Publisher, Scope, SuperAdmin
 from app.core import mqtt_accounts
+from app.core.deps import Db, Publisher, Scope, SuperAdmin
 from app.modules.device import service
 from app.modules.system import service as system_service
 from app.mqtt.topics import normalize_mac

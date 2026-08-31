@@ -563,7 +563,9 @@ class TestMqttAccounts:
         monkeypatch.setattr(settings, "mqtt_username", "xwifi-server")
         monkeypatch.setattr(settings, "mqtt_password", "serverpw")
         monkeypatch.setattr(settings, "mqtt_device_password", "sharedpw")
-        content = mqtt_accounts.render_passwd({"58e6c5f2cc74": "aB3#x9._", "aabbccddeeff": "zZ9~q.-1"})
+        content = mqtt_accounts.render_passwd(
+            {"58e6c5f2cc74": "aB3#x9._", "aabbccddeeff": "zZ9~q.-1"}
+        )
         users = [line.split(":", 1)[0] for line in content.splitlines() if ":" in line]
         assert users == ["xwifi-server", "xwifi-device", "58e6c5f2cc74", "aabbccddeeff"]
         # 평문 비밀번호가 파일에 실리면 안 된다 — 해시만 나간다.

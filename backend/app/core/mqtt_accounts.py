@@ -68,11 +68,9 @@ def mosquitto_hash(password: str) -> str:
     """`$7$<iterations>$<salt b64>$<hash b64>` — mosquitto 의 PBKDF2-SHA512 형식."""
     salt = os.urandom(_SALT_BYTES)
     dk = hashlib.pbkdf2_hmac("sha512", password.encode(), salt, _HASH_ITERATIONS, dklen=64)
-    return "$7${}${}${}".format(
-        _HASH_ITERATIONS,
-        base64.b64encode(salt).decode(),
-        base64.b64encode(dk).decode(),
-    )
+    salt_b64 = base64.b64encode(salt).decode()
+    dk_b64 = base64.b64encode(dk).decode()
+    return f"$7${_HASH_ITERATIONS}${salt_b64}${dk_b64}"
 
 
 def render_passwd(device_accounts: dict[str, str]) -> str:
