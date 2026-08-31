@@ -87,9 +87,10 @@ class DeviceEvent(Base):
     event_id: Mapped[int | None] = mapped_column(
         ForeignKey("broadcast_events.id", ondelete="CASCADE"), index=True
     )
-    mac: Mapped[str] = mapped_column(
-        String(MAC_LENGTH), ForeignKey("devices.mac"), nullable=False, index=True
-    )
+    #: devices.mac 에 FK 를 걸지 않는다(0006 에서 제거). 이력은 불변 로그라
+    #: 단말을 삭제(도난·폐기)해도 과거 방송 기록은 남아야 한다 — FK 가 있으면
+    #: 이벤트 있는 단말의 삭제가 통째로 거부된다(실제 운영에서 500 발생).
+    mac: Mapped[str] = mapped_column(String(MAC_LENGTH), nullable=False, index=True)
     result_type: Mapped[str | None] = mapped_column(String(20))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     received_at: Mapped[dt.datetime] = mapped_column(
