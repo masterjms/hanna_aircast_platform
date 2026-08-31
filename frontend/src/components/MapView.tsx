@@ -4,9 +4,10 @@
  * 지도 설계 §4.6 의 경계선: 이 컴포넌트는 API·폴링·권한을 모른다. 받은 배열을
  * 그릴 뿐이다. 목록과의 연동도 부모의 selectedMac/hoveredMac 두 상태로만 만난다.
  *
- * 마커는 기본 핀 대신 CustomOverlay(div)를 쓴다 — 상태색(온라인/오프라인/무음)과
- * 선택 강조를 CSS 로 다루기 위해서다. 폴링마다 전부 재생성하지 않고 mac 별로
- * 재사용한다(§4.4 — 브라우저 부담의 관건).
+ * 마커는 표준 핀 모양(SVG 를 MarkerImage 로)이고 상태색만 다르다 —
+ * 온라인=초록, 무음(RECONNECTING)=주황, 오프라인=빨강, 위치 미입력(마을 좌표
+ * fallback)=반투명. 이름은 항상 그리지 않고 **호버/선택 시 툴팁**으로 보여준다.
+ * 폴링마다 마커를 재생성하지 않고 mac 별로 재사용한다(§4.4).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -17,22 +18,31 @@ import type { MapPin } from '../api/types';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 interface Entry {
-  overlay: any;
-  el: HTMLDivElement;
+  marker: any;
   pin: MapPin;
+  imageKey: string;
 }
 
-function pinClass(pin: MapPin, selected: boolean, hovered: boolean): string {
-  const status = !pin.online ? 'offline' : pin.live === 'RECONNECTING' ? 'warn' : 'ok';
-  return [
-    'map-pin',
-    `map-pin--${status}`,
-    pin.position_source !== 'device' ? 'map-pin--approx' : '',
-    selected ? 'map-pin--selected' : '',
-    hovered ? 'map-pin--hovered' : '',
-  ]
-    .filter(Boolean)
-    .join(' ');
+const PIN_W = 28;
+const PIN_H = 40;
+//: 선택된 핀은 한 단계 크게 — 색만으로는 어느 것을 골랐는지 안 보인다.
+const SELECTED_SCALE = 1.3;
+
+function statusColor(pin: MapPin): string {
+  if (!pin.online) return '#d9534f';
+  if (pin.live === 'RECONNECTING') return '#d99a2b';
+  return '#2f9e63';
+}
+
+/** 표준 물방울 핀. 이미지 파일 대신 SVG data URI — 색·투명도를 코드로 만든다. */
+function pinDataUri(color: string, opacity: number): string {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${PIN_W}" height="${PIN_H}" viewBox="0 0 28 40">` +
+    `<path d="M14 1C6.8 1 1 6.8 1 14c0 9.7 13 25 13 25s13-15.3 13-25C27 6.8 21.2 1 14 1z"` +
+    ` fill="${color}" fill-opacity="${opacity}" stroke="#ffffff" stroke-width="1.5"/>` +
+    `<circle cx="14" cy="14" r="4.5" fill="#ffffff" fill-opacity="${Math.min(1, opacity + 0.2)}"/>` +
+    `</svg>`;
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
 
 export function MapView({
@@ -54,16 +64,39 @@ export function MapView({
   const mapRef = useRef<any>(null);
   const mapsRef = useRef<any>(null);
   const entriesRef = useRef<Map<string, Entry>>(new Map());
+  const imageCacheRef = useRef<Map<string, any>>(new Map());
+  const tooltipRef = useRef<any>(null);
+  const tooltipElRef = useRef<HTMLDivElement | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const fittedRef = useRef(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
 
-  // 콜백을 ref 로 — 오버레이 DOM 리스너가 최신 핸들러를 보게 하면서 재부착은 피한다.
+  // 콜백을 ref 로 — 마커 리스너가 최신 핸들러를 보게 하면서 재부착은 피한다.
   const onSelectRef = useRef(onSelect);
   const onHoverRef = useRef(onHover);
   onSelectRef.current = onSelect;
   onHoverRef.current = onHover;
+
+  /** 상태·투명도·크기별 MarkerImage. 같은 조합은 캐시해서 재사용한다. */
+  const markerImage = (pin: MapPin, selected: boolean) => {
+    const maps = mapsRef.current;
+    const color = statusColor(pin);
+    const opacity = pin.position_source === 'device' ? 1 : 0.55;
+    const scale = selected ? SELECTED_SCALE : 1;
+    const key = `${color}|${opacity}|${scale}`;
+    let img = imageCacheRef.current.get(key);
+    if (!img) {
+      const w = Math.round(PIN_W * scale);
+      const h = Math.round(PIN_H * scale);
+      img = new maps.MarkerImage(pinDataUri(color, opacity), new maps.Size(w, h), {
+        // 핀 끝이 좌표를 가리키게 — 바닥 중앙 기준.
+        offset: new maps.Point(w / 2, h),
+      });
+      imageCacheRef.current.set(key, img);
+    }
+    return { img, key };
+  };
 
   // 지도 생성 — 1회.
   useEffect(() => {
@@ -79,11 +112,19 @@ export function MapView({
         });
         // 빈 곳 클릭 = 선택 해제.
         maps.event.addListener(mapRef.current, 'click', () => onSelectRef.current(null));
-        // flex 레이아웃이 자리를 잡은 뒤나 창 크기가 바뀐 뒤에는 relayout 을
-        // 불러야 한다 — 안 부르면 지도의 일부 영역이 타일을 안 받아온 회색으로 남는다.
-        const observer = new ResizeObserver(() => {
-          mapRef.current?.relayout();
+        // 이름 툴팁 — 호버/선택된 마커 위에 하나만 띄워 재사용한다.
+        const el = document.createElement('div');
+        el.className = 'map-tooltip';
+        tooltipElRef.current = el;
+        tooltipRef.current = new maps.CustomOverlay({
+          content: el,
+          yAnchor: 1.15, // 핀 머리 위
+          zIndex: 40,
+          clickable: false,
         });
+        // flex 레이아웃이 자리를 잡거나 창 크기가 바뀌면 relayout — 안 하면
+        // 지도 일부가 타일을 안 받아온 회색으로 남는다.
+        const observer = new ResizeObserver(() => mapRef.current?.relayout());
         observer.observe(containerRef.current);
         resizeObserverRef.current = observer;
         setReady(true);
@@ -105,60 +146,76 @@ export function MapView({
     const seen = new Set<string>();
     for (const pin of pins) {
       seen.add(pin.mac);
+      const selected = pin.mac === selectedMac;
+      const hovered = pin.mac === hoveredMac;
       let entry = entriesRef.current.get(pin.mac);
       if (!entry) {
-        const el = document.createElement('div');
-        el.addEventListener('click', (e) => {
-          e.stopPropagation();
-          onSelectRef.current(pin.mac);
-        });
-        el.addEventListener('mouseenter', () => onHoverRef.current(pin.mac));
-        el.addEventListener('mouseleave', () => onHoverRef.current(null));
-        const overlay = new maps.CustomOverlay({
+        const { img, key } = markerImage(pin, selected);
+        const marker = new maps.Marker({
           position: new maps.LatLng(pin.lat, pin.lng),
-          content: el,
-          yAnchor: 0.5,
-          clickable: true,
+          image: img,
+          map,
         });
-        overlay.setMap(map);
-        entry = { overlay, el, pin };
+        maps.event.addListener(marker, 'click', () => onSelectRef.current(pin.mac));
+        maps.event.addListener(marker, 'mouseover', () => onHoverRef.current(pin.mac));
+        maps.event.addListener(marker, 'mouseout', () => onHoverRef.current(null));
+        entry = { marker, pin, imageKey: key };
         entriesRef.current.set(pin.mac, entry);
-      } else if (entry.pin.lat !== pin.lat || entry.pin.lng !== pin.lng) {
-        entry.overlay.setPosition(new maps.LatLng(pin.lat, pin.lng));
+      } else {
+        if (entry.pin.lat !== pin.lat || entry.pin.lng !== pin.lng) {
+          entry.marker.setPosition(new maps.LatLng(pin.lat, pin.lng));
+        }
+        const { img, key } = markerImage(pin, selected);
+        // setImage 는 이미지가 실제로 바뀔 때만 — 폴링마다 부르면 깜빡인다.
+        if (key !== entry.imageKey) {
+          entry.marker.setImage(img);
+          entry.imageKey = key;
+        }
       }
       entry.pin = pin;
-      entry.el.className = pinClass(pin, pin.mac === selectedMac, pin.mac === hoveredMac);
-      entry.el.title = `${pin.label ?? pin.mac} · ${pin.village_name ?? '미배정'}${
-        pin.position_source !== 'device' ? ' (위치 미입력 — 마을 좌표)' : ''
-      }`;
-      entry.el.textContent = pin.label ?? pin.mac.slice(-4);
+      entry.marker.setZIndex(selected ? 30 : hovered ? 20 : 1);
     }
     for (const [mac, entry] of entriesRef.current) {
       if (!seen.has(mac)) {
-        entry.overlay.setMap(null);
+        entry.marker.setMap(null);
         entriesRef.current.delete(mac);
       }
     }
 
     // 첫 데이터에서 한 번만 전체 핀이 보이게 맞춘다 — 폴링마다 하면 지도가 널뛴다.
-    // setBounds 전에 relayout — flex 레이아웃이 자리 잡기 전의 크기로 맞추면
-    // 실제 뷰포트와 어긋난 범위가 나온다.
     if (!fittedRef.current && pins.length > 0) {
       fittedRef.current = true;
       map.relayout();
       const bounds = new maps.LatLngBounds();
       for (const pin of pins) bounds.extend(new maps.LatLng(pin.lat, pin.lng));
       map.setBounds(bounds);
-      // flex 레이아웃이 완전히 자리 잡은 뒤 범위를 한 번 더 맞춘다 — 생성 직후의
-      // 크기로 맞춘 범위는 실제 뷰포트와 약간 어긋날 수 있다.
-      // (개발 중 보였던 "절반 회색" 은 내장 브라우저 패널의 합성 아티팩트로
-      //  확인됨 — no-op 스크립트 평가만으로 풀렸다. 실제 Chrome 에는 없는 현상.)
+      // flex 레이아웃이 완전히 자리 잡은 뒤 범위를 한 번 더 맞춘다.
       setTimeout(() => {
         map.relayout();
         map.setBounds(bounds);
       }, 300);
     }
   }, [ready, pins, selectedMac, hoveredMac]);
+
+  // 이름 툴팁 — 호버 우선, 없으면 선택된 마커 위에.
+  useEffect(() => {
+    const maps = mapsRef.current;
+    const map = mapRef.current;
+    const tooltip = tooltipRef.current;
+    const el = tooltipElRef.current;
+    if (!ready || !maps || !map || !tooltip || !el) return;
+    const target = hoveredMac ?? selectedMac;
+    const entry = target ? entriesRef.current.get(target) : undefined;
+    if (!entry) {
+      tooltip.setMap(null);
+      return;
+    }
+    const { pin } = entry;
+    el.textContent =
+      (pin.label || pin.mac) + (pin.position_source !== 'device' ? ' · 위치 미입력' : '');
+    tooltip.setPosition(new maps.LatLng(pin.lat, pin.lng));
+    tooltip.setMap(map);
+  }, [ready, hoveredMac, selectedMac, pins]);
 
   // 목록에서 선택하면 그 마커로 이동.
   useEffect(() => {

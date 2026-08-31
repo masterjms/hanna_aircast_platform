@@ -1381,31 +1381,18 @@ tr.is-selected td {
   border-radius: var(--r-sm);
 }
 
-/* ── 지도 마커 (MapView 의 CustomOverlay) ─────────────────────────────────
-   기본 핀 이미지 대신 div 를 쓴다 — 상태색·선택 강조를 CSS 로 다루기 위해서.
-   approx = 단말 위치 미입력이라 마을 좌표에 찍힌 것("이 근처 어딘가"). */
-.map-pin {
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 700;
-  color: #fff;
-  background: var(--ok-text);
-  border: 2px solid rgba(255, 255, 255, 0.9);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
-  cursor: pointer;
+/* ── 지도 (MapView) ──────────────────────────────────────────────────────
+   마커는 SVG 핀(MarkerImage)이라 CSS 가 없다. 여기는 호버/선택 시 뜨는
+   이름 툴팁뿐이다 — 카카오 샘플의 인포윈도우 역할. */
+.map-tooltip {
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border, #333);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   white-space: nowrap;
-  user-select: none;
-}
-.map-pin--ok      { background: #2f9e63; }
-.map-pin--warn    { background: #d99a2b; }
-.map-pin--offline { background: #d9534f; }
-.map-pin--approx  { opacity: 0.75; border-style: dashed; }
-.map-pin--hovered { transform: scale(1.12); z-index: 20; position: relative; }
-.map-pin--selected {
-  outline: 3px solid var(--accent);
-  transform: scale(1.12);
-  z-index: 30;
-  position: relative;
-  opacity: 1;
+  pointer-events: none;
 }

@@ -281,6 +281,10 @@ export function RegisterDeviceDialog({
     if (portRef.current) {
       try {
         await writeSerial(portRef.current, rebootFrame());
+        // ⚠ 쓰고 바로 닫으면 @OFF 가 OS 전송 버퍼에서 나가기 전에 포트가 닫혀
+        //   명령이 유실될 수 있다(실물에서 재부팅 안 되는 현상으로 확인).
+        //   주입 때는 응답을 읽는 시간이 있어 문제가 안 드러났다.
+        await new Promise((r) => setTimeout(r, 700));
         setTestMsg('재부팅 명령(@OFF)을 보냈습니다 — 서버 연결을 기다립니다 (보통 10초 안팎)…');
         // 재부팅되면 포트가 죽는다 — 정리해 둔다.
         await portRef.current.close().catch(() => undefined);

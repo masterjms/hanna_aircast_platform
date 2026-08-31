@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react';
 
 import { api } from '../api/client';
 import { AddressSearchField } from '../components/AddressSearchField';
+import { LocationPickerMap } from '../components/LocationPickerMap';
 import { Modal } from '../components/Modal';
 import { RegisterDeviceDialog } from '../components/RegisterDeviceDialog';
 import { provisioningFrame } from '../lib/serial';
@@ -77,6 +78,20 @@ function AssignDialog({
     lng: device.lng,
   });
   const [addressDetail, setAddressDetail] = useState(device.address_detail ?? '');
+  //: 위치 보정 미니맵용 JS 키. 좌표가 있을 때만 한 번 받아온다.
+  const [jsKey, setJsKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (loc.lat === null || jsKey !== null) return;
+    let alive = true;
+    api.dashboard
+      .map()
+      .then((d) => alive && setJsKey(d.kakao_js_key))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [loc.lat, jsKey]);
 
   // 구역은 마을에 딸린 값이라 마을이 바뀌면 다시 불러온다.
   useEffect(() => {
@@ -215,6 +230,16 @@ function AssignDialog({
             지우기
           </button>
         </p>
+      )}
+      {/* 지오코딩은 지번 대표점까지라(아파트 단지 = 한 점) 마커가 동 단위로
+          어긋난다 — 지도에서 끌어 보정하는 것이 정석이다. */}
+      {loc.lat !== null && loc.lng !== null && jsKey && (
+        <LocationPickerMap
+          jsKey={jsKey}
+          lat={loc.lat}
+          lng={loc.lng}
+          onChange={(lat, lng) => setLoc((prev) => ({ ...prev, lat, lng }))}
+        />
       )}
       <div className="field">
         <label htmlFor="a-detail">동/호 (선택 — 사람이 치는 유일한 주소 항목)</label>
