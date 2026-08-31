@@ -337,17 +337,101 @@ function CredentialDialog({ device, onClose }: { device: Device; onClose: () => 
   );
 }
 
+/** 단말 삭제 — DB 행 + 브로커 계정 + CONFIG retain 을 한 묶음으로 지운다.
+ *
+ * 도난·회수 실패 단말을 막는 유일한 수단이 이 삭제다(계정 사양 §4.1).
+ * 실수 방지로 MAC 끝 4자리를 직접 치게 한다(등록 흐름 사양 §D3 의 안전장치).
+ *
+ * ⚠ 이행기 한정: 공유 계정(xwifi-device)이 살아 있는 동안은, 삭제해도 단말이
+ *   계속 접속해 있으면 다음 STATUS 로 미등록 행이 다시 생긴다. 단말 전원을
+ *   끄고 지우거나, 공유 계정 폐기 후에는 계정 삭제만으로 완전히 끊긴다.
+ */
+function DeleteDialog({
+  device,
+  onClose,
+  onDeleted,
+}: {
+  device: Device;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [confirm, setConfirm] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const last4 = device.mac.slice(-4);
+
+  const remove = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.devices.remove(device.mac);
+      onDeleted();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '삭제에 실패했습니다.');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="단말 삭제"
+      onClose={onClose}
+      footer={
+        <>
+          <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>
+            취소
+          </button>
+          <button
+            type="button"
+            className="btn btn--danger"
+            onClick={remove}
+            disabled={busy || confirm.trim().toLowerCase() !== last4}
+          >
+            {busy ? '삭제 중…' : '영구 삭제'}
+          </button>
+        </>
+      }
+    >
+      <p className="mono dim" style={{ marginTop: 0 }}>
+        {device.mac} {device.label && `(${device.label})`}
+      </p>
+      <p className="hint hint--warn">
+        DB 기록·MQTT 계정·마을 배정이 함께 삭제되며 되돌릴 수 없습니다. 이 단말은 더 이상
+        브로커에 접속할 수 없게 됩니다(도난·폐기 단말 차단 수단). 다시 쓰려면 신규 단말
+        등록부터 다시 해야 합니다.
+      </p>
+      <div className="field">
+        <label htmlFor="del-confirm">
+          확인을 위해 MAC 끝 4자리(<span className="mono">{last4}</span>)를 입력하세요
+        </label>
+        <input
+          id="del-confirm"
+          className="mono"
+          value={confirm}
+          maxLength={4}
+          onChange={(e) => setConfirm(e.target.value)}
+        />
+      </div>
+      {error && <p className="hint hint--warn">{error}</p>}
+    </Modal>
+  );
+}
+
 function DeviceTable({
   devices,
   showVillage,
   onAssign,
   onCredential,
+  onDelete,
 }: {
   devices: Device[];
   showVillage: boolean;
   onAssign: (d: Device) => void;
   /** super_admin 에게만 넘어온다 — 비밀번호가 응답에 실리는 기능이라서 */
   onCredential?: (d: Device) => void;
+  /** super_admin 전용 — 계정 삭제(차단)가 같이 일어나는 파괴적 작업 */
+  onDelete?: (d: Device) => void;
 }) {
   if (devices.length === 0) {
     return <div className="empty">조건에 맞는 단말이 없습니다.</div>;
@@ -418,6 +502,15 @@ function DeviceTable({
                 <button type="button" className="btn btn--sm" onClick={() => onAssign(d)}>
                   배정
                 </button>
+                {onDelete && (
+                  <button
+                    type="button"
+                    className="btn btn--sm btn--ghost btn--danger"
+                    onClick={() => onDelete(d)}
+                  >
+                    삭제
+                  </button>
+                )}
               </div>
             </td>
           </tr>
@@ -434,6 +527,7 @@ export function DevicesPage() {
   const [search, setSearch] = useState('');
   const [assigning, setAssigning] = useState<Device | null>(null);
   const [credentialFor, setCredentialFor] = useState<Device | null>(null);
+  const [deleting, setDeleting] = useState<Device | null>(null);
   const [registering, setRegistering] = useState(false);
 
   const villages = usePolling(() => api.villages.list(), 60_000);
@@ -524,6 +618,7 @@ export function DevicesPage() {
             showVillage={(user?.villages.length ?? 0) > 1}
             onAssign={setAssigning}
             onCredential={isSuperAdmin ? setCredentialFor : undefined}
+            onDelete={isSuperAdmin ? setDeleting : undefined}
           />
         )}
       </div>
@@ -544,9 +639,21 @@ export function DevicesPage() {
               showVillage={false}
               onAssign={setAssigning}
               onCredential={isSuperAdmin ? setCredentialFor : undefined}
+              onDelete={isSuperAdmin ? setDeleting : undefined}
             />
           </div>
         </section>
+      )}
+
+      {deleting && (
+        <DeleteDialog
+          device={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={() => {
+            devices.reload();
+            unassigned.reload();
+          }}
+        />
       )}
 
       {registering && (
