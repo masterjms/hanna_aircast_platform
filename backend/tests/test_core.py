@@ -534,14 +534,21 @@ class TestMqttAccounts:
         for _ in range(200):
             pw = mqtt_accounts.generate_device_password()
             assert len(pw) == 8
-            assert all(c in mqtt_accounts.PASSWORD_CHARSET for c in pw)
+            assert all(c in mqtt_accounts.GENERATION_CHARSET for c in pw)
 
     def test_charset_excludes_serial_breakers(self):
-        """`@` 는 시리얼 @END 충돌, `!` 는 서버가 쓰지 않기로 확정(사양 §1)."""
+        """`@` 는 시리얼 @END 충돌, `!` 는 서버가 쓰지 않기로 확정(사양 §1).
+
+        생성에서는 `=` 도 뺀다 — `@KEY=VALUE` 파서가 값 안의 `=` 를 어디서
+        자르느냐에 따라 비밀번호가 조용히 잘릴 수 있다(2026-08-31).
+        """
         from app.core import mqtt_accounts
 
         assert "@" not in mqtt_accounts.PASSWORD_CHARSET
         assert "!" not in mqtt_accounts.PASSWORD_CHARSET
+        assert "=" not in mqtt_accounts.GENERATION_CHARSET
+        # 검증 집합은 사양 원문 그대로 — 기존 발급분(= 포함)을 거부하면 안 된다.
+        assert "=" in mqtt_accounts.PASSWORD_CHARSET
 
     def test_hash_is_mosquitto_pbkdf2_format(self):
         """$7$101$<salt>$<hash> — eclipse-mosquitto:2 인증 실측 통과 형식."""

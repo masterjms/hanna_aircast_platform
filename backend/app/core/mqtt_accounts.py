@@ -30,7 +30,13 @@ log = logging.getLogger(__name__)
 
 #: 사양 §1 확정 문자 집합. `@` 는 시리얼 프로토콜의 `@END` 와 충돌해서 금지,
 #: `!` 는 단말 키보드에 있지만 서버는 쓰지 않기로 확정됐다.
+#: 입력 검증(등록 payload)은 이 집합 기준이다.
 PASSWORD_CHARSET = string.ascii_letters + string.digits + "#$%^&*-_+=?.~"
+#: 생성은 `=` 를 추가로 뺀다("조합은 서버가 정한다" — 사양 §1). 시리얼이
+#: `@KEY=VALUE` 형식이라 값 안의 `=` 는 단말 파서가 어디서 자르느냐에 따라
+#: 비밀번호가 조용히 잘려 들어갈 수 있다 — @GET 은 SET/NONE 만 답해서 주입은
+#: 성공처럼 보이고 브로커 인증만 실패한다(2026-08-31 실물 등록 테스트에서 의심 사례).
+GENERATION_CHARSET = PASSWORD_CHARSET.replace("=", "")
 #: 사양 §1 — 단말 화면에서 버튼으로 한 글자씩 고를 수 있어야 해서 8자 고정.
 PASSWORD_LENGTH = 8
 
@@ -44,7 +50,7 @@ _SALT_BYTES = 12
 
 
 def generate_device_password() -> str:
-    return "".join(secrets.choice(PASSWORD_CHARSET) for _ in range(PASSWORD_LENGTH))
+    return "".join(secrets.choice(GENERATION_CHARSET) for _ in range(PASSWORD_LENGTH))
 
 
 def server_host() -> str:
