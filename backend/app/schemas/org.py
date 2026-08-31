@@ -16,6 +16,11 @@ class VillageCreate(BaseModel):
     sido: str | None = Field(default=None, max_length=50)
     sigungu: str | None = Field(default=None, max_length=50)
     address_detail: str | None = Field(default=None, max_length=255)
+    # 아래 넷은 주소 검색(GET /api/geo/address) 결과에서 그대로 옮겨 넣는다 —
+    # 사람이 치지 않는다. b_code 는 리 경계 도형과의 조인 키(지도 설계 §2).
+    b_code: str | None = Field(default=None, min_length=10, max_length=10, pattern=r"^\d{10}$")
+    road_address: str | None = Field(default=None, max_length=255)
+    jibun_address: str | None = Field(default=None, max_length=255)
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
 
@@ -25,6 +30,9 @@ class VillageUpdate(BaseModel):
     sido: str | None = Field(default=None, max_length=50)
     sigungu: str | None = Field(default=None, max_length=50)
     address_detail: str | None = Field(default=None, max_length=255)
+    b_code: str | None = Field(default=None, min_length=10, max_length=10, pattern=r"^\d{10}$")
+    road_address: str | None = Field(default=None, max_length=255)
+    jibun_address: str | None = Field(default=None, max_length=255)
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
 
@@ -35,6 +43,9 @@ class VillageOut(ApiModel):
     sido: str | None
     sigungu: str | None
     address_detail: str | None
+    b_code: str | None = None
+    road_address: str | None = None
+    jibun_address: str | None = None
     lat: float | None
     lng: float | None
     created_at: dt.datetime

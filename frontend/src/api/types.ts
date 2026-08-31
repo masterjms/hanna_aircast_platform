@@ -58,6 +58,10 @@ export interface Village extends VillageBrief {
   sido: string | null;
   sigungu: string | null;
   address_detail: string | null;
+  /** 법정동코드 10자리(리까지) — 주소 검색이 채움. 리 경계 도형과의 조인 키 */
+  b_code: string | null;
+  road_address: string | null;
+  jibun_address: string | null;
   lat: number | null;
   lng: number | null;
   created_at: string;
@@ -106,6 +110,12 @@ export interface Device {
   p4_version: string | null;
   c6_model: string | null;
   c6_version: string | null;
+  /** 설치 위치. 전부 null 이면 지도가 마을 좌표로 fallback */
+  road_address: string | null;
+  jibun_address: string | null;
+  address_detail: string | null;
+  lat: number | null;
+  lng: number | null;
 }
 
 /** 신규 단말 등록용 사전 발급 비밀번호 — 등록 요청의 mqtt_password 로 되돌려 보내야 확정 */
@@ -218,8 +228,56 @@ export interface VillageInput {
   sido?: string | null;
   sigungu?: string | null;
   address_detail?: string | null;
+  /** 아래 넷은 주소 검색 결과에서 그대로 옮겨 넣는다 — 사람이 치지 않는다 */
+  b_code?: string | null;
+  road_address?: string | null;
+  jibun_address?: string | null;
   lat?: number | null;
   lng?: number | null;
+}
+
+/** GET /api/geo/address 결과 한 건 — 고르면 그대로 DB 로 들어간다 */
+export interface AddressResult {
+  address_name: string;
+  road_address: string | null;
+  jibun_address: string | null;
+  /** 법정동코드 10자리 */
+  b_code: string | null;
+  lat: number;
+  lng: number;
+}
+
+// ── 지도 (GET /api/dashboard/map) ────────────────────────────────────────
+export interface MapPin {
+  mac: string;
+  label: string | null;
+  lat: number;
+  lng: number;
+  online: boolean;
+  village_id: number | null;
+  village_name: string | null;
+  /** OFF/PLAYING/RECONNECTING — RECONNECTING = 방송 중 무음 */
+  live: string | null;
+  marker: 'normal' | 'offline' | 'unassigned';
+  /** 좌표 출처. village = 마을 좌표 fallback("이 근처 어딘가") */
+  position_source: 'device' | 'zone' | 'village';
+}
+
+export interface MapVillage {
+  id: number;
+  name: string;
+  b_code: string | null;
+  lat: number | null;
+  lng: number | null;
+}
+
+export interface MapData {
+  /** 지도 SDK 로드용 JS 키. null 이면 서버 .env 미설정 */
+  kakao_js_key: string | null;
+  villages: MapVillage[];
+  pins: MapPin[];
+  /** 좌표가 전혀 없어 지도에 못 찍는 단말 MAC */
+  missing_location: string[];
 }
 
 export interface ZoneInput {

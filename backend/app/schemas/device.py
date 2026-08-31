@@ -63,6 +63,13 @@ class DeviceUpdate(BaseModel):
     label: str | None = Field(default=None, max_length=100)
     village_id: int | None = None
     zone_id: int | None = None
+    #: 설치 위치 — 주소 검색 결과에서 옮겨 넣는다. 동/호(address_detail)만 수동.
+    #: 전부 선택 — 비우면 지도가 마을 좌표로 fallback 한다(지도 설계 §2.2).
+    road_address: str | None = Field(default=None, max_length=255)
+    jibun_address: str | None = Field(default=None, max_length=255)
+    address_detail: str | None = Field(default=None, max_length=100)
+    lat: float | None = Field(default=None, ge=-90, le=90)
+    lng: float | None = Field(default=None, ge=-180, le=180)
 
 
 class DeviceOut(ApiModel):
@@ -78,6 +85,12 @@ class DeviceOut(ApiModel):
     p4_version: str | None = None
     c6_model: str | None = None
     c6_version: str | None = None
+    #: 설치 위치. NULL = 미입력(지도는 마을 좌표로 fallback).
+    road_address: str | None = None
+    jibun_address: str | None = None
+    address_detail: str | None = None
+    lat: float | None = None
+    lng: float | None = None
     last_seen_at: dt.datetime | None
     registered_at: dt.datetime
 
@@ -118,6 +131,11 @@ class DeviceOut(ApiModel):
             p4_version=device.p4_version,
             c6_model=device.c6_model,
             c6_version=device.c6_version,
+            road_address=device.road_address,
+            jibun_address=device.jibun_address,
+            address_detail=device.address_detail,
+            lat=device.lat,
+            lng=device.lng,
             last_seen_at=device.last_seen_at,
             registered_at=device.registered_at,
             online=online,

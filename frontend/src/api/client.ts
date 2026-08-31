@@ -10,6 +10,7 @@
  */
 
 import type {
+  AddressResult,
   ApiErrorBody,
   ApiErrorCode,
   AudioFile,
@@ -24,6 +25,7 @@ import type {
   FileBroadcastRequest,
   LiveBroadcastRequest,
   LoginResponse,
+  MapData,
   Me,
   SystemConfig,
   TtsRequest,
@@ -240,7 +242,16 @@ export const api = {
     get: (mac: string) => request<DeviceDetail>(`/api/devices/${mac}`),
     update: (
       mac: string,
-      patch: { label?: string | null; village_id?: number | null; zone_id?: number | null },
+      patch: {
+        label?: string | null;
+        village_id?: number | null;
+        zone_id?: number | null;
+        road_address?: string | null;
+        jibun_address?: string | null;
+        address_detail?: string | null;
+        lat?: number | null;
+        lng?: number | null;
+      },
     ) =>
       request<DeviceDetail>(`/api/devices/${mac}`, {
         method: 'PATCH',
@@ -257,6 +268,13 @@ export const api = {
 
   dashboard: {
     summary: () => request<DashboardSummary>('/api/dashboard/summary'),
+    map: () => request<MapData>('/api/dashboard/map'),
+  },
+
+  geo: {
+    /** 주소 검색 (카카오 프록시). 리 이름만 넣어도 리 중심 좌표가 나온다 */
+    searchAddress: (q: string) =>
+      request<AddressResult[]>(`/api/geo/address?q=${encodeURIComponent(q)}`),
   },
 
   config: {

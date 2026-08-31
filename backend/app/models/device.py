@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,6 +45,15 @@ class Device(Base):
     p4_version: Mapped[str | None] = mapped_column(String(50))
     c6_model: Mapped[str | None] = mapped_column(String(50))
     c6_version: Mapped[str | None] = mapped_column(String(50))
+
+    #: 설치 위치. 전부 선택 입력 — 비어 있으면 지도가 마을 좌표로 대신 찍는다
+    #: (fallback, 지도 설계 §2.2. 마을 값을 복사해 두지 않는다 — 사본이 썩는다).
+    #: 주소 검색이 도로명·지번·좌표를 채우고, 동/호(address_detail)만 사람이 친다.
+    road_address: Mapped[str | None] = mapped_column(String(255))
+    jibun_address: Mapped[str | None] = mapped_column(String(255))
+    address_detail: Mapped[str | None] = mapped_column(String(100))
+    lat: Mapped[float | None] = mapped_column(Float)
+    lng: Mapped[float | None] = mapped_column(Float)
 
     #: 단말별 MQTT 계정 비밀번호 (username 은 MAC 그 자체라 열이 없다).
     #: 평문 보관이 맞다 — 등록 화면에 보여줘서 시리얼로 단말에 넣어야 하는 값이다

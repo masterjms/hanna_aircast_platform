@@ -35,6 +35,14 @@ class Village(Base):
     sido: Mapped[str | None] = mapped_column(String(50))
     sigungu: Mapped[str | None] = mapped_column(String(50))
     address_detail: Mapped[str | None] = mapped_column(String(255))
+    #: 법정동코드 10자리(리까지). 주소 검색이 자동으로 채우고, 지도의 리 경계
+    #: 도형(TL_SCCO_LI)과의 조인 키다. village_id(방송 그룹)와는 무관한 속성.
+    #: ⚠ 행정구역 개편으로 코드가 바뀔 수 있다(2026년 전남광주 통합 실측) —
+    #:   바뀌면 이 속성만 갱신하고 village_id 는 그대로 둔다(지도 설계 §1.3).
+    b_code: Mapped[str | None] = mapped_column(String(10))
+    #: 대표 주소. 주소 검색이 도로명·지번을 같이 채운다 — 농촌은 두 표기가 병용된다.
+    road_address: Mapped[str | None] = mapped_column(String(255))
+    jibun_address: Mapped[str | None] = mapped_column(String(255))
     lat: Mapped[float | None] = mapped_column(Float)
     lng: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[dt.datetime] = mapped_column(

@@ -344,6 +344,11 @@ async def update_device(
     village_changed = new_village != device.village_id
     if "label" in data:
         device.label = data["label"]
+    # 설치 위치 — 보낸 필드만 반영(생략=미변경, null=지우기). 지우면 지도는
+    # 마을 좌표 fallback 으로 돌아간다.
+    for field in ("road_address", "jibun_address", "address_detail", "lat", "lng"):
+        if field in data:
+            setattr(device, field, data[field])
     device.village_id = new_village
     device.zone_id = new_zone
     await db.flush()

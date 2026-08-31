@@ -15,6 +15,7 @@ import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
 import { useAuth } from './auth/AuthContext';
 import { DashboardPage } from './pages/DashboardPage';
+import { MapPage } from './pages/MapPage';
 import { BroadcastPage } from './pages/BroadcastPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { FilesPage } from './pages/FilesPage';
@@ -91,6 +92,7 @@ export function App() {
     <AppShell>
       <Routes>
         <Route path="/" element={<DashboardPage />} />
+        <Route path="/map" element={<MapPage />} />
         <Route path="/devices" element={<DevicesPage />} />
         <Route path="/broadcast" element={<BroadcastPage />} />
         <Route path="/files" element={<FilesPage />} />

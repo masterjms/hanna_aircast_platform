@@ -14,9 +14,10 @@ from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import Select, false, func, not_, or_, select
+from sqlalchemy import Select, false, not_, or_, select
 from sqlalchemy.orm import aliased
 
+from app.config import settings
 from app.core.deps import Db, Scope
 from app.core.presence import is_online, online_clause, online_cutoff
 from app.core.scope import VillageScope
@@ -79,14 +80,34 @@ class MapPin(BaseModel):
     lat: float
     lng: float
     online: bool
+    village_id: int | None
     village_name: str | None
+    #: 라이브 수신 상태 — OFF/PLAYING/RECONNECTING. RECONNECTING = 방송 중 무음.
+    live: str | None
     #: normal | offline | unassigned. 방송중 상태는 Phase 3 에서 붙는다.
     marker: str
+    #: 좌표 출처 — device(자체 입력) | zone | village(fallback).
+    #: fallback 마커는 "이 근처 어딘가"라는 뜻이라 화면이 구분해 그린다.
+    position_source: str
+
+
+class MapVillage(BaseModel):
+    """지도 위 마을 라벨·경계용. 경계 도형은 b_code 로 정적 GeoJSON 과 조인한다(4차)."""
+
+    id: int
+    name: str
+    b_code: str | None
+    lat: float | None
+    lng: float | None
 
 
 class MapOut(BaseModel):
+    #: 지도 SDK 로드용 JavaScript 키. 공개 키(도메인 등록으로 보호)라 응답에 실어도 된다.
+    #: 미설정이면 null — 화면이 "키 설정 필요" 안내를 띄운다.
+    kakao_js_key: str | None
+    villages: list[MapVillage]
     pins: list[MapPin]
-    #: 좌표가 없어 지도에 못 찍는 단말. 화면 설계상 별도 목록으로 보여준다.
+    #: 좌표가 전혀 없어(자체·구역·마을 모두) 지도에 못 찍는 단말.
     missing_location: list[str]
 
 
@@ -187,10 +208,10 @@ async def summary(db: Db, scope: Scope) -> SummaryOut:
 
 @router.get("/map", response_model=MapOut)
 async def device_map(db: Db, scope: Scope) -> MapOut:
-    """단말 지도.
+    """단말 지도 + 목록 패널 데이터.
 
-    devices 테이블에는 좌표가 없다. 구역 좌표를 우선 쓰고, 없으면 마을 좌표로 떨어진다.
-    둘 다 없으면 지도에 못 찍으므로 missing_location 으로 따로 넘긴다.
+    좌표 fallback 은 자체 입력 → 구역 → 마을 순이다(지도 설계 §2.2 — 마을 값을
+    복사하지 않고 조회 시점에 대신 쓴다). 전부 없으면 missing_location.
     """
     village = aliased(Village)
     zone = aliased(Zone)
@@ -200,9 +221,14 @@ async def device_map(db: Db, scope: Scope) -> MapOut:
             Device.label,
             Device.last_seen_at,
             Device.last_status,
+            Device.village_id,
             village.name,
-            func.coalesce(zone.lat, village.lat),
-            func.coalesce(zone.lng, village.lng),
+            Device.lat,
+            Device.lng,
+            zone.lat,
+            zone.lng,
+            village.lat,
+            village.lng,
         )
         .outerjoin(village, Device.village_id == village.id)
         .outerjoin(zone, Device.zone_id == zone.id),
@@ -213,10 +239,17 @@ async def device_map(db: Db, scope: Scope) -> MapOut:
     pins: list[MapPin] = []
     missing: list[str] = []
 
-    for mac, label, last_seen, last_status, village_name, lat, lng in (
-        await db.execute(stmt)
-    ).all():
-        if lat is None or lng is None:
+    for (
+        mac, label, last_seen, last_status, village_id, village_name,
+        d_lat, d_lng, z_lat, z_lng, v_lat, v_lng,
+    ) in (await db.execute(stmt)).all():
+        if d_lat is not None and d_lng is not None:
+            lat, lng, source = d_lat, d_lng, "device"
+        elif z_lat is not None and z_lng is not None:
+            lat, lng, source = z_lat, z_lng, "zone"
+        elif v_lat is not None and v_lng is not None:
+            lat, lng, source = v_lat, v_lng, "village"
+        else:
             missing.append(mac)
             continue
         # 목록·타일과 같은 규칙을 쓰기 위해 임시 Device 로 감싼다.
@@ -236,9 +269,23 @@ async def device_map(db: Db, scope: Scope) -> MapOut:
                 lat=float(lat),
                 lng=float(lng),
                 online=online,
+                village_id=village_id,
                 village_name=village_name,
+                live=(last_status or {}).get("live"),
                 marker=marker,
+                position_source=source,
             )
         )
 
-    return MapOut(pins=pins, missing_location=missing)
+    village_stmt = scope.apply(select(Village).order_by(Village.name), Village.id)
+    villages = [
+        MapVillage(id=v.id, name=v.name, b_code=v.b_code, lat=v.lat, lng=v.lng)
+        for v in (await db.scalars(village_stmt)).all()
+    ]
+
+    return MapOut(
+        kakao_js_key=settings.kakao_js_key,
+        villages=villages,
+        pins=pins,
+        missing_location=missing,
+    )

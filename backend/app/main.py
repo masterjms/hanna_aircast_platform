@@ -31,6 +31,7 @@ from app.modules.dashboard.router import router as dashboard_router
 from app.modules.device import service as device_service
 from app.modules.device.router import router as device_router
 from app.modules.file.router import router as file_router
+from app.modules.geo.router import router as geo_router
 from app.modules.org.router import router as org_router
 from app.modules.system.router import router as system_router
 from app.mqtt.connection import MqttConnection
@@ -163,3 +164,4 @@ app.include_router(device_router)
 app.include_router(dashboard_router)
 app.include_router(file_router)
 app.include_router(broadcast_router)
+app.include_router(geo_router)

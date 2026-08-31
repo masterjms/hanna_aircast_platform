@@ -662,3 +662,53 @@ class TestMqttAccounts:
         for raw, expected in cases.items():
             monkeypatch.setattr(settings, "public_base_url", raw)
             assert mqtt_accounts.server_host() == expected, raw
+
+
+# ── 카카오 주소 검색 ─────────────────────────────────────────────────────
+class TestKakaoGeo:
+    @pytest.mark.asyncio
+    async def test_parses_documents_and_handles_ri_only(self, monkeypatch):
+        """리 단위 검색(도로명 없음, h_code 없음)도 좌표·b_code 가 뽑혀야 한다.
+
+        2026-08-31 실측 응답 형태 기준 — 무안군 청계면 월선리 b_code=1281033021
+        (전남광주 통합으로 시도 코드 46→12, 지도 설계 §1.1).
+        """
+        from app.config import settings
+        from app.core import kakao_geo
+
+        monkeypatch.setattr(settings, "kakao_rest_api_key", "test-key")
+        sample = {
+            "documents": [
+                {
+                    "address_name": "전남광주통합특별시 무안군 청계면 월선리",
+                    "x": "126.451371306622",
+                    "y": "34.8908358250448",
+                    "address": {
+                        "address_name": "전남광주통합특별시 무안군 청계면 월선리",
+                        "b_code": "1281033021",
+                    },
+                    "road_address": None,
+                },
+                {  # 좌표 없는 행은 버린다
+                    "address_name": "이상한 행",
+                    "address": {},
+                    "road_address": None,
+                },
+            ]
+        }
+        monkeypatch.setattr(kakao_geo, "_request_kakao", lambda q: sample)
+        results = await kakao_geo.search_address("월선리")
+        assert len(results) == 1
+        r = results[0]
+        assert r.b_code == "1281033021"
+        assert r.road_address is None
+        assert abs(r.lat - 34.89083) < 0.001 and abs(r.lng - 126.45137) < 0.001
+
+    @pytest.mark.asyncio
+    async def test_missing_key_raises_clear_error(self, monkeypatch):
+        from app.config import settings
+        from app.core import kakao_geo
+
+        monkeypatch.setattr(settings, "kakao_rest_api_key", None)
+        with pytest.raises(kakao_geo.KakaoKeyMissing):
+            await kakao_geo.search_address("서울")

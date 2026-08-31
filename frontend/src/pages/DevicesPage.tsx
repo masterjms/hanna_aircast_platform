@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 
 import { api } from '../api/client';
+import { AddressSearchField } from '../components/AddressSearchField';
 import { Modal } from '../components/Modal';
 import { RegisterDeviceDialog } from '../components/RegisterDeviceDialog';
 import { provisioningFrame } from '../lib/serial';
@@ -63,6 +64,19 @@ function AssignDialog({
   const [zones, setZones] = useState<Zone[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 설치 위치 — 주소 검색이 채우고, 동/호만 수동. 비우면 지도가 마을 좌표로 대신 찍는다.
+  const [loc, setLoc] = useState<{
+    road_address: string | null;
+    jibun_address: string | null;
+    lat: number | null;
+    lng: number | null;
+  }>({
+    road_address: device.road_address,
+    jibun_address: device.jibun_address,
+    lat: device.lat,
+    lng: device.lng,
+  });
+  const [addressDetail, setAddressDetail] = useState(device.address_detail ?? '');
 
   // 구역은 마을에 딸린 값이라 마을이 바뀌면 다시 불러온다.
   useEffect(() => {
@@ -89,6 +103,11 @@ function AssignDialog({
         village_id: villageId === '' ? null : villageId,
         // 마을을 바꾸면 이전 마을의 구역은 남아 있을 수 없다.
         zone_id: villageId === '' ? null : zoneId === '' ? null : zoneId,
+        road_address: loc.road_address,
+        jibun_address: loc.jibun_address,
+        address_detail: addressDetail.trim() || null,
+        lat: loc.lat,
+        lng: loc.lng,
       });
       onSaved();
       onClose();
@@ -168,6 +187,47 @@ function AssignDialog({
       <p className="hint">
         마을을 배정하면 서버가 CONFIG 로 단말에 알려주고, 단말이 그 마을 방송을 구독합니다.
         단말 STATUS 에 반영되는 데 몇 초 걸립니다.
+      </p>
+
+      <hr style={{ margin: '14px 0', opacity: 0.2 }} />
+      <p className="strong" style={{ margin: '0 0 8px' }}>
+        설치 위치 (선택)
+      </p>
+      <AddressSearchField
+        placeholder="그 집 주소 검색 (예: 월선리 123-4)"
+        onSelect={(r) =>
+          setLoc({
+            road_address: r.road_address,
+            jibun_address: r.jibun_address ?? r.address_name,
+            lat: r.lat,
+            lng: r.lng,
+          })
+        }
+      />
+      {(loc.road_address || loc.jibun_address) && (
+        <p className="hint">
+          선택된 주소: <span className="strong">{loc.road_address ?? loc.jibun_address}</span>{' '}
+          <button
+            type="button"
+            className="btn btn--sm btn--ghost"
+            onClick={() => setLoc({ road_address: null, jibun_address: null, lat: null, lng: null })}
+          >
+            지우기
+          </button>
+        </p>
+      )}
+      <div className="field">
+        <label htmlFor="a-detail">동/호 (선택 — 사람이 치는 유일한 주소 항목)</label>
+        <input
+          id="a-detail"
+          value={addressDetail}
+          maxLength={100}
+          placeholder="예: 201호, 안채"
+          onChange={(e) => setAddressDetail(e.target.value)}
+        />
+      </div>
+      <p className="hint">
+        위치를 비워 두면 지도에서 마을 좌표 자리에 표시됩니다. 입력하면 그 집 위치에 찍힙니다.
       </p>
 
       {error && <p className="hint hint--warn">{error}</p>}

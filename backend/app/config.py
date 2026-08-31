@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     #: 단말이 스트림을 받아가는 공개 주소. 마운트가 이 뒤에 붙는다.
     icecast_public_base_url: str = "http://localhost:8100"
 
+    # ── 카카오 (지도 · 지오코딩) ────────────────────────
+    #: 주소 검색(주소→좌표+법정동코드) 프록시용. 서버 전용 비밀값 — 비우면 검색 비활성.
+    kakao_rest_api_key: str | None = None
+    #: 지도 SDK 용 공개 키(도메인 등록으로 보호). /api/dashboard/map 이 내려준다.
+    kakao_js_key: str | None = None
+
     # ── TTS ─────────────────────────────────────────────
     #: google | dev.  dev 는 ffmpeg 으로 톤을 만드는 가짜 엔진이라 개발에서만 쓴다.
     #: "google" = Google Cloud TTS / "dev" = ffmpeg 톤 (자격증명 없이 시험할 때)

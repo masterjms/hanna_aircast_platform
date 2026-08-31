@@ -22,6 +22,7 @@ interface MenuItem {
 
 const OPERATION: MenuItem[] = [
   { to: '/', label: '대시보드' },
+  { to: '/map', label: '지도' },
   { to: '/devices', label: '단말 관리' },
   { to: '/broadcast', label: '방송 제어' },
   { to: '/files', label: '파일함' },

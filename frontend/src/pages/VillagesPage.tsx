@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { Village, VillageInput, Zone } from '../api/types';
+import { AddressSearchField } from '../components/AddressSearchField';
 import { Modal } from '../components/Modal';
 
 const EMPTY_VILLAGE: VillageInput = {
@@ -16,6 +17,9 @@ const EMPTY_VILLAGE: VillageInput = {
   sido: '',
   sigungu: '',
   address_detail: '',
+  b_code: null,
+  road_address: null,
+  jibun_address: null,
   lat: null,
   lng: null,
 };
@@ -212,6 +216,9 @@ export function VillagesPage() {
                             sido: v.sido ?? '',
                             sigungu: v.sigungu ?? '',
                             address_detail: v.address_detail ?? '',
+                            b_code: v.b_code,
+                            road_address: v.road_address,
+                            jibun_address: v.jibun_address,
                             lat: v.lat,
                             lng: v.lng,
                           });
@@ -355,9 +362,39 @@ export function VillagesPage() {
               onChange={(e) => setVillageForm({ ...villageForm, address_detail: e.target.value })}
             />
           </div>
+
+          {/* 대표 주소 — 검색 한 번으로 도로명·지번·법정동코드·좌표가 같이 채워진다.
+              코드·좌표를 손으로 치게 두지 않는다(지도 설계 §3). */}
+          <AddressSearchField
+            onSelect={(r) =>
+              setVillageForm({
+                ...villageForm,
+                road_address: r.road_address,
+                jibun_address: r.jibun_address ?? r.address_name,
+                b_code: r.b_code,
+                lat: r.lat,
+                lng: r.lng,
+              })
+            }
+          />
+          {(villageForm.jibun_address || villageForm.road_address) && (
+            <p className="hint">
+              선택된 주소: <span className="strong">{villageForm.road_address ?? villageForm.jibun_address}</span>
+              {villageForm.b_code && (
+                <>
+                  {' '}· 법정동코드 <span className="mono">{villageForm.b_code}</span>
+                </>
+              )}
+              {villageForm.lat != null && villageForm.lng != null && (
+                <>
+                  {' '}· 좌표 <span className="mono">{villageForm.lat.toFixed(5)}, {villageForm.lng.toFixed(5)}</span>
+                </>
+              )}
+            </p>
+          )}
           <div className="field-row">
             <div className="field">
-              <label htmlFor="v-lat">위도</label>
+              <label htmlFor="v-lat">위도 (검색하면 자동)</label>
               <input
                 id="v-lat"
                 type="text"
@@ -368,7 +405,7 @@ export function VillagesPage() {
               />
             </div>
             <div className="field">
-              <label htmlFor="v-lng">경도</label>
+              <label htmlFor="v-lng">경도 (검색하면 자동)</label>
               <input
                 id="v-lng"
                 type="text"
@@ -379,7 +416,10 @@ export function VillagesPage() {
               />
             </div>
           </div>
-          <p className="hint">좌표를 넣으면 대시보드 지도에 이 마을의 단말이 찍힙니다.</p>
+          <p className="hint">
+            좌표가 있으면 지도 화면에 이 마을의 단말이 찍힙니다. 위치를 안 적은 단말은 마을
+            좌표 자리에 표시됩니다.
+          </p>
         </Modal>
       )}
     </>
