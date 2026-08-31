@@ -258,7 +258,12 @@ async def issue_credential(
         # DB 와 브로커는 한 묶음이다(레지스트리 사양 §3.6). flush 직후 바로 내보낸다.
         await export_broker_accounts(db)
 
-    return DeviceCredentialOut(username=device.mac, password=device.mqtt_password, issued=issued)
+    return DeviceCredentialOut(
+        username=device.mac,
+        password=device.mqtt_password,
+        server_host=mqtt_accounts.server_host(),
+        issued=issued,
+    )
 
 
 # ── 변경 ─────────────────────────────────────────────────────────────────

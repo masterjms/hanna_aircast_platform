@@ -71,7 +71,10 @@ async def new_device_password(_: SuperAdmin) -> NewDevicePasswordOut:
     ⚠ 라우트 순서 — /{mac}/credential 보다 위에 있어야 'credential' 이 MAC 으로
     잡히지 않는다 (/unassigned 와 같은 이유).
     """
-    return NewDevicePasswordOut(password=mqtt_accounts.generate_device_password())
+    return NewDevicePasswordOut(
+        password=mqtt_accounts.generate_device_password(),
+        server_host=mqtt_accounts.server_host(),
+    )
 
 
 @router.post("/{mac}/credential", response_model=DeviceCredentialOut)

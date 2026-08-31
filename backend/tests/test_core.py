@@ -644,3 +644,19 @@ class TestMqttAccounts:
             c6_model="IOT-1000C6", c6_version="V.260823-1",
         )
         assert d.p4_model == "IOT-1000" and d.mqtt_password is None
+
+    def test_server_host_strips_scheme_and_port(self, monkeypatch):
+        """@SERVER 는 host 만 받는다 — 스킴·포트가 붙으면 단말이 못 붙는다."""
+        from app.config import settings
+        from app.core import mqtt_accounts
+
+        cases = {
+            "https://hanna-aircast.co.kr": "hanna-aircast.co.kr",
+            "https://hanna-aircast.co.kr/": "hanna-aircast.co.kr",
+            "http://192.168.0.5:8080": "192.168.0.5",
+            # 스킴 없이 적힌 값도 받아준다(.env 실수 대비)
+            "hanna-aircast.co.kr:8080": "hanna-aircast.co.kr",
+        }
+        for raw, expected in cases.items():
+            monkeypatch.setattr(settings, "public_base_url", raw)
+            assert mqtt_accounts.server_host() == expected, raw

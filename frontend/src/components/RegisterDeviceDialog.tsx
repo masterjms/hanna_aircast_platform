@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { api } from '../api/client';
 import { Modal } from './Modal';
+import { provisioningFrame, rebootFrame } from '../lib/serial';
 import type { AudioFile } from '../api/types';
 
 /* Web Serial 은 Chrome/Edge 전용이라 표준 DOM 타입에 없다 — 최소한만 선언 */
@@ -57,12 +58,6 @@ function parseScan(raw: string): {
         ? `항목이 ${parts.length}개입니다 (기준 5개) — 스캔이 잘렸거나 구형 펌웨어일 수 있습니다.`
         : null,
   };
-}
-
-/** 시리얼 주입 명령. 줄 끝은 LF — 파서가 @MQTTPW 값의 공백류를 다듬지 않으므로
- *  CRLF 로 보내면 \r 이 비밀번호에 붙을 수 있다(생산 사양 §4.4 값 안의 공백). */
-function serialCommands(mac: string, password: string): string {
-  return `@MQTTID=${mac}\n@MQTTPW=${password}\n@END\n`;
 }
 
 /** 응답을 잠깐 읽는다 — @END 나 @RESULT 가 오거나 타임아웃까지. */
@@ -117,6 +112,8 @@ export function RegisterDeviceDialog({
 }) {
   const [mode, setMode] = useState<'scan' | 'manual'>('scan');
   const [password, setPassword] = useState<string | null>(null);
+  //: 단말 @SERVER 에 넣을 호스트. 서버가 자기 공개 주소에서 뽑아 알려준다.
+  const [serverHost, setServerHost] = useState('');
   const [pwError, setPwError] = useState<string | null>(null);
 
   const [mac, setMac] = useState('');
@@ -150,7 +147,9 @@ export function RegisterDeviceDialog({
   const fetchPassword = async () => {
     setPwError(null);
     try {
-      setPassword((await api.devices.newPassword()).password);
+      const issued = await api.devices.newPassword();
+      setPassword(issued.password);
+      setServerHost(issued.server_host);
     } catch (e) {
       setPwError(e instanceof Error ? e.message : '비밀번호 발급에 실패했습니다.');
     }
@@ -235,7 +234,10 @@ export function RegisterDeviceDialog({
         await port.open({ baudRate: 115200 });
         portRef.current = port;
       }
-      await writeSerial(portRef.current, serialCommands(macNormalized, password));
+      await writeSerial(
+        portRef.current,
+        provisioningFrame({ serverHost, mac: macNormalized, password }),
+      );
       const resp = await readResponse(portRef.current, 3000);
       if (/@RESULT=OK/.test(resp) || /@MQTTPW=SET/.test(resp)) {
         setInjected(true);
@@ -259,7 +261,11 @@ export function RegisterDeviceDialog({
   const copyCommands = async () => {
     if (!password) return;
     try {
-      await navigator.clipboard.writeText(serialCommands(macNormalized, password).trimEnd());
+      // trimEnd 를 쓰지 않는다 — 끝의 개행까지가 프레임이고, 붙여넣기로 넣을 때도
+      // 그 개행이 있어야 단말이 요청을 마무리한다.
+      await navigator.clipboard.writeText(
+        provisioningFrame({ serverHost, mac: macNormalized, password }),
+      );
       setCopied(true);
       setInjected(true); // 수동 붙여넣기 경로 — 작업자가 터미널로 넣는다
       setTimeout(() => setCopied(false), 1500);
@@ -274,7 +280,7 @@ export function RegisterDeviceDialog({
     setBroadcastMsg(null);
     if (portRef.current) {
       try {
-        await writeSerial(portRef.current, '@OFF\n@END\n');
+        await writeSerial(portRef.current, rebootFrame());
         setTestMsg('재부팅 명령(@OFF)을 보냈습니다 — 서버 연결을 기다립니다 (보통 10초 안팎)…');
         // 재부팅되면 포트가 죽는다 — 정리해 둔다.
         await portRef.current.close().catch(() => undefined);
@@ -418,6 +424,10 @@ export function RegisterDeviceDialog({
       </div>
 
       {/* ── 2. 계정 (시스템 난수 — 사용자가 못 정한다) ── */}
+      <div className="field">
+        <label>서버 주소 (@SERVER)</label>
+        <input className="mono" readOnly value={serverHost || '불러오는 중…'} />
+      </div>
       <div className="field">
         <label>MQTT 비밀번호 (자동 생성)</label>
         <div style={{ display: 'flex', gap: 6 }}>

@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api/client';
 import { Modal } from '../components/Modal';
 import { RegisterDeviceDialog } from '../components/RegisterDeviceDialog';
+import { provisioningFrame } from '../lib/serial';
 import type { Device, DeviceCredential, DeviceStatusFilter, Village, Zone } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
@@ -208,7 +209,11 @@ function CredentialDialog({ device, onClose }: { device: Device; onClose: () => 
     if (!cred) return;
     try {
       await navigator.clipboard.writeText(
-        `@MQTTID=${cred.username}\n@MQTTPW=${cred.password}\n@END`,
+        provisioningFrame({
+          serverHost: cred.server_host,
+          mac: cred.username,
+          password: cred.password,
+        }),
       );
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -260,7 +265,7 @@ function CredentialDialog({ device, onClose }: { device: Device; onClose: () => 
             <input className="mono" readOnly value={cred.password} />
           </div>
           <button type="button" className="btn btn--sm" onClick={copy} disabled={busy}>
-            {copied ? '복사됨 ✓' : '시리얼 명령 복사 (@MQTTID/@MQTTPW)'}
+            {copied ? '복사됨 ✓' : '시리얼 명령 복사 (@SERVER/@MQTTID/@MQTTPW)'}
           </button>
           <p className="hint">
             생산 라인에서 시리얼로 단말에 넣는 값입니다. 발행된 계정은 단말 폐기 전까지 바뀌지

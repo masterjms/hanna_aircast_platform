@@ -137,13 +137,15 @@ class DeviceDetail(DeviceOut):
 
 
 class NewDevicePasswordOut(ApiModel):
-    """신규 단말 등록 모달이 열릴 때 미리 발급받는 비밀번호.
+    """신규 단말 등록 모달이 열릴 때 미리 받아 두는 주입값.
 
     서버가 아직 MAC 을 모르는 시점이라 계정이 아니라 값만 준다. 등록(POST
     /api/devices)에 mqtt_password 로 되돌려 보내야 DB 에 확정된다.
     """
 
     password: str
+    #: 단말 `@SERVER` 에 넣을 호스트. 화면이 손으로 적지 않게 서버가 알려준다.
+    server_host: str
 
 
 class DeviceCredentialIssue(BaseModel):
@@ -157,9 +159,11 @@ class DeviceCredentialIssue(BaseModel):
 
 
 class DeviceCredentialOut(ApiModel):
-    """등록 화면이 표시하고 생산 라인이 시리얼(@MQTTID/@MQTTPW)로 넣는 값."""
+    """등록 화면이 표시하고 생산 라인이 시리얼(@SERVER/@MQTTID/@MQTTPW)로 넣는 값."""
 
     username: str
     password: str
+    #: 단말 `@SERVER` 에 넣을 호스트. 계정과 함께 한 번에 주입한다.
+    server_host: str
     #: 이번 호출에서 새로 만들었는가. False = 기존 값 재사용.
     issued: bool

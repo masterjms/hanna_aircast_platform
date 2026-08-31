@@ -111,6 +111,8 @@ export interface Device {
 /** 신규 단말 등록용 사전 발급 비밀번호 — 등록 요청의 mqtt_password 로 되돌려 보내야 확정 */
 export interface NewDevicePassword {
   password: string;
+  /** 단말 @SERVER 에 넣을 호스트 (스킴·포트 없음) */
+  server_host: string;
 }
 
 /** 신규 단말 등록 요청 (QR 스캔 5필드 + 사전 발급 비밀번호) */
@@ -134,6 +136,8 @@ export interface DeviceDetail extends Device {
 export interface DeviceCredential {
   username: string;
   password: string;
+  /** 단말 @SERVER 에 넣을 호스트 (스킴·포트 없음) */
+  server_host: string;
   /** 이번 호출에서 새로 발행했는가. false = 기존 값 재사용 */
   issued: boolean;
 }

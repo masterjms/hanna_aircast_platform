@@ -22,6 +22,7 @@ import secrets
 import string
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from app.config import settings
 
@@ -44,6 +45,23 @@ _SALT_BYTES = 12
 
 def generate_device_password() -> str:
     return "".join(secrets.choice(PASSWORD_CHARSET) for _ in range(PASSWORD_LENGTH))
+
+
+def server_host() -> str:
+    """단말 `@SERVER` 에 넣을 호스트. 공개 주소에서 스킴과 포트를 뗀 값이다.
+
+    단말은 host 또는 IP 만 받는다(생산 사양 §4.4.1) — 포트는 펌웨어가 프로토콜별로
+    안다(mqtts 8883, https 443). 스트림 주소에서 포트를 빼 달라던 것과 같은 이유다.
+
+        https://hanna-aircast.co.kr      → hanna-aircast.co.kr
+        http://192.168.0.5:8080          → 192.168.0.5
+    """
+    raw = settings.public_base_url.strip()
+    # 스킴이 없으면 urlsplit 이 "host:port" 의 host 를 스킴으로 읽는다
+    # (`a.co:8080` → scheme='a.co', path='8080'). `//` 를 붙여 netloc 임을 알린다.
+    if "//" not in raw:
+        raw = "//" + raw
+    return urlsplit(raw).hostname or ""
 
 
 def mosquitto_hash(password: str) -> str:

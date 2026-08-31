@@ -22,7 +22,7 @@ GET    /api/devices                 목록 (역할 범위로 자동 필터)
 GET    /api/devices/unassigned      미배정 단말(village_id NULL) 목록
 GET    /api/devices/:mac            상세 (last_status 포함)
 POST   /api/devices                 등록 {mac, label, village_id, zone_id, p4/c6 모델·버전, mqtt_password}
-POST   /api/devices/credential      신규 등록용 비밀번호 사전 발급 (super_admin, DB 미기록)
+POST   /api/devices/credential      신규 등록용 비밀번호+서버호스트 사전 발급 (super_admin, DB 미기록)
 PATCH  /api/devices/:mac            수정/재배정
 DELETE /api/devices/:mac            삭제 (DB 행 + 브로커 계정을 한 묶음으로 제거)
 POST   /api/devices/:mac/credential 단말별 MQTT 계정 발행/조회 {reissue} (super_admin)
@@ -33,6 +33,16 @@ POST   /api/devices/:mac/credential 단말별 MQTT 계정 발행/조회 {reissue
 STATUS 메시지를 백엔드가 구독하다가, devices 테이블에 없는 MAC이 오면 자동으로 village_id=NULL로 insert한다 — "미배정 단말 목록"이 여기서 자연스럽게 채워진다(별도 등록 절차 없이 전원만 넣으면 뜨는 방식).
 
 **단말별 MQTT 계정 (2026-08-30, `SERVER_DEVICE_CREDENTIAL_SPEC_2026-08-27.md`)**: username=콜론 없는 소문자 MAC, password=8자 랜덤(문자 집합 사양 §1, `@`·`!` 제외). 발행하면 DB에 평문 보관(등록 화면 표시·시리얼 투입용)하고, 백엔드가 mosquitto passwd 파일(해시)을 통째로 재생성해 공유 볼륨으로 내보낸다 → mosquitto entrypoint 감시 루프가 설치+SIGHUP 리로드. 응답 `{username, password, issued}` — 이미 발행된 단말은 기존 값 재사용(`issued:false`), `reissue:true`는 라인 재작업 전용. 등록(POST /api/devices)은 자동으로 계정을 함께 발행하고, 삭제는 계정도 함께 지운다(도난 단말 차단 수단). 계정 미발행 단말은 목록 응답의 `has_credential:false`로 구분되어 화면에 「미등록*」으로 표시되고, 공유 계정(이행기 `MQTT_DEVICE_PASSWORD`) 제거 후에는 방송 대상에서도 제외된다(레지스트리 사양 §3.6).
+
+**시리얼 주입 프레임 (2026-08-31 확정)**: 두 계정 API 응답에는 `server_host`(`PUBLIC_BASE_URL`에서 스킴·포트를 뗀 호스트)가 함께 실린다. 등록 화면은 이것으로 아래 한 프레임을 만들어 USB(Web Serial, 115200) 또는 복사·붙여넣기로 단말에 넣는다.
+
+```text
+@SERVER=hanna-aircast.co.kr\n@MQTTID=58e6c5f2cc74\n@MQTTPW=tA$UAcG2@END\n
+```
+
+(\n = 개행 `0x0A`. 위 한 줄이 실제로 나가는 바이트 전부다.)
+
+개행은 LF(`0x0A`) 고정이고 **비밀번호와 `@END` 사이에는 개행을 넣지 않는다.** 파서가 `@`로 명령을 구분하는데 `@MQTTPW`·`@PASSWORD`만은 값의 앞뒤 공백을 다듬지 않아(생산 사양 §4.4 「값 안의 공백」), `@MQTTPW=<값>\n@END`로 보내면 그 개행까지 비밀번호가 되어 브로커 인증이 조용히 실패한다. 값이 다듬어지는 `@SERVER`·`@MQTTID`는 개행으로 끊어도 안전하다. 구현은 `frontend/src/lib/serial.ts` 한 곳에 모아 두 화면이 갈라지지 않게 했다.
 
 ## 3. 마을 / 구역
 
