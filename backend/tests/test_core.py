@@ -869,3 +869,104 @@ class TestBroadcastByteEstimate:
         from app.modules.broadcast.service import estimate_file_bytes
 
         assert estimate_file_bytes(644_252, 0) == 0
+
+
+# ── STATUS 버퍼 (A-2/A-3) ────────────────────────────────────────────────
+class TestStatusBuffer:
+    """주기 STATUS 를 모아 쓰는 버퍼. DB 를 안 타는 적재 규칙만 여기서 본다."""
+
+    def _buffer(self):
+        from app.mqtt.status_buffer import StatusBuffer
+
+        return StatusBuffer(interval_sec=1.0)
+
+    def test_same_mac_coalesces_to_latest(self):
+        import datetime as dt
+
+        buf = self._buffer()
+        t1 = dt.datetime(2026, 9, 2, 12, 0, tzinfo=dt.timezone.utc)
+        buf.offer("aabbccddee01", payload={"state": "IDLE"}, seen_at=t1)
+        buf.offer("aabbccddee01", payload={"state": "LIVE"}, seen_at=t1)
+        # 같은 단말이 아무리 자주 보내도 대기 항목은 하나다 — 메모리가 단말 수에 유계.
+        assert buf.pending_count == 1
+
+    def test_different_macs_accumulate(self):
+        import datetime as dt
+
+        buf = self._buffer()
+        now = dt.datetime.now(dt.timezone.utc)
+        for i in range(5):
+            buf.offer(f"aabbccddee{i:02d}", payload={"state": "IDLE"}, seen_at=now)
+        assert buf.pending_count == 5
+
+    def test_discard_drops_pending(self):
+        """LWT 처리가 먼저 이겨야 한다 — 안 그러면 죽은 단말이 온라인으로 되살아난다."""
+        import datetime as dt
+
+        buf = self._buffer()
+        now = dt.datetime.now(dt.timezone.utc)
+        buf.offer("aabbccddee01", payload={"state": "LIVE"}, seen_at=now)
+        buf.discard("aabbccddee01")
+        assert buf.pending_count == 0
+        # 없는 MAC 을 버려도 조용히 넘어간다
+        buf.discard("ffffffffffff")
+
+    def test_max_pending_is_bounded_by_device_count(self):
+        import datetime as dt
+
+        from app.mqtt.status_buffer import StatusBuffer
+
+        buf = StatusBuffer(interval_sec=60.0, max_pending=3)
+        now = dt.datetime.now(dt.timezone.utc)
+        for i in range(10):
+            buf.offer(f"aabbccddee{i:02d}", payload={}, seen_at=now)
+        # 상한을 넘으면 주기를 기다리지 않고 깨우도록 표시한다(적재 자체는 막지 않는다).
+        assert buf.pending_count == 10
+
+
+class TestResyncDecision:
+    """CONFIG 불일치 판정 — 즉시 경로와 버퍼 경로가 같은 함수를 쓴다."""
+
+    def test_matching_echo_needs_no_resync(self):
+        from app.mqtt.status_buffer import needs_resync
+
+        assert not needs_resync(
+            reported_village="00000005",
+            expected_village="00000005",
+            reported_version=3,
+            expected_version=3,
+        )
+
+    def test_village_mismatch_triggers_resync(self):
+        from app.mqtt.status_buffer import needs_resync
+
+        # 배정은 됐는데 단말이 못 받은 상태 — retain 유실 등.
+        assert needs_resync(
+            reported_village="",
+            expected_village="00000005",
+            reported_version=3,
+            expected_version=3,
+        )
+
+    def test_version_mismatch_triggers_resync(self):
+        from app.mqtt.status_buffer import needs_resync
+
+        assert needs_resync(
+            reported_village="00000005",
+            expected_village="00000005",
+            reported_version=2,
+            expected_version=3,
+        )
+
+    def test_cooldown_blocks_repeat_publish(self):
+        import datetime as dt
+
+        from app.mqtt import status_buffer as sb
+
+        sb._last_resync.clear()
+        now = dt.datetime.now(dt.timezone.utc)
+        assert sb.resync_allowed("aabbccddee01", now) is True
+        # 낡은 펌웨어가 영영 적용하지 않으면 STATUS 마다 재발행이 나간다 — 그걸 막는다.
+        assert sb.resync_allowed("aabbccddee01", now + dt.timedelta(seconds=5)) is False
+        assert sb.resync_allowed("aabbccddee01", now + dt.timedelta(seconds=61)) is True
+        sb._last_resync.clear()

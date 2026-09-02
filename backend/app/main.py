@@ -38,6 +38,7 @@ from app.modules.system.router import router as system_router
 from app.mqtt.connection import MqttConnection
 from app.mqtt.handlers import dispatch
 from app.mqtt.publisher import MqttPublisher
+from app.mqtt.status_buffer import StatusBuffer
 from app.tasks import config_reconcile
 
 # ⚠ Windows 에서 이 모듈을 `python -m uvicorn app.main:app` 로 띄우면 MQTT 가 죽는다.
@@ -59,16 +60,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for sub in (settings.upload_dir, settings.tts_dir, settings.update_dir):
         sub.mkdir(parents=True, exist_ok=True)
 
+    # 주기 STATUS 를 모아 쓰는 버퍼. 0 이면 끈다(메시지마다 즉시 쓰기).
+    status_buffer = (
+        StatusBuffer(interval_sec=settings.status_flush_interval_sec)
+        if settings.status_flush_interval_sec > 0
+        else None
+    )
+
     # 람다가 publisher 를 늦게 읽는다 — publisher 는 connection 을 필요로 해서
     # 아래에서야 만들어지는데, 클로저라 호출 시점에 해결된다.
-    connection = MqttConnection(on_message=lambda t, raw: dispatch(t, raw, publisher))
+    connection = MqttConnection(
+        on_message=lambda t, raw: dispatch(t, raw, publisher, status_buffer)
+    )
     publisher = MqttPublisher(connection)
     # 라우터는 get_publisher 의존성으로 여기 붙은 인스턴스를 꺼내 쓴다.
     app.state.mqtt = connection
     app.state.publisher = publisher
     # 실시간 방송 세션. 라우터는 LiveReg 의존성으로 꺼내 쓴다.
     app.state.live_registry = LiveRegistry()
+    app.state.status_buffer = status_buffer
     await connection.start()
+    if status_buffer is not None:
+        await status_buffer.start(publisher)
 
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
     scheduler.add_job(
@@ -120,6 +133,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     scheduler.shutdown(wait=False)
     # 소스를 안 닫으면 Icecast 에 유령 마운트가 남는다.
     await app.state.live_registry.shutdown()
+    # 대기 중인 STATUS 를 마지막으로 쓴다(연결을 끊기 전에 — 재발행이 남아 있을 수 있다).
+    if status_buffer is not None:
+        await status_buffer.stop(publisher)
     await connection.stop()
     await engine.dispose()
     log.info("종료 완료")

@@ -142,6 +142,11 @@ class Settings(BaseSettings):
     # ── 운영 파라미터 ───────────────────────────────────
     device_online_threshold_sec: int = 300
     config_reconcile_interval_sec: int = 3600
+    #: 주기 STATUS 를 모아서 쓰는 간격(초). 3000대면 초당 100건이 들어오는데
+    #: 건마다 트랜잭션을 열면 DB 왕복이 처리량 상한이 된다(A-2). 모아 쓰면 대수와
+    #: 무관하게 초당 트랜잭션 1개다. 0 으로 두면 버퍼를 끄고 예전처럼 즉시 쓴다.
+    #: 화면에 상태가 늦게 보이는 지연이 이 값만큼 생긴다 — 1초면 사람이 못 느낀다.
+    status_flush_interval_sec: float = 1.0
     #: 실시간 방송 시작 후 이 시간(초) 안에 마이크 업링크가 안 붙으면 자동 종료한다.
     #: 무음이 "정상 방송"처럼 나가는 게 최악이라 기본으로 켠다. 0 이면 끈다.
     live_uplink_grace_sec: int = 30

@@ -33,6 +33,12 @@ from app.models.event import BroadcastEvent, DeviceEvent
 from app.models.system import CurrentConfig
 from app.mqtt import topics
 from app.mqtt.publisher import MqttPublisher
+from app.mqtt.status_buffer import (
+    StatusBuffer,
+    needs_resync,
+    publish_resync,
+    resync_allowed,
+)
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +128,32 @@ async def _touch_device(
     await db.execute(stmt)
 
 
+#: job_id → broadcast_events.id 캐시.
+#:
+#: 이 조회는 결과 메시지마다 나간다. 방송 하나에 단말 3000대가 응답하면 **같은
+#: 답을 3000번** 묻는 셈이라, 메시지당 쿼리 수를 그대로 두 배로 만든다(A-3).
+#: job_id 는 DB 시퀀스로 발번되고 한 번 정해진 event_id 가 바뀌지 않으므로
+#: 캐시해도 틀릴 일이 없다. 방송이 끝나도 늦게 오는 결과가 있어 바로 지우지 않고,
+#: 최근 것 위주로 상한만 둔다(FIFO).
+_event_id_cache: dict[int, int] = {}
+_EVENT_ID_CACHE_MAX = 256
+
+
+async def _event_id_for(db: AsyncSession, job_id: int) -> int | None:
+    cached = _event_id_cache.get(job_id)
+    if cached is not None:
+        return cached
+    event_id = await db.scalar(
+        select(BroadcastEvent.id).where(BroadcastEvent.job_id == job_id).limit(1)
+    )
+    if event_id is not None:
+        if len(_event_id_cache) >= _EVENT_ID_CACHE_MAX:
+            # 가장 오래 전에 넣은 것부터 버린다(dict 는 삽입 순서를 유지한다).
+            del _event_id_cache[next(iter(_event_id_cache))]
+        _event_id_cache[job_id] = event_id
+    return event_id
+
+
 async def _insert_device_event(
     db: AsyncSession,
     *,
@@ -131,11 +163,7 @@ async def _insert_device_event(
     job_id: int | None,
 ) -> None:
     """이력 1행. dedup_key 충돌은 조용히 버린다(같은 메시지의 재전송)."""
-    event_id: int | None = None
-    if job_id is not None:
-        event_id = await db.scalar(
-            select(BroadcastEvent.id).where(BroadcastEvent.job_id == job_id).limit(1)
-        )
+    event_id = await _event_id_for(db, job_id) if job_id is not None else None
 
     if result_type in TELEMETRY_RESULTS:
         # 주기 telemetry 는 tick 마다 행을 쌓지 않고 최신값만 덮어쓴다.
@@ -171,20 +199,14 @@ async def _insert_device_event(
     await db.execute(stmt.on_conflict_do_nothing())
 
 
-#: 자동 복구를 방금 보낸 MAC → 시각. 같은 단말에 초당 몇 번씩 다시 쏘지 않게 한다.
-#: 낡은 펌웨어처럼 영영 적용하지 않는 단말이 있으면 STATUS 마다 재발행이 나가는데,
-#: 그게 300대면 로그와 브로커가 지저분해진다.
-_last_resync: dict[str, dt.datetime] = {}
-_RESYNC_COOLDOWN_SEC = 60.0
-
-
 async def _resync_if_stale(
     db: AsyncSession, mac: str, data: dict[str, Any], publisher: MqttPublisher | None
 ) -> None:
     """단말이 echo 한 값이 DB 와 다르면 그 단말 CONFIG 를 다시 내린다 (사양 §4.3 권장).
 
-    브로커 retained 유실, 배정 시점의 연결 끊김처럼 "서버는 보냈다고 아는데 단말은
-    못 받은" 상황을 STATUS 를 볼 때마다 스스로 알아채고 복구한다.
+    버퍼를 끈 경우(status_flush_interval_sec=0)에만 이 경로로 온다. 버퍼가 켜져
+    있으면 같은 판정을 flush 에서 묶어서 한다(status_buffer.StatusBuffer.flush) —
+    판정·쿨다운·발행 코드는 그쪽 모듈이 정본이고 여기서는 그걸 부른다.
 
     공통 CONFIG 는 건드리지 않는다 — 마을은 단말별 토픽으로만 가고(사양 §4.2),
     한 대 때문에 전체 설정을 다시 뿌릴 이유가 없다.
@@ -197,39 +219,34 @@ async def _resync_if_stale(
         # 미배정 단말은 보낼 게 없다. 배정 해제는 이미 retain 을 지워뒀다.
         return
 
-    expected_village = topics.village_token(device.village_id)
-    reported_village = str(data.get("village_id") or "")
-
     config = await db.get(CurrentConfig, 1)
     expected_version = config.config_version if config is not None else None
-    reported_version = data.get("config_version")
 
-    if reported_village == expected_village and reported_version == expected_version:
+    if not needs_resync(
+        reported_village=str(data.get("village_id") or ""),
+        expected_village=topics.village_token(device.village_id),
+        reported_version=data.get("config_version"),
+        expected_version=expected_version,
+    ):
+        return
+    if not resync_allowed(mac, dt.datetime.now(dt.timezone.utc)):
         return
 
-    now = dt.datetime.now(dt.timezone.utc)
-    last = _last_resync.get(mac)
-    if last is not None and (now - last).total_seconds() < _RESYNC_COOLDOWN_SEC:
-        return
-    _last_resync[mac] = now
-
-    log.info(
-        "CONFIG 불일치 자동 복구 %s: village %s→%s, version %s→%s",
-        mac, reported_village, expected_village, reported_version, expected_version,
+    await publish_resync(
+        publisher,
+        mac=mac,
+        village_id=device.village_id,
+        config_version=expected_version or 1,
     )
-    try:
-        await publisher.publish_device_config(
-            mac=mac,
-            village_id=device.village_id,
-            config_version=expected_version or 1,
-        )
-    except Exception:  # noqa: BLE001 - 다음 STATUS 에서 다시 시도된다
-        log.exception("CONFIG 자동 복구 발행 실패: %s", mac)
 
 
 # ── 토픽별 처리 ──────────────────────────────────────────────────────────
 async def handle_status(
-    db: AsyncSession, mac: str, data: dict[str, Any], publisher: MqttPublisher | None = None
+    db: AsyncSession,
+    mac: str,
+    data: dict[str, Any],
+    publisher: MqttPublisher | None = None,
+    buffer: StatusBuffer | None = None,
 ) -> None:
     """status 토픽 (STATUS · LWT · LIVE_STATS)."""
     now = dt.datetime.now(dt.timezone.utc)
@@ -249,9 +266,13 @@ async def handle_status(
 
     # type=STATUS. state=OFFLINE 이면 LWT(브로커가 대신 보낸 사망 통지)다.
     is_lwt = str(data.get("state") or "") == DeviceState.OFFLINE.value
-    await _touch_device(db, mac, payload=data, seen_at=None if is_lwt else now)
 
     if is_lwt:
+        # 대기 중인 STATUS 를 버린다. 안 버리면 죽었다고 쓴 뒤에 낡은 STATUS 가
+        # 덮어써서 죽은 단말이 온라인으로 되살아난다.
+        if buffer is not None:
+            buffer.discard(mac)
+        await _touch_device(db, mac, payload=data, seen_at=None)
         await _insert_device_event(
             db,
             mac=mac,
@@ -261,6 +282,13 @@ async def handle_status(
         )
         return
 
+    if buffer is not None:
+        # 여기서는 DB 를 만지지 않는다 — 대기열에만 넣고 flush 가 몰아서 쓴다.
+        # 캐시 갱신도, CONFIG 불일치 검사도 그쪽에서 묶여서 돈다(A-2/A-3).
+        buffer.offer(mac, payload=data, seen_at=now)
+        return
+
+    await _touch_device(db, mac, payload=data, seen_at=now)
     # 살아있는 STATUS 에만 자동 복구를 건다. 죽은 단말에 다시 보내봐야 소용없다.
     await _resync_if_stale(db, mac, data, publisher)
 
@@ -281,8 +309,17 @@ async def handle_result(db: AsyncSession, mac: str, data: dict[str, Any]) -> Non
     )
 
 
-async def dispatch(topic: str, payload: bytes, publisher: MqttPublisher | None = None) -> None:
-    """MqttConnection 이 부르는 진입점. 메시지 1건 = 트랜잭션 1개.
+async def dispatch(
+    topic: str,
+    payload: bytes,
+    publisher: MqttPublisher | None = None,
+    buffer: StatusBuffer | None = None,
+) -> None:
+    """MqttConnection 이 부르는 진입점.
+
+    결과·LWT 는 메시지 1건 = 트랜잭션 1개다(드물고, 화면이 기다리는 값이다).
+    주기 STATUS 는 buffer 가 있으면 DB 를 건드리지 않고 대기열에만 들어가고,
+    StatusBuffer 가 주기적으로 한 트랜잭션에 몰아 쓴다 (A-2/A-3).
 
     publisher 는 STATUS 자동 복구(사양 §4.3)에만 쓴다. 없으면 복구를 건너뛴다 —
     테스트에서 발행 없이 수신만 확인할 때가 있다.
@@ -297,8 +334,17 @@ async def dispatch(topic: str, payload: bytes, publisher: MqttPublisher | None =
     if data is None:
         return
 
+    if kind == "status" and buffer is not None:
+        # 버퍼로 갈 수 있는 종류(주기 STATUS)면 세션 자체를 열지 않는다.
+        # LWT·LIVE_STATS 는 아래 트랜잭션 경로로 내려간다.
+        is_lwt = str(data.get("state") or "") == DeviceState.OFFLINE.value
+        is_stats = str(data.get("type") or "") == ResultType.LIVE_STATS.value
+        if not is_lwt and not is_stats:
+            buffer.offer(mac, payload=data, seen_at=dt.datetime.now(dt.timezone.utc))
+            return
+
     async with session_scope() as db:
         if kind == "status":
-            await handle_status(db, mac, data, publisher)
+            await handle_status(db, mac, data, publisher, buffer)
         else:
             await handle_result(db, mac, data)
