@@ -719,3 +719,46 @@ class TestKakaoGeo:
         monkeypatch.setattr(settings, "kakao_rest_api_key", None)
         with pytest.raises(kakao_geo.KakaoKeyMissing):
             await kakao_geo.search_address("서울")
+
+
+# ── 마을별 ACL 생성 ─────────────────────────────────────────────────────
+class TestAclRender:
+    """통신 사양 §2.1 "village/<id>/cmd 는 별도 규칙" — 단말마다 자기 마을만.
+
+    와일드카드(`village/+/cmd`)가 다시 들어오면 계정 하나로 전 마을 명령을
+    구독할 수 있게 된다(C-1). 여기서 영구히 막는다.
+    """
+
+    def test_acl_has_no_village_wildcard_and_one_village_per_device(self, monkeypatch):
+        from app.config import settings
+        from app.core import mqtt_accounts
+
+        monkeypatch.setattr(settings, "mqtt_username", "xwifi-server")
+        acl = mqtt_accounts.render_acl(
+            {"58e6c5f2cc74": 5, "aabbccddeeff": 12, "001122334455": None}
+        )
+        assert "village/+/cmd" not in acl
+        assert "user xwifi-server\ntopic readwrite iotradio/#" in acl
+        # 공통 토픽과 %u 규칙은 치환 없는/있는 pattern 으로
+        assert "pattern read iotradio/all/cmd" in acl
+        assert "pattern write iotradio/device/%u/status" in acl
+        # 배정된 단말은 자기 마을 한 줄만, 8자리 토큰으로
+        assert "user 58e6c5f2cc74\ntopic read iotradio/village/00000005/cmd" in acl
+        assert "user aabbccddeeff\ntopic read iotradio/village/00000012/cmd" in acl
+        # 미배정 단말은 마을 줄이 없다(블록 자체를 만들지 않는다)
+        assert "user 001122334455" not in acl
+        # %c 규칙은 폐기됐다 — 다시 들어오면 client_id 사칭 구멍이 열린다
+        assert "%c" not in acl
+
+    def test_export_acl_beside_passwd(self, monkeypatch, tmp_path):
+        from app.config import settings
+        from app.core import mqtt_accounts
+
+        monkeypatch.setattr(settings, "mqtt_username", "xwifi-server")
+        monkeypatch.setattr(settings, "mosquitto_passwd_export", str(tmp_path / "passwd.generated"))
+        assert mqtt_accounts.export_acl({"58e6c5f2cc74": 5}) is True
+        out = (tmp_path / "aclfile.generated").read_text(encoding="utf-8")
+        assert "iotradio/village/00000005/cmd" in out
+        # 기능이 꺼져 있으면(개발) 아무것도 쓰지 않는다
+        monkeypatch.setattr(settings, "mosquitto_passwd_export", None)
+        assert mqtt_accounts.export_acl({"58e6c5f2cc74": 5}) is False

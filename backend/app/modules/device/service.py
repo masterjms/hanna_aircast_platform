@@ -228,14 +228,23 @@ def _device_accounts_enforced() -> bool:
 
 # ── 단말별 MQTT 계정 ─────────────────────────────────────────────────────
 async def export_broker_accounts(db: AsyncSession) -> None:
-    """DB 의 계정 전체를 mosquitto passwd 로 내보낸다(등록/삭제/기동 때 호출).
+    """DB 의 계정·마을 배정을 mosquitto passwd + aclfile 로 내보낸다.
+
+    등록/삭제/마을 배정 변경/마을 삭제/기동 때 호출. ACL 은 단말마다 자기 마을
+    topic 만 여는 파일이라(통신 사양 §2.1 "별도 규칙") 배정이 바뀌면 같이 다시
+    만들어야 한다 — 안 하면 옛 마을 명령을 계속 듣거나 새 마을 명령이 안 온다.
 
     실패해도 예외를 던지지 않는다 — 정본은 DB 이고 다음 호출이 따라잡는다.
     """
-    rows = await db.execute(
-        select(Device.mac, Device.mqtt_password).where(Device.mqtt_password.is_not(None))
-    )
-    mqtt_accounts.export_passwd(dict(rows.all()))
+    rows = (
+        await db.execute(
+            select(Device.mac, Device.mqtt_password, Device.village_id).where(
+                Device.mqtt_password.is_not(None)
+            )
+        )
+    ).all()
+    mqtt_accounts.export_passwd({mac: pw for mac, pw, _ in rows})
+    mqtt_accounts.export_acl({mac: village_id for mac, _, village_id in rows})
 
 
 async def issue_credential(
@@ -360,6 +369,8 @@ async def update_device(
             # 재접속할 때 되살아난다.
             await clear_device_configs(publisher, [mac])
         await resync_config(db, publisher)
+        # ACL 도 마을을 따라간다 — 이 단말이 읽을 수 있는 village topic 이 바뀐다.
+        await export_broker_accounts(db)
 
     return await get_device(db, mac, scope)
 

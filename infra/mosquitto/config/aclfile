@@ -1,17 +1,14 @@
-# 토픽 접근 제어 — 단말별 계정 기준 (2026-08-30 %c → %u 전환).
+# ⚠ 이 파일은 **부트스트랩 시드**다 — 운영 ACL 은 백엔드가 생성한다.
 #
-# 판정 축은 username(%u)이다. username 은 비밀번호로 증명된 값이라 사칭이 안 되고,
-# client_id(%c)는 클라이언트가 그냥 주장하는 값이라 사칭을 못 막는다
-# (계정 사양 SERVER_DEVICE_CREDENTIAL_SPEC_2026-08-27.md §2.2).
+# mosquitto 는 /mosquitto/data/aclfile 을 읽는다. 첫 기동 때 그 파일이 없으면
+# entrypoint.sh 가 이 시드를 복사해 시작하고, 백엔드가 뜨는 즉시 단말별 마을
+# 규칙이 담긴 aclfile.generated 로 교체된다(app/core/mqtt_accounts.render_acl).
+# 그래서 이 시드에만 있는 `village/+/cmd` 와일드카드는 백엔드 기동 전 몇 초의
+# 가용성 폴백일 뿐이다 — 운영 파일에는 없다(계정 하나로 전 마을 도청이 가능해서).
 #
-# ⚠ %c/%u 치환은 `pattern` 지시자에서만 동작한다.
-#   `user` 블록 안의 `topic` 에 쓰면 리터럴로 취급돼 조용히 전부 거부된다
-#   (2026-08-26 운영 전환에서 실제로 겪음).
-#
-# 치환 문자가 없는 `pattern` 은 "접속한 모든 클라이언트 공통 허용"으로 동작한다
-# (mosquitto 2.1.2 실측, 2026-08-30). allow_anonymous false 라 익명은 없으므로
-# 이것이 "인증된 전 계정 공통 토픽"을 만드는 방법이다. 파일 첫머리의 `topic` 규칙은
-# 익명 전용이라 여기서는 못 쓴다.
+# 판정 축은 username(%u)이다. username 은 비밀번호로 증명된 값이라 사칭이 안 된다.
+# ⚠ %u 치환은 `pattern` 지시자에서만 동작한다. 치환 문자가 없는 `pattern` 은
+#   "접속한 모든 클라이언트 공통 허용"으로 동작한다(mosquitto 2.1.2 실측).
 
 # 서버 계정 — cmd/config 발행은 여기서만 한다.
 user xwifi-server

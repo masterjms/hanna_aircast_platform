@@ -107,6 +107,74 @@ def render_passwd(device_accounts: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_acl(device_villages: dict[str, int | None]) -> str:
+    """aclfile 전체 내용. 단말마다 **자기 마을 topic 만** 읽기를 연다.
+
+    단말측 통신 사양 §2.1: `village/<village_id>/cmd` 자리는 MAC 이 아니라 서버가
+    배정한 값이라 `%u` 로 못 잡으니 "별도 규칙" 을 서버가 만들라고 했다.
+    와일드카드(`village/+/cmd`)로 뭉개면 계정 하나만 뽑혀도 전 마을 명령을
+    구독(도청)할 수 있으므로, 배정이 바뀔 때마다 이 파일을 다시 만든다 —
+    passwd 와 같은 통로(공유 볼륨 → entrypoint 감시 루프 → SIGHUP).
+
+    - 치환 없는 `pattern` = 인증된 전 계정 공통 허용 (mosquitto 2.1 실측)
+    - `pattern ... %u` = 자기 MAC 토픽만
+    - `user <mac>` 블록 = 그 단말의 마을 한 줄. 미배정은 블록을 만들지 않는다
+    """
+    from app.mqtt.topics import village_token  # 순환 import 회피(topics ← constants 만)
+
+    lines = [
+        "# 자동 생성 파일 — 손대지 말 것. 정본은 서버 DB 다.",
+        "# 등록·삭제·마을 배정 변경 때마다 통째로 다시 만든다 (app/core/mqtt_accounts.py).",
+        "",
+        "# 서버 계정 — cmd/config 발행은 여기서만 한다.",
+        f"user {settings.mqtt_username or 'xwifi-server'}",
+        "topic readwrite iotradio/#",
+        "",
+        "# 공통 토픽 — 전 단말. 치환 없는 pattern 은 인증된 모든 클라이언트에 적용된다.",
+        "pattern read iotradio/all/cmd",
+        "pattern read iotradio/all/config",
+        "",
+        "# 단말별 토픽. %u = username = 콜론 없는 소문자 MAC (비밀번호로 증명된 값).",
+        "pattern write iotradio/device/%u/result",
+        "pattern write iotradio/device/%u/status",
+        "pattern read  iotradio/device/%u/cmd",
+        "pattern read  iotradio/device/%u/config",
+        "",
+        "# 마을 명령 — 단말마다 배정된 마을 하나만. 와일드카드를 쓰지 않는다.",
+    ]
+    for mac in sorted(device_villages):
+        village_id = device_villages[mac]
+        if village_id is None:
+            continue
+        lines.append(f"user {mac}")
+        lines.append(f"topic read iotradio/village/{village_token(village_id)}/cmd")
+    return "\n".join(lines) + "\n"
+
+
+def _export_file(target: Path, content: str, label: str) -> bool:
+    """공유 볼륨에 원자적으로 쓴다. 실패는 로그만 — 정본은 DB 다."""
+    try:
+        # 같은 디렉터리에 임시 파일 → 원자적 교체. 감시 루프가 반쯤 쓴 파일을
+        # 설치하는 일이 없게 한다.
+        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, target)
+        except BaseException:
+            os.unlink(tmp)
+            raise
+        log.info("mosquitto %s 내보냄 → %s", label, target)
+        return True
+    except OSError:
+        log.exception(
+            "mosquitto %s 내보내기 실패 (%s) — DB 는 정상, 다음 발행 때 재시도된다",
+            label, target,
+        )
+        return False
+
+
 def export_passwd(device_accounts: dict[str, str]) -> bool:
     """passwd 를 공유 볼륨에 쓴다. 성공하면 True, 기능이 꺼져 있으면 False.
 
@@ -116,25 +184,21 @@ def export_passwd(device_accounts: dict[str, str]) -> bool:
     target = settings.mosquitto_passwd_export
     if not target:
         return False
-    try:
-        target = Path(target)
-        content = render_passwd(device_accounts)
-        # 같은 디렉터리에 임시 파일 → 원자적 교체. 감시 루프가 반쯤 쓴 파일을
-        # 설치하는 일이 없게 한다.
-        fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".passwd.")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(content)
-            os.chmod(tmp, 0o600)
-            os.replace(tmp, target)
-        except BaseException:
-            os.unlink(tmp)
-            raise
-        log.info("mosquitto passwd 내보냄: 단말 %d대 → %s", len(device_accounts), target)
-        return True
-    except OSError:
-        log.exception(
-            "mosquitto passwd 내보내기 실패 (%s) — DB 는 정상, 다음 발행 때 재시도된다",
-            target,
-        )
+    return _export_file(
+        Path(target), render_passwd(device_accounts), f"passwd(단말 {len(device_accounts)}대)"
+    )
+
+
+def acl_export_path() -> Path | None:
+    """aclfile.generated 경로 — passwd 와 같은 디렉터리. 설정 하나로 둘을 다룬다."""
+    target = settings.mosquitto_passwd_export
+    return Path(target).parent / "aclfile.generated" if target else None
+
+
+def export_acl(device_villages: dict[str, int | None]) -> bool:
+    """aclfile 을 공유 볼륨에 쓴다. passwd 와 같은 규칙(실패는 로그만)."""
+    target = acl_export_path()
+    if target is None:
         return False
+    assigned = sum(1 for v in device_villages.values() if v is not None)
+    return _export_file(target, render_acl(device_villages), f"aclfile(배정 {assigned}대)")

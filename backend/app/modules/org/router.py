@@ -66,6 +66,8 @@ async def delete_village(
     macs = await service.macs_in_village(db, village_id)
     await service.delete_village(db, village_id)
     await device_service.clear_device_configs(publisher, macs, db)
+    # 미배정으로 돌아간 단말들의 village topic 허용도 ACL 에서 빠져야 한다.
+    await device_service.export_broker_accounts(db)
 
 
 # ── 구역 ─────────────────────────────────────────────────────────────────
