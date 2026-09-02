@@ -59,6 +59,9 @@ class BroadcastOut(ApiModel):
     file_name: str | None = None
     triggered_at: dt.datetime
     ended_at: dt.datetime | None
+    #: 실제 전송량이 아니라 추정치(단말이 바이트 수를 보고하지 않는다). None 이면
+    #: 아직 진행 중이거나, 서버 재시작으로 고아 정리된 방송이라 신뢰할 수 없다.
+    bytes_estimated: int | None = None
     #: 발행 시점에 온라인이던 대상 단말 수.
     target_count: int = 0
     results: list[DeviceResultOut] = Field(default_factory=list)

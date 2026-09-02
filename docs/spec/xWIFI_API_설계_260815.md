@@ -105,6 +105,10 @@ GET /api/events              필터(마을/기간/타입) + 페이지네이션, 
 GET /api/events/:id          상세 (device_events 결과 포함)
 ```
 
+**bytes_estimated (2026-09-02, A-8/D-1)**: 단말은 실제 전송 바이트 수를 보고하지 않는다(통신 사양에 그런 필드가 없다). 방송이 정상 종료(수동 stop 또는 무음 워치독)될 때 서버가 추정치를 계산해 `broadcast_events.bytes_estimated` 에 남긴다 — LIVE 는 `방송 시간 × 24kbps(사양 고정) × 응답한 단말 수`, FILE 은 `파일 크기 × 응답한 단말 수`. 서버 재시작으로 고아가 된(§ 아래 참고) 방송은 시간을 신뢰할 수 없어 NULL 로 남긴다.
+
+**진행 중 방송의 재시작 정리(A-8)**: `ended_at IS NULL` 인 행은 "방송 중" 취급이라 겹침 검사가 같은 대상에 새 방송을 막는다. 라이브 세션 상태(LiveRegistry)와 무음 워치독은 프로세스 메모리에만 있어서, 배포로 백엔드 컨테이너가 재생성되면 진행 중이던 방송이 고아로 남는다. 기동 시(`app/main.py` lifespan) `close_orphaned_events` 가 그 시점까지 `ended_at` 이 NULL 인 행을 전부 지금 시각으로 닫는다.
+
 ## 7. 대시보드
 
 ```

@@ -834,3 +834,38 @@ class TestServeFile:
             service.serve_file(self._file(tmp_path, monkeypatch, on_disk=False))
         assert exc.value.status_code == 404
         assert exc.value.code == "FILE_MISSING_ON_DISK"
+
+
+# ── 방송 트래픽 추정 (bytes_estimated) ────────────────────────────────────
+class TestBroadcastByteEstimate:
+    """단말이 전송 바이트 수를 보고하지 않아 서버가 추정한다 (2026-09-02, D-1/A-8)."""
+
+    def test_live_bytes_scale_with_duration_and_recipients(self):
+        from app.modules.broadcast.service import estimate_live_bytes
+
+        # 24kbps = 3000 bytes/sec. 43초 · 단말 1대.
+        assert estimate_live_bytes(43.0, 1) == 43 * 3000
+        # 단말이 늘면 그만큼 배가된다 — 각자 별도 스트림을 받는다.
+        assert estimate_live_bytes(43.0, 3) == 43 * 3000 * 3
+
+    def test_live_bytes_no_recipients_is_zero(self):
+        from app.modules.broadcast.service import estimate_live_bytes
+
+        # 아무도 못 받았으면(전부 오프라인) 시간이 있어도 트래픽은 0.
+        assert estimate_live_bytes(120.0, 0) == 0
+
+    def test_live_bytes_never_negative(self):
+        from app.modules.broadcast.service import estimate_live_bytes
+
+        # 방어적 하한 — 시계가 역행해도(NTP 보정 등) 음수 트래픽은 말이 안 된다.
+        assert estimate_live_bytes(-5.0, 2) == 0
+
+    def test_file_bytes_is_size_times_recipients(self):
+        from app.modules.broadcast.service import estimate_file_bytes
+
+        assert estimate_file_bytes(644_252, 4) == 644_252 * 4
+
+    def test_file_bytes_no_recipients_is_zero(self):
+        from app.modules.broadcast.service import estimate_file_bytes
+
+        assert estimate_file_bytes(644_252, 0) == 0

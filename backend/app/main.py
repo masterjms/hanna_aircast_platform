@@ -22,10 +22,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from app.config import settings
-from app.db import SessionFactory, engine
+from app.db import SessionFactory, engine, session_scope
 from app.errors import register_exception_handlers
 from app.live.registry import LiveRegistry
 from app.modules.auth.router import router as auth_router
+from app.modules.broadcast import service as broadcast_service
 from app.modules.broadcast.router import router as broadcast_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.device import service as device_service
@@ -98,6 +99,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await device_service.export_broker_accounts(session)
     except Exception:  # noqa: BLE001
         log.exception("기동 시 MQTT 계정 내보내기 실패 (다음 계정 발행 때 재시도)")
+
+    # 지난 프로세스가 죽거나 재배포로 교체되면서 남은 '진행 중' 방송을 정리한다.
+    # LiveRegistry 는 메모리뿐이라 재시작하면 라이브 세션·워치독이 통째로
+    # 사라지고, 파일 방송은 애초에 자동 종료가 없다 — 안 지우면 겹침 검사가
+    # 그 대상을 영원히 "방송 중"으로 보고 새 방송을 막는다.
+    try:
+        async with session_scope() as session:
+            closed = await broadcast_service.close_orphaned_events(session)
+        if closed:
+            log.warning("기동 시 고아 방송 %d건 정리", closed)
+    except Exception:  # noqa: BLE001
+        log.exception("기동 시 고아 방송 정리 실패")
 
     log.info("기동 완료 (env=%s)", settings.app_env)
 

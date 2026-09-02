@@ -65,6 +65,11 @@ class BroadcastEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
     ended_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    #: 실제 전송량이 아니라 추정치다(단말이 바이트 수를 보고하지 않는다) — LIVE 는
+    #: 방송 시간 × 24kbps × 수신 단말 수, FILE 은 파일 크기 × 수신 단말 수로 계산해
+    #: stop_*_broadcast 가 ended_at 을 찍을 때 같이 채운다. 서버 재시작으로 고아가
+    #: 되어 정리된 행은 시간을 신뢰할 수 없어 NULL 로 남긴다(트래픽 산정에서 제외).
+    bytes_estimated: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class DeviceEvent(Base):

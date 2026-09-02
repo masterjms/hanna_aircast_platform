@@ -18,7 +18,7 @@ import asyncio
 import datetime as dt
 import logging
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -370,6 +370,60 @@ FILE_MAX_BYTES = 2_621_440  # 2.5 MiB
 #: 이보다 긴 파일은 크기가 상한 안이어도 뒷부분이 나오지 않는다.
 FILE_MAX_DURATION_SEC = 600
 
+#: 라이브 인코딩 비트레이트(사양 고정, opus 24kbps). 단말이 실제 전송 바이트 수를
+#: 보고하지 않아서(통신 사양에 그런 필드가 없다), 트래픽 추정에 이 값을 쓴다.
+LIVE_BITRATE_BYTES_PER_SEC = 24_000 // 8
+
+
+def estimate_live_bytes(duration_sec: float, recipient_count: int) -> int:
+    """방송 시간 × 비트레이트 × 수신 단말 수. 실측이 아니라 추정치다."""
+    return round(max(duration_sec, 0.0) * LIVE_BITRATE_BYTES_PER_SEC) * max(recipient_count, 0)
+
+
+def estimate_file_bytes(size_bytes: int, recipient_count: int) -> int:
+    """파일 크기 × 수신 단말 수(단말마다 한 번씩 내려받는다). 실측이 아니라 추정치다."""
+    return max(size_bytes, 0) * max(recipient_count, 0)
+
+
+async def _recipient_count(db: AsyncSession, event_id: int) -> int:
+    """이 방송에 응답을 남긴 단말 수(중복 제거). 바이트 추정의 분모다."""
+    return await db.scalar(
+        select(func.count(func.distinct(DeviceEvent.mac))).where(
+            DeviceEvent.event_id == event_id
+        )
+    ) or 0
+
+
+async def close_orphaned_events(db: AsyncSession) -> int:
+    """서버 재시작 뒤 남은 '진행 중' 방송을 정리한다 (A-8, 2026-09-02).
+
+    LiveRegistry 는 프로세스 메모리에만 있다 — 재시작하면 라이브 세션도, 무음
+    워치독(_watch_uplink) asyncio 태스크도 통째로 사라진다. 파일 방송은 애초에
+    자동 종료 경로가 없다(수동 stop 뿐). 둘 다 프로세스가 죽으면 ended_at 이
+    영원히 NULL 로 남는다.
+
+    남겨두면 겹침 검사(BroadcastOverlap)가 그 대상을 계속 "방송 중"으로 보고
+    새 방송을 막는다 — 재배포할 때마다 누적된다.
+
+    바이트 추정치는 채우지 않는다. triggered_at 부터 지금까지를 실제 방송
+    시간으로 계산하면(서버가 몇 시간 떠 있다 재시작했을 수도 있다) 트래픽이
+    크게 부풀려진다 — 신뢰할 수 없는 값보다는 없는 편이 낫다.
+    """
+    rows = (
+        await db.execute(select(BroadcastEvent).where(BroadcastEvent.ended_at.is_(None)))
+    ).scalars().all()
+    if not rows:
+        return 0
+    now = dt.datetime.now(dt.timezone.utc)
+    for event in rows:
+        log.warning(
+            "고아 방송 정리 id=%d type=%s job_id=%s 시작=%s",
+            event.id, event.event_type, event.job_id, event.triggered_at,
+        )
+        event.ended_at = now
+    await db.flush()
+    return len(rows)
+
 
 def _validate_file_for_broadcast(size_bytes: int, duration_sec: float | None) -> None:
     """발행 전 파일 검사. 단말이 거절하거나 잘려 나갈 파일을 서버에서 먼저 끊는다.
@@ -504,6 +558,10 @@ async def stop_file_broadcast(
             # 죽은 방송에 계속 걸려서 다음 방송을 못 하게 된다.
             log.exception("FILE_STOP 발행 실패 (이력은 종료 처리): event=%d", event_id)
 
+    if event.file_id is not None:
+        size = await db.scalar(select(File.size_bytes).where(File.id == event.file_id))
+        if size is not None:
+            event.bytes_estimated = estimate_file_bytes(size, await _recipient_count(db, event.id))
     event.ended_at = dt.datetime.now(dt.timezone.utc)
     await db.flush()
     log.info("파일 방송 종료 job_id=%s", event.job_id)
@@ -704,7 +762,10 @@ async def stop_live_broadcast(
     if session_id is not None:
         await registry.remove(session_id)
 
-    event.ended_at = dt.datetime.now(dt.timezone.utc)
+    ended = dt.datetime.now(dt.timezone.utc)
+    duration = (ended - event.triggered_at).total_seconds()
+    event.bytes_estimated = estimate_live_bytes(duration, await _recipient_count(db, event.id))
+    event.ended_at = ended
     await db.flush()
     log.info("실시간 방송 종료 session=%s", session_id)
     return await _to_out(db, event, registry)
