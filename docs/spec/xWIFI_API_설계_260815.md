@@ -34,6 +34,8 @@ STATUS 메시지를 백엔드가 구독하다가, devices 테이블에 없는 MA
 
 **단말별 MQTT 계정 (2026-08-30, `SERVER_DEVICE_CREDENTIAL_SPEC_2026-08-27.md`)**: username=콜론 없는 소문자 MAC, password=8자 랜덤(문자 집합 사양 §1, `@`·`!` 제외). 발행하면 DB에 평문 보관(등록 화면 표시·시리얼 투입용)하고, 백엔드가 mosquitto passwd 파일(해시)을 통째로 재생성해 공유 볼륨으로 내보낸다 → mosquitto entrypoint 감시 루프가 설치+SIGHUP 리로드. 응답 `{username, password, issued}` — 이미 발행된 단말은 기존 값 재사용(`issued:false`), `reissue:true`는 라인 재작업 전용. 등록(POST /api/devices)은 자동으로 계정을 함께 발행하고, 삭제는 계정도 함께 지운다(도난 단말 차단 수단). 계정 미발행 단말은 목록 응답의 `has_credential:false`로 구분되어 화면에 「미등록*」으로 표시되고, 공유 계정(이행기 `MQTT_DEVICE_PASSWORD`) 제거 후에는 방송 대상에서도 제외된다(레지스트리 사양 §3.6).
 
+**마을별 ACL 자동 생성 (2026-08-31, 통신 사양 §2.1 "별도 규칙")**: `village/<village_id>/cmd`는 MAC이 아니라 서버 배정값이 들어가 `%u`로 못 잡으므로, 백엔드가 passwd와 같은 통로로 **aclfile도 생성**한다(`mqtt_accounts.render_acl` → 공유 볼륨 `aclfile.generated` → entrypoint 감시 루프가 `/mosquitto/data/aclfile`로 설치+SIGHUP). 단말마다 `user <mac>` 블록에 **배정된 마을 topic 한 줄만** 열리고 와일드카드(`village/+/cmd`)는 쓰지 않는다 — 계정 하나가 뽑혀도 그 마을 하나만 노출된다. 등록·삭제·마을 배정 변경·마을 삭제 때 passwd와 함께 재생성. 리포의 `infra/mosquitto/config/aclfile`은 첫 기동용 시드일 뿐이다. 공유 계정(xwifi-device)과 `%c` 규칙은 2026-08-31 폐기 완료.
+
 **시리얼 주입 프레임 (2026-08-31 확정)**: 두 계정 API 응답에는 `server_host`(`PUBLIC_BASE_URL`에서 스킴·포트를 뗀 호스트)가 함께 실린다. 등록 화면은 이것으로 아래 한 프레임을 만들어 USB(Web Serial, 115200) 또는 복사·붙여넣기로 단말에 넣는다.
 
 ```text
@@ -91,7 +93,10 @@ POST   /api/files              업로드(multipart), size/sha256 서버가 계�
 POST   /api/files/tts          {text, lang, voice} -> Polly 호출 -> 파일 생성
 DELETE /api/files/:id
 GET    /api/files/:id/audio    미리듣기/다운로드
+GET    /dl/:token              단말 전용 다운로드 — 로그인 없음, FILE_START 의 단기 토큰만. Range 지원
 ```
+
+**다운로드 바이트는 nginx 가 보낸다(2026-09-02)**: `/dl/:token` 과 `/api/files/:id/audio` 는 백엔드가 토큰·권한만 검증하고 `X-Accel-Redirect: /_files/<storage_path>` 헤더를 돌려준다. nginx 가 같은 파일 볼륨(읽기전용)을 `internal` location 으로 sendfile 서빙하므로, 마을 단위 FILE_START 로 단말 수백 대가 동시에 받아도 파이썬 프로세스는 요청당 DB 조회 한 번뿐이다. Range(resume_offset 재개)도 nginx 가 처리한다. 개발 환경(nginx 없음)은 `FILE_ACCEL_LOCATION` 을 비워 두면 백엔드가 FileResponse 로 직접 보낸다. nginx access log 에 요청별 `$body_bytes_sent`·`$request_time` 이 남아 단말 다운로드 트래픽을 그대로 셀 수 있다.
 
 ## 6. 이력
 

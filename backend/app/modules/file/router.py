@@ -9,9 +9,8 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, UploadFile, status
+from fastapi import APIRouter, Response, UploadFile, status
 from fastapi import File as FileParam
-from fastapi.responses import FileResponse
 
 from app.core.deps import CurrentUser, Db, MediaUser
 from app.modules.file import service
@@ -76,7 +75,7 @@ async def delete_file(file_id: int, db: Db, _: CurrentUser) -> None:
 
 
 @router.get("/api/files/{file_id}/audio")
-async def stream_audio(file_id: int, db: Db, _: MediaUser) -> FileResponse:
+async def stream_audio(file_id: int, db: Db, _: MediaUser) -> Response:
     """관리자 미리듣기.
 
     <audio src> 는 Authorization 헤더를 못 붙이므로 ?access_token= 도 받는다
@@ -84,25 +83,18 @@ async def stream_audio(file_id: int, db: Db, _: MediaUser) -> FileResponse:
     단말 다운로드는 이 경로가 아니라 /dl/<token> 을 쓴다.
     """
     audio = await service.get_file(db, file_id)
-    path = service.absolute_path(audio)
-    if not path.exists():
-        raise service.FileNotFound(
-            "파일 원본이 디스크에 없습니다.", code="FILE_MISSING_ON_DISK"
-        )
-    return FileResponse(path, media_type="audio/mpeg", filename=audio.filename)
+    return service.serve_file(audio)
 
 
 @router.get("/dl/{token}")
-async def download_for_device(token: str, db: Db) -> FileResponse:
+async def download_for_device(token: str, db: Db) -> Response:
     """단말 전용 다운로드.
 
     로그인이 없다 — 단말은 계정이 없고, 대신 FILE_START 로 받은 단기 토큰만 안다.
     토큰이 없거나 만료면 404 다(존재 여부를 알려주지 않는다).
 
-    FileResponse 는 Range 요청을 지원한다 — 통신 사양의 resume_offset 재개가 이걸 탄다.
+    바이트는 백엔드가 아니라 nginx 가 보낸다(service.serve_file 의 X-Accel-Redirect).
+    Range 요청도 nginx 가 받는다 — 통신 사양의 resume_offset 재개가 이걸 탄다.
     """
     audio = await service.resolve_token(db, token)
-    path = service.absolute_path(audio)
-    if not path.exists():
-        raise service.FileNotFound()
-    return FileResponse(path, media_type="audio/mpeg", filename=audio.filename)
+    return service.serve_file(audio)

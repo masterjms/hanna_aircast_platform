@@ -21,8 +21,10 @@ import subprocess
 import uuid
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import UploadFile
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -174,6 +176,37 @@ def absolute_path(file: File) -> Path:
     return settings.file_root / file.storage_path
 
 
+def serve_file(file: File) -> Response:
+    """파일 바이트를 내려보낸다 — 단말 다운로드(/dl)와 관리자 미리듣기가 같이 쓴다.
+
+    운영(file_accel_location 설정)에서는 바이트를 직접 보내지 않는다. 토큰 검증만 하고
+    `X-Accel-Redirect` 헤더를 얹은 빈 응답을 돌려주면, nginx 가 internal location 에서
+    같은 볼륨의 파일을 sendfile 로 서빙한다. Range 도 nginx 가 처리하므로 통신 사양의
+    resume_offset 재개가 그대로 된다.
+
+    이렇게 하는 이유: 마을 단위 FILE_START 는 그 마을 단말 전체가 동시에 /dl 로 몰린다.
+    파이썬 워커가 바이트를 흘려보내면 300대만으로도 관리자 화면까지 같이 느려진다.
+
+    개발(빈 값)에서는 앞에 nginx 가 없으니 FileResponse 로 직접 보낸다.
+    """
+    path = absolute_path(file)
+    if not path.exists():
+        raise FileNotFound("파일 원본이 디스크에 없습니다.", code="FILE_MISSING_ON_DISK")
+    if settings.file_accel_location:
+        # storage_path 는 FILE_ROOT 기준 상대 경로 — internal location 뒤에 그대로 붙인다.
+        internal = settings.file_accel_location.rstrip("/") + "/" + quote(file.storage_path)
+        return Response(
+            status_code=200,
+            headers={
+                "X-Accel-Redirect": internal,
+                # nginx 는 accel 응답에서 Content-Type/Disposition 은 그대로 전달한다.
+                "Content-Type": "audio/mpeg",
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(file.filename)}",
+            },
+        )
+    return FileResponse(path, media_type="audio/mpeg", filename=file.filename)
+
+
 # ── 업로드 · 삭제 ────────────────────────────────────────────────────────
 async def upload_file(db: AsyncSession, upload: UploadFile, *, uploader: User) -> FileOut:
     original = upload.filename or "audio.mp3"
@@ -267,10 +300,20 @@ async def resolve_token(db: AsyncSession, token: str) -> File:
 
     "만료됨"과 "없음"을 구분해서 알려주지 않는다 — 토큰을 긁는 쪽에 힌트를 주지 않는다.
     """
-    row = await db.get(DownloadToken, token)
-    if row is None or row.expires_at <= dt.datetime.now(dt.timezone.utc):
+    # 조인 한 번으로 끝낸다 — 마을 전체가 동시에 부르는 경로라 왕복을 아낀다.
+    file = (
+        await db.execute(
+            select(File)
+            .join(DownloadToken, DownloadToken.file_id == File.id)
+            .where(
+                DownloadToken.token == token,
+                DownloadToken.expires_at > dt.datetime.now(dt.timezone.utc),
+            )
+        )
+    ).scalar_one_or_none()
+    if file is None:
         raise FileNotFound()
-    return await get_file(db, row.file_id)
+    return file
 
 
 async def purge_expired_tokens(db: AsyncSession) -> int:

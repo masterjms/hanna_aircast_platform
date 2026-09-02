@@ -15,9 +15,14 @@
     <hostname>localhost</hostname>
 
     <limits>
-        <!-- 단말 300대 + 관리자 모니터링 여유 -->
-        <clients>400</clients>
-        <sources>20</sources>
+        <!--
+          clients 는 동시에 스트림을 받는 단말 수의 상한이다. 전체 방송이면 등록 단말
+          전부가 한 번에 붙으므로 목표 규모(3000대) 위로 잡는다. 400 이던 시절에는
+          1000대 전체 방송에서 401번째 단말부터 접속이 거절됐을 것이다.
+          sources 는 동시에 진행되는 방송(마운트) 수 — 마을 수만큼 겹칠 수 있다.
+        -->
+        <clients>4000</clients>
+        <sources>64</sources>
         <threadpool>8</threadpool>
         <queue-size>16384</queue-size>
         <client-timeout>30</client-timeout>

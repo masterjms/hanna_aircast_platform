@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>xWIFI 운영서버 DB 스키마 2026-09-02</title>
+<style>
+  *{box-sizing:border-box}html,body{margin:0;width:2600px;height:1600px;overflow:hidden;background:#f7f9fb;color:#18212d;font-family:"Noto Sans KR","Malgun Gothic",Arial,sans-serif}.canvas{position:relative;width:2600px;height:1600px;background:#fff}
+  h1{position:absolute;left:48px;top:30px;margin:0;font-size:34px;letter-spacing:-1px}.sub{position:absolute;left:50px;top:78px;color:#7d8999;font-size:15px}.badge{display:inline-block;margin-left:9px;padding:3px 8px;border-radius:9px;background:#e9f1fa;color:#1f5d94;font-size:12px;vertical-align:2px}
+  .tb{position:absolute;border:2px solid;border-radius:11px;background:#fff;overflow:hidden;z-index:3;box-shadow:0 1px 0 rgba(30,42,56,.04)}.tb h2{height:40px;margin:0;padding:9px 13px;color:#fff;font-size:16px;letter-spacing:.1px}.tb table{width:100%;border-collapse:collapse;font:12px/1.2 Consolas,"Malgun Gothic",monospace}.tb td{height:25px;padding:5px 8px;border-top:1px solid #dfe5eb}.tb td:first-child{width:38px;text-align:center;font-size:10px;font-weight:700;color:#6b7787}.tb td:nth-child(2){font-weight:600}.tb td:last-child{text-align:right;color:#7d8997;font-size:10px}.org{border-color:#255d95}.org h2{background:#255d95}.asset{border-color:#21895b}.asset h2{background:#21895b}.event{border-color:#bd570f}.event h2{background:#bd570f}.system{border-color:#636e7b}.system h2{background:#636e7b}.new{background:#fff7df}.removed{background:#f3f5f7;color:#8c97a5}.note-row{background:#eef6ff}
+  svg.wires{position:absolute;inset:0;z-index:1}.rel{fill:none;stroke-width:2.2}.rorg{stroke:#467aaa}.rasset{stroke:#2d9368}.revent{stroke:#c86a2b}.logical{stroke:#8291a2;stroke-dasharray:8 6}.audit{stroke:#7fa1c4;stroke-dasharray:7 5}.label{font:700 11px Consolas,monospace;paint-order:stroke;stroke:#fff;stroke-width:5px;stroke-linejoin:round}
+  .foot{position:absolute;left:48px;bottom:24px;width:2500px;border-top:1px solid #d8dfe7;padding-top:14px;color:#627083;font-size:12px;z-index:4}.legend{display:flex;gap:24px;align-items:center;margin-bottom:8px}.sq{display:inline-block;width:14px;height:14px;border-radius:3px;margin-right:7px;vertical-align:-2px}.warn{position:absolute;left:915px;top:1395px;width:1430px;padding:12px 16px;background:#fff8e8;border:1px solid #e1bd70;border-radius:8px;color:#71541d;font-size:12px;z-index:4}.seq{position:absolute;left:50px;top:1370px;width:760px;border:1px dashed #98a6b6;border-radius:9px;padding:12px 16px;color:#536273;font:13px Consolas,monospace;z-index:3;background:#fafbfc}
+</style>
+</head>
+<body>
+<div class="canvas">
+  <h1>xWIFI 운영서버 DB 스키마 <span class="badge">CURRENT</span></h1>
+  <div class="sub">PostgreSQL 18 · 12 tables · 14 foreign keys · Alembic 0001 → 0006 · 2026-09-02</div>
+
+  <div class="tb org" style="left:50px;top:145px;width:350px"><h2>users</h2><table>
+    <tr><td>PK</td><td>id</td><td>SERIAL</td></tr><tr><td>UQ</td><td>username</td><td>VC(50)</td></tr><tr><td></td><td>password_hash</td><td>VC(255)</td></tr><tr><td>CK</td><td>role</td><td>VC(20)</td></tr><tr><td></td><td>created_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+  <div class="tb org" style="left:470px;top:170px;width:310px"><h2>user_villages</h2><table>
+    <tr><td>PF</td><td>user_id</td><td>INT</td></tr><tr><td>PF</td><td>village_id</td><td>INT</td></tr>
+  </table></div>
+  <div class="tb org" style="left:50px;top:500px;width:380px"><h2>villages</h2><table>
+    <tr><td>PK</td><td>id</td><td>SERIAL</td></tr><tr><td></td><td>name</td><td>VC(100)</td></tr><tr><td></td><td>sido</td><td>VC(50)</td></tr><tr><td></td><td>sigungu</td><td>VC(50)</td></tr><tr><td></td><td>address_detail</td><td>VC(255)</td></tr><tr class="new"><td>NEW</td><td>b_code</td><td>VC(10)</td></tr><tr class="new"><td>NEW</td><td>road_address</td><td>VC(255)</td></tr><tr class="new"><td>NEW</td><td>jibun_address</td><td>VC(255)</td></tr><tr><td></td><td>lat / lng</td><td>FLOAT8</td></tr><tr><td></td><td>created_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+  <div class="tb org" style="left:500px;top:500px;width:350px"><h2>zones</h2><table>
+    <tr><td>PK</td><td>id</td><td>SERIAL</td></tr><tr><td>FK</td><td>village_id</td><td>INT</td></tr><tr><td></td><td>name</td><td>VC(100)</td></tr><tr><td></td><td>address_detail</td><td>VC(255)</td></tr><tr><td></td><td>lat / lng</td><td>FLOAT8</td></tr><tr><td></td><td>created_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+  <div class="tb asset" style="left:920px;top:150px;width:430px"><h2>devices</h2><table>
+    <tr><td>PK</td><td>mac</td><td>VC(12)</td></tr><tr><td></td><td>label</td><td>VC(100)</td></tr><tr><td>FK</td><td>village_id</td><td>INT</td></tr><tr><td>FK</td><td>zone_id</td><td>INT</td></tr><tr><td></td><td>firmware_version</td><td>VC(50)</td></tr><tr class="new"><td>NEW</td><td>p4_model / p4_version</td><td>VC(50)</td></tr><tr class="new"><td>NEW</td><td>c6_model / c6_version</td><td>VC(50)</td></tr><tr class="new"><td>NEW</td><td>road_address</td><td>VC(255)</td></tr><tr class="new"><td>NEW</td><td>jibun_address</td><td>VC(255)</td></tr><tr class="new"><td>NEW</td><td>address_detail</td><td>VC(100)</td></tr><tr class="new"><td>NEW</td><td>lat / lng</td><td>FLOAT8</td></tr><tr class="new"><td>NEW</td><td>mqtt_password</td><td>VC(16)</td></tr><tr><td></td><td>last_status</td><td>JSONB</td></tr><tr><td></td><td>last_seen_at</td><td>TIMESTAMPTZ</td></tr><tr><td></td><td>registered_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+
+  <div class="tb asset" style="left:1450px;top:145px;width:390px"><h2>files</h2><table>
+    <tr><td>PK</td><td>id</td><td>SERIAL</td></tr><tr><td></td><td>filename</td><td>VC(255)</td></tr><tr><td></td><td>size_bytes</td><td>BIGINT</td></tr><tr><td></td><td>sha256</td><td>VC(64)</td></tr><tr><td>CK</td><td>source</td><td>VC(20)</td></tr><tr class="new"><td>NEW</td><td>storage_path</td><td>VC(500)</td></tr><tr class="new"><td>NEW</td><td>duration_sec</td><td>NUM(8,2)</td></tr><tr><td></td><td>tts_text</td><td>TEXT</td></tr><tr><td></td><td>tts_lang</td><td>VC(10)</td></tr><tr class="new"><td>NEW</td><td>tts_voice</td><td>VC(50)</td></tr><tr><td>FK</td><td>uploaded_by</td><td>INT</td></tr><tr><td></td><td>created_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+  <div class="tb asset" style="left:1950px;top:155px;width:360px"><h2>download_tokens</h2><table>
+    <tr><td>PK</td><td>token</td><td>VC(64)</td></tr><tr><td>FK</td><td>file_id</td><td>INT</td></tr><tr><td></td><td>job_id</td><td>BIGINT</td></tr><tr><td></td><td>expires_at</td><td>TIMESTAMPTZ</td></tr><tr><td></td><td>created_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+  <div class="tb asset" style="left:1450px;top:640px;width:390px"><h2>schedules <span style="font-size:10px;float:right;margin-top:3px">APP PENDING</span></h2><table>
+    <tr><td>PK</td><td>id</td><td>SERIAL</td></tr><tr><td></td><td>months</td><td>INT[]</td></tr><tr><td></td><td>weekdays</td><td>INT[]</td></tr><tr><td></td><td>times</td><td>TIME[]</td></tr><tr><td>FK</td><td>file_id</td><td>INT</td></tr><tr><td>CK</td><td>target_scope</td><td>VC(20)</td></tr><tr class="new"><td>NEW</td><td>target_ids</td><td>JSONB</td></tr><tr><td></td><td>enabled</td><td>BOOL</td></tr><tr><td>FK</td><td>created_by</td><td>INT</td></tr><tr><td></td><td>created_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+  <div class="tb event" style="left:1960px;top:575px;width:420px"><h2>broadcast_events</h2><table>
+    <tr><td>PK</td><td>id</td><td>BIGSERIAL</td></tr><tr><td></td><td>event_type</td><td>VC(20)</td></tr><tr><td>IX</td><td>job_id</td><td>BIGINT</td></tr><tr><td>CK</td><td>target_scope</td><td>VC(20)</td></tr><tr class="new"><td>NEW</td><td>target_ids</td><td>JSONB</td></tr><tr><td>FK</td><td>file_id</td><td>INT</td></tr><tr><td>FK</td><td>schedule_id</td><td>INT</td></tr><tr><td>FK</td><td>triggered_by</td><td>INT</td></tr><tr><td>IX</td><td>triggered_at</td><td>TIMESTAMPTZ</td></tr><tr class="new"><td>NEW</td><td>ended_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+  <div class="tb event" style="left:1960px;top:1110px;width:420px"><h2>device_events</h2><table>
+    <tr><td>PK</td><td>id</td><td>BIGSERIAL</td></tr><tr><td>FK</td><td>event_id</td><td>BIGINT</td></tr><tr class="note-row"><td>IX</td><td>mac</td><td>VC(12) · FK 없음</td></tr><tr><td></td><td>result_type</td><td>VC(20)</td></tr><tr><td></td><td>payload</td><td>JSONB</td></tr><tr><td>IX</td><td>received_at</td><td>TIMESTAMPTZ</td></tr><tr class="new"><td>UQ*</td><td>dedup_key</td><td>VC(140)</td></tr>
+  </table></div>
+
+  <div class="tb system" style="left:50px;top:1030px;width:380px"><h2>current_config</h2><table>
+    <tr><td>PK</td><td>id = 1</td><td>INT</td></tr><tr><td></td><td>config_version</td><td>INT</td></tr><tr><td></td><td>status_interval_sec</td><td>INT</td></tr><tr><td></td><td>live_stats_interval_sec</td><td>INT</td></tr><tr><td></td><td>event_qos</td><td>SMALLINT</td></tr><tr><td></td><td>updated_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+  <div class="tb event" style="left:500px;top:985px;width:400px"><h2>daily_cost_summary <span style="font-size:10px;float:right;margin-top:3px">APP PENDING</span></h2><table>
+    <tr><td>PK</td><td>id</td><td>BIGSERIAL</td></tr><tr><td>UQ</td><td>summary_date</td><td>DATE</td></tr><tr><td>FK</td><td>village_id</td><td>INT</td></tr><tr><td></td><td>broadcast_minutes</td><td>NUM(10,2)</td></tr><tr><td></td><td>device_broadcast_count</td><td>INT</td></tr><tr><td></td><td>estimated_egress_mb</td><td>NUM(12,2)</td></tr><tr><td></td><td>estimated_cost_krw</td><td>NUM(10,2)</td></tr><tr><td></td><td>actual_total_cost_krw</td><td>NUM(10,2)</td></tr><tr><td></td><td>created_at</td><td>TIMESTAMPTZ</td></tr>
+  </table></div>
+
+  <div class="seq"><b>job_id_seq</b> BIGINT sequence · LIVE / FILE / OTA가 공유하는 전역 job_id 발번</div>
+  <div class="warn"><b>마이그레이션 0006:</b> device_events.mac → devices.mac FK를 제거했다. 단말 삭제 후에도 과거 이력을 보존하며, mac 인덱스와 논리적 참조만 유지한다. <b>UQ*</b> dedup_key는 NULL 제외 partial unique index다.</div>
+
+  <svg class="wires" width="2600" height="1600" viewBox="0 0 2600 1600" aria-label="테이블 관계">
+    <defs><marker id="m1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9z" fill="#467aaa"/></marker><marker id="m2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9z" fill="#2d9368"/></marker><marker id="m3" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9z" fill="#c86a2b"/></marker><marker id="m4" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0 0L9 4.5L0 9z" fill="#8291a2"/></marker></defs>
+    <path class="rel rorg" marker-end="url(#m1)" d="M400 230H470"/><text class="label" x="420" y="220" fill="#467aaa">user_id</text>
+    <path class="rel rorg" marker-end="url(#m1)" d="M625 270V455H250V500"/><text class="label" x="635" y="450" fill="#467aaa">village_id</text>
+    <path class="rel rorg" marker-end="url(#m1)" d="M430 610H500"/><text class="label" x="445" y="600" fill="#467aaa">village_id</text>
+    <path class="rel rorg" marker-end="url(#m1)" d="M430 700H890V245H920"/><text class="label" x="825" y="690" fill="#467aaa">village_id</text>
+    <path class="rel rorg" marker-end="url(#m1)" d="M850 655H900V300H920"/><text class="label" x="858" y="645" fill="#467aaa">zone_id</text>
+    <path class="rel revent" marker-end="url(#m3)" d="M250 820V950H700V985"/><text class="label" x="268" y="940" fill="#c86a2b">village_id</text>
+    <path class="rel rasset" marker-end="url(#m2)" d="M1840 235H1950"/><text class="label" x="1868" y="225" fill="#2d9368">file_id</text>
+    <path class="rel rasset" marker-end="url(#m2)" d="M1645 520V640"/><text class="label" x="1656" y="620" fill="#2d9368">file_id</text>
+    <path class="rel rasset" marker-end="url(#m2)" d="M1840 420H1890V720H1960"/><text class="label" x="1880" y="705" fill="#2d9368">file_id</text>
+    <path class="rel rasset" marker-end="url(#m2)" d="M1840 820H1960"/><text class="label" x="1875" y="810" fill="#2d9368">schedule_id</text>
+    <path class="rel revent" marker-end="url(#m3)" d="M2170 1000V1110"/><text class="label" x="2182" y="1090" fill="#c86a2b">event_id</text>
+    <path class="rel logical" marker-end="url(#m4)" d="M1350 500H1400V1250H1960"/><text class="label" x="1412" y="1238" fill="#8291a2">mac · logical only</text>
+    <path class="rel audit" marker-end="url(#m1)" d="M250 370V1160H1450V950"/><text class="label" x="1365" y="1148" fill="#467aaa">created_by</text>
+    <path class="rel audit" marker-end="url(#m1)" d="M300 390V940H1900V900H1960"/><text class="label" x="1810" y="930" fill="#467aaa">triggered_by</text>
+    <path class="rel audit" marker-end="url(#m1)" d="M350 350H1410V445H1450"/><text class="label" x="1360" y="338" fill="#467aaa">uploaded_by</text>
+  </svg>
+
+  <div class="foot"><div class="legend"><span><i class="sq" style="background:#255d95"></i>조직 · 권한</span><span><i class="sq" style="background:#21895b"></i>단말 · 자산</span><span><i class="sq" style="background:#bd570f"></i>이력 · 집계</span><span><i class="sq" style="background:#636e7b"></i>시스템</span><span><i class="sq" style="background:#fff1c8;border:1px solid #d2a54f"></i>0002~0005 추가/변경</span><span>실선=FK · 점선=audit/logical reference</span></div>PK 기본키 · PF 복합 PK+FK · FK 외래키 · UQ 유니크 · CK 체크 · IX 인덱스 · 열은 글자 = NULL 허용 · daily_cost_summary UNIQUE(summary_date, village_id) NULLS NOT DISTINCT</div>
+</div>
+</body>
+</html>

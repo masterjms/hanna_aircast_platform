@@ -762,3 +762,75 @@ class TestAclRender:
         # 기능이 꺼져 있으면(개발) 아무것도 쓰지 않는다
         monkeypatch.setattr(settings, "mosquitto_passwd_export", None)
         assert mqtt_accounts.export_acl({"58e6c5f2cc74": 5}) is False
+
+
+# ── 파일 서빙 (X-Accel-Redirect) ─────────────────────────────────────────
+class TestServeFile:
+    """단말 다운로드 바이트는 운영에서 nginx 가 보낸다. 백엔드는 헤더만 얹는다."""
+
+    def _file(self, tmp_path, monkeypatch, *, on_disk=True):
+        from app.config import settings
+        from app.models.file import File
+
+        monkeypatch.setattr(settings, "file_root", tmp_path)
+        file = File(
+            filename="산불 안내.mp3",
+            size_bytes=3,
+            sha256="0" * 64,
+            source="upload",
+            storage_path="upload/2026/09/abc.mp3",
+        )
+        if on_disk:
+            path = tmp_path / "upload" / "2026" / "09" / "abc.mp3"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"mp3")
+        return file
+
+    def test_accel_redirect_when_configured(self, monkeypatch, tmp_path):
+        from app.config import settings
+        from app.modules.file import service
+
+        monkeypatch.setattr(settings, "file_accel_location", "/_files/")
+        resp = service.serve_file(self._file(tmp_path, monkeypatch))
+        # 바이트는 없고, nginx 가 볼 internal 경로만 있다
+        assert resp.body == b""
+        assert resp.headers["x-accel-redirect"] == "/_files/upload/2026/09/abc.mp3"
+        assert resp.headers["content-type"] == "audio/mpeg"
+        assert "filename*=UTF-8''" in resp.headers["content-disposition"]
+
+    def test_accel_path_is_url_quoted(self, monkeypatch, tmp_path):
+        from app.config import settings
+        from app.modules.file import service
+
+        monkeypatch.setattr(settings, "file_accel_location", "/_files")
+        file = self._file(tmp_path, monkeypatch, on_disk=False)
+        file.storage_path = "tts/한 글.mp3"
+        (tmp_path / "tts").mkdir()
+        (tmp_path / "tts" / "한 글.mp3").write_bytes(b"x")
+        resp = service.serve_file(file)
+        target = resp.headers["x-accel-redirect"]
+        assert target.startswith("/_files/tts/")
+        assert " " not in target and "한" not in target
+
+    def test_direct_file_response_without_nginx(self, monkeypatch, tmp_path):
+        from pathlib import Path
+
+        from fastapi.responses import FileResponse
+
+        from app.config import settings
+        from app.modules.file import service
+
+        monkeypatch.setattr(settings, "file_accel_location", "")
+        resp = service.serve_file(self._file(tmp_path, monkeypatch))
+        assert isinstance(resp, FileResponse)
+        assert Path(resp.path) == tmp_path / "upload" / "2026" / "09" / "abc.mp3"
+
+    def test_missing_on_disk_is_404(self, monkeypatch, tmp_path):
+        from app.config import settings
+        from app.modules.file import service
+
+        monkeypatch.setattr(settings, "file_accel_location", "/_files/")
+        with pytest.raises(service.FileNotFound) as exc:
+            service.serve_file(self._file(tmp_path, monkeypatch, on_disk=False))
+        assert exc.value.status_code == 404
+        assert exc.value.code == "FILE_MISSING_ON_DISK"

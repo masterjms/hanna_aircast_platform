@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>xWIFI 운영서버 아키텍처 2026-09-02</title>
+<style>
+  *{box-sizing:border-box} html,body{margin:0;width:1600px;height:900px;overflow:hidden;background:#f4f7fa;color:#17202b;font-family:"Noto Sans KR","Malgun Gothic",Arial,sans-serif}
+  .canvas{position:relative;width:1600px;height:900px;background:#f7f9fb}
+  h1{position:absolute;left:42px;top:24px;margin:0;font-size:28px;letter-spacing:-.7px}
+  .sub{position:absolute;left:44px;top:65px;color:#768395;font-size:13px}
+  .zone{position:absolute;border:1px solid #cfd8e3;border-radius:16px;background:#fff}
+  .zone.aws{background:#edf1f5}.zone-title{position:absolute;left:18px;top:-28px;color:#66758a;font-size:13px;font-weight:700}
+  .inner{position:absolute;border:1px dashed #b7c2cf;border-radius:13px;background:rgba(255,255,255,.42)}
+  .inner-label{position:absolute;left:14px;top:10px;color:#66758a;font-size:12px;font-weight:700}
+  .box{position:absolute;border:1.5px solid #9aa9bb;border-radius:11px;background:#fff;padding:12px 14px;z-index:3}
+  .box h2{font-size:15px;margin:0 0 5px}.box p{font-size:11px;line-height:1.45;color:#778599;margin:0}
+  .blue{border-color:#1d5c99}.blue h2{color:#154e83}.orange{border-color:#cb681d}.orange h2{color:#a84d0d}.green{border-color:#21885d}.green h2{color:#187148}.purple{border-color:#7656a7}.purple h2{color:#624590}.gray{border-color:#7d8998}.gray h2{color:#5b6572}
+  .module-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.module{border:1px solid #d5dce5;border-radius:7px;background:#f4f6f8;padding:7px 8px;font-size:11px;text-align:center;color:#394454}
+  .module.done:before{content:"●";color:#2a9b69;margin-right:5px}.module.pending{border-style:dashed;color:#8a6a2a;background:#fff9ec}.module.pending:before{content:"○";margin-right:5px}
+  .tag{display:inline-block;margin-top:8px;padding:3px 7px;border-radius:10px;background:#eef3f8;color:#536274;font-size:10px}
+  svg.wires{position:absolute;inset:0;z-index:2;pointer-events:none}.line{fill:none;stroke-width:2}.ctl{stroke:#1c5792}.audio{stroke:#c25b12}.file{stroke:#1b8558}.serial{stroke:#7255a5}.sql{stroke:#687789}.ops{stroke:#8794a3;stroke-dasharray:7 6}.thin{stroke-width:1.4}.dash{stroke-dasharray:7 5}
+  .wire-label{font-size:11px;font-weight:700;paint-order:stroke;stroke:#f7f9fb;stroke-width:4px;stroke-linejoin:round}.legend{position:absolute;left:45px;bottom:24px;display:flex;gap:27px;align-items:center;color:#59687a;font-size:12px}.sw{display:inline-block;width:25px;height:3px;margin-right:7px;vertical-align:middle}.sw.dashed{height:0;border-top:2px dashed #8794a3}
+  .note{position:absolute;left:386px;top:724px;width:836px;padding:7px 12px;border-radius:8px;background:#fff7e5;border:1px solid #e5bc64;color:#71541d;font-size:11px;z-index:4}
+</style>
+</head>
+<body>
+<div class="canvas">
+  <h1>xWIFI 운영서버 아키텍처</h1>
+  <div class="sub">현재 코드 · Docker Compose · 단말 최신 사양 기준 · 2026-09-02</div>
+
+  <div class="zone" style="left:30px;top:110px;width:310px;height:620px"><div class="zone-title">관리자 · 생산/설치 PC</div></div>
+  <div class="zone aws" style="left:370px;top:110px;width:865px;height:620px"><div class="zone-title">AWS 고객별 독립 스택</div></div>
+  <div class="inner" style="left:388px;top:126px;width:829px;height:475px"><div class="inner-label">EC2 · Docker Compose</div></div>
+  <div class="zone" style="left:1270px;top:110px;width:300px;height:620px"><div class="zone-title">현장 · 최대 약 300대</div></div>
+
+  <div class="box blue" style="left:55px;top:145px;width:260px;height:165px">
+    <h2>React 관리자 대시보드</h2><p>로그인/RBAC · 대시보드/지도<br>단말/마을/계정 · LIVE/FILE · 파일/TTS<br>이력 · CONFIG</p><span class="tag">nginx 정적 웹 볼륨</span>
+  </div>
+  <div class="box orange" style="left:55px;top:335px;width:260px;height:105px"><h2>마이크 캡처</h2><p>opus-recorder(WASM)<br>16 kHz · mono · 24 kbps · 40 ms Ogg/Opus</p></div>
+  <div class="box purple" style="left:55px;top:470px;width:260px;height:160px"><h2>단말 등록 · Web Serial</h2><p>QR/수동 등록 · 단말별 MQTT 계정 발급<br>@SERVER / @MQTTID / @MQTTPW / @END<br>115200 bps · 재부팅/접속/테스트 방송</p><span class="tag">USB는 C6 등록 모드에 직접 연결</span></div>
+
+  <div class="box gray" style="left:410px;top:170px;width:135px;height:385px;text-align:center;padding-top:150px"><h2>nginx</h2><p>:443 TLS 종단<br>React · /api · /ingest<br>/live 프록시 · /dl</p></div>
+  <div class="box blue" style="left:575px;top:145px;width:370px;height:430px">
+    <h2>FastAPI 백엔드 · 단일 프로세스</h2><p>REST API + MQTT Worker + APScheduler + WebSocket ingest</p>
+    <div class="module-grid">
+      <div class="module done">인증 · 권한 범위</div><div class="module done">단말 · 마을 · 계정</div>
+      <div class="module done">LIVE/FILE 방송</div><div class="module done">파일 · Google TTS</div>
+      <div class="module done">지도 · 주소 프록시</div><div class="module done">이력 · 대시보드</div>
+      <div class="module done">CONFIG reconcile</div><div class="module done">Ingest · mount registry</div>
+      <div class="module pending">자동방송 스케줄</div><div class="module pending">OTA · 비용 API/UI</div>
+    </div><span class="tag">job_id_seq · 겹침 방지 advisory lock · QoS1 dedup</span>
+  </div>
+  <div class="box blue" style="left:980px;top:150px;width:210px;height:108px"><h2>Mosquitto 2</h2><p>내부 :1883 · 외부 MQTTS :8883<br>단말별 username=MAC · ACL %u<br>동적 passwd 공유 볼륨/SIGHUP</p></div>
+  <div class="box orange" style="left:980px;top:285px;width:210px;height:100px"><h2>Icecast</h2><p>내부 :8000 · 세션별 source<br>마운트 /live/&lt;job_id&gt;<br>nginx HTTPS 프록시</p></div>
+  <div class="box green" style="left:980px;top:412px;width:210px;height:105px"><h2>파일 저장소</h2><p>Docker named volume<br>/var/lib/iotradio/files<br>upload · tts · update</p></div>
+  <div class="box gray" style="left:980px;top:540px;width:210px;height:48px;padding:9px 14px"><h2 style="font-size:13px">운영 도구</h2><p>deploy · healthcheck · certbot</p></div>
+  <div class="box blue" style="left:855px;top:625px;width:335px;height:78px"><h2>PostgreSQL 18 · AWS RDS</h2><p>12 tables · Alembic 0001~0006 · TLS 연결<br>정본: 단말/권한/CONFIG/파일/방송이력/비용 요약</p></div>
+
+  <div class="box blue" style="left:1300px;top:155px;width:240px;height:350px;text-align:center;padding-top:24px"><h2>ESP32-C6</h2><p style="margin-top:12px">Wi-Fi · MQTTS · HTTPS<br>명령/CONFIG 수신 · STATUS/RESULT 발행<br>Icecast/파일 다운로드<br><br><b>LIVE</b> /live/&lt;job_id&gt;<br><b>FILE</b> /dl/&lt;token&gt;<br><b>MQTT</b> device/village/all topic</p><span class="tag">운영 stream_url은 https 필수</span></div>
+  <div class="box gray" style="left:1325px;top:555px;width:190px;height:105px;text-align:center"><h2>ESP32-P4</h2><p>오디오 디코드/재생 · RF<br>flash 저장 · OTA 적용<br>C6와 SDIO 통신</p></div>
+
+  <div class="zone" style="left:390px;top:780px;width:820px;height:72px;border-style:dashed"><div class="zone-title">외부 서비스 · 운영 연동</div></div>
+  <div style="position:absolute;left:420px;top:800px;width:760px;text-align:center;color:#657487;font-size:12px;line-height:1.7"><b>Google Cloud TTS</b> · <b>카카오 Local/Maps API</b> · AWS Cost Explorer/Slack(운영 스크립트) · GitHub Actions → scripts/deploy.sh · S3 DB 백업</div>
+
+  <div class="note"><b>정합성 확인 필요:</b> 최신 단말 등록 사양은 village_id 기본 12자리(법정동코드 10 + 연번 2)를 권고하지만 현재 서버 코드는 DB 정수 ID를 8자리로 변환한다. DB 구조는 영향 없고 MQTT 토큰 발급 정책만 후속 정렬 대상이다.</div>
+
+  <svg class="wires" width="1600" height="900" viewBox="0 0 1600 900" aria-label="서비스 연결 흐름">
+    <defs>
+      <marker id="ab" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1c5792"/></marker>
+      <marker id="ao" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#c25b12"/></marker>
+      <marker id="ag" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#1b8558"/></marker>
+      <marker id="ap" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#7255a5"/></marker>
+      <marker id="ax" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#687789"/></marker>
+    </defs>
+    <path class="line ctl" marker-end="url(#ab)" d="M315 220 H410"/><text class="wire-label" x="325" y="211" fill="#1c5792">HTTPS · REST</text>
+    <path class="line ctl" marker-end="url(#ab)" d="M545 220 H575"/>
+    <path class="line audio" marker-end="url(#ao)" d="M315 385 H410"/><text class="wire-label" x="322" y="376" fill="#c25b12">WSS /ingest</text>
+    <path class="line audio" marker-end="url(#ao)" d="M545 385 H575"/>
+    <path class="line ctl" marker-start="url(#ab)" marker-end="url(#ab)" d="M945 205 H980"/><text class="wire-label" x="947" y="194" fill="#1c5792">pub/sub</text>
+    <path class="line audio" marker-end="url(#ao)" d="M945 330 H980"/><text class="wire-label" x="947" y="320" fill="#c25b12">source PUT</text>
+    <path class="line file" marker-start="url(#ag)" marker-end="url(#ag)" d="M945 466 H980"/><text class="wire-label" x="947" y="455" fill="#1b8558">저장/조회</text>
+    <path class="line sql" marker-start="url(#ax)" marker-end="url(#ax)" d="M760 575 V664 H855"/><text class="wire-label" x="774" y="651" fill="#687789">SQL · TLS</text>
+    <path class="line ctl" marker-start="url(#ab)" marker-end="url(#ab)" d="M1190 205 H1300"/><text class="wire-label" x="1200" y="194" fill="#1c5792">MQTTS :8883</text>
+    <path class="line audio" marker-start="url(#ao)" marker-end="url(#ao)" d="M1300 315 H1218 V335 H1190"/><text class="wire-label" x="1202" y="306" fill="#c25b12">HTTPS /live/{job}</text>
+    <path class="line file" marker-start="url(#ag)" marker-end="url(#ag)" d="M1300 430 H1218 V465 H1190"/><text class="wire-label" x="1208" y="420" fill="#1b8558">HTTPS /dl/{token}</text>
+    <path class="line sql thin" marker-end="url(#ax)" d="M1430 505 V555"/><text class="wire-label" x="1440" y="538" fill="#687789">SDIO</text>
+    <path class="line serial dash" marker-end="url(#ap)" d="M315 550 H350 V745 H1548 V505"/><text class="wire-label" x="95" y="650" fill="#7255a5">USB 시리얼 설정 주입</text>
+    <path class="line ops dash" d="M760 575 V780"/><text class="wire-label" x="772" y="770" fill="#7a8797">HTTPS / CLI</text>
+  </svg>
+
+  <div class="legend"><span><i class="sw" style="background:#1c5792"></i>제어 · MQTT/REST</span><span><i class="sw" style="background:#c25b12"></i>실시간 오디오</span><span><i class="sw" style="background:#1b8558"></i>파일 · HTTPS</span><span><i class="sw" style="background:#7255a5"></i>생산 시리얼</span><span><i class="sw dashed"></i>운영/외부 연동</span><span>● 구현 · ○ 예정</span></div>
+</div>
+</body>
+</html>

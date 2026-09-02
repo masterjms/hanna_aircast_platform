@@ -3,7 +3,13 @@
 ESP32(P4+C6) 마을방송 단말을 **MQTT + Icecast + HTTP** 로 제어하는 운영서버.
 백엔드·프론트·인프라를 한 리포지토리에 둔다.
 
-사양 문서는 `작업지시서/spec/xWIFI_운영서버_사양통합_260819.md` 를 따른다.
+현재 서버 구조와 DB는 다음 문서를 기준으로 한다.
+
+- [운영서버 아키텍처](docs/spec/xWIFI_운영서버_아키텍처_260902.md) · [다이어그램](docs/xWIFI_아키텍처_다이어그램_260902.png)
+- [DB 스키마](docs/spec/xWIFI_DB_스키마_260902.md) · [ERD](docs/xWIFI_ERD_260902.png)
+- 단말 프로토콜은 [ESP32 문서 목록](docs/spec/ESP32_문서목록_README.md)에서 지정한 최신 문서를 따른다.
+
+날짜가 오래된 설계 문서는 구현 이력으로 보존하며, 충돌하면 위 최신 문서와 현재 Alembic/모델을 우선한다.
 
 ---
 
@@ -45,24 +51,24 @@ ESP32(P4+C6) 마을방송 단말을 **MQTT + Icecast + HTTP** 로 제어하는 �
 
 ```
 [관리자] 방송 제어 화면에서 대상 선택 → 실시간 방송 시작
-   → 서버: 겹침 검사 → session_id 발번 → Icecast source 연결(HTTP PUT)
-   → MQTT: LIVE_START { session_id, stream_url, codec, frame_ms, sample_rate }
+   → 서버: 겹침 검사 → job_id 발번 → Icecast source 연결(HTTP PUT)
+   → MQTT: LIVE_START { job_id, stream_url, codec, frame_ms, sample_rate }
    → 브라우저: opus-recorder(WASM) → WSS /ingest?session=<id>
    → 서버: 받은 Ogg 페이지를 그대로 Icecast 로 흘려보냄 (파싱·재인코딩 없음)
-   → 단말: GET http://<host>/live/00000001/43 → LIVE_READY status=0
+   → 단말: GET https://<host>/live/43 → LIVE_READY status=0
 ```
 
 **마운트는 세션마다 갈라진다.**
 
 ```
-http://<서버>/live/00000001/43
-                  ↑        ↑
-              마을 8자리   세션 id
+https://<서버>/live/43
+                      ↑
+                   job_id
 ```
 
-마운트가 하나뿐이면 나중 방송이 앞 방송을 덮어써서 마을 동시 방송이 안 된다.
-전체(all) 대상 방송은 마을을 정할 수 없어 `/live/all/<세션id>` 를 쓴다 —
-마을 토큰은 항상 8자리 숫자라 `all` 과 겹치지 않는다.
+마운트가 하나뿐이면 나중 방송이 앞 방송을 덮어써서 동시 방송이 안 된다.
+그래서 전역 유일한 `job_id`마다 mount를 만든다. 어느 마을 방송인지는 URL이 아니라
+`broadcast_events.target_ids`가 답하며, 단일·다중 마을·전체 방송이 같은 규칙을 쓴다.
 
 ### 파일 방송 흐름 (Phase 3)
 
@@ -439,29 +445,15 @@ DB 세션은 의존성이 아니라 **미들웨어**가 관리한다. FastAPI �
 
 ---
 
-## 코덱스(ESP32) 협의 대기 중
+## 남은 프로토콜 정합성 항목
 
-구현은 해뒀지만 단말 쪽 지원이 확인되지 않은 항목:
+확정된 `job_id`, 단말별 CONFIG, `LIVE_START.stream_url`, MQTTS 동작은 현재 코드에
+반영되어 있다. 아직 합의 또는 확인이 필요한 항목은 다음 두 가지다.
 
-| 항목 | 내용 | 우선순위 |
+| 항목 | 현재 상태 | 영향 |
 |---|---|---|
-| `iotradio/device/<mac>/config` | 단말별 CONFIG 토픽 구독. 여러 마을 운영에 필수 | 높음 |
-| 공통 CONFIG 의 `village_id` 생략 | 생략 시 단말이 **기존 배정 유지**인지 `00000000` 리셋인지 | 높음 |
-| **retain CONFIG 2개의 도착 순서** | 아래 참고 — 리셋 동작이면 배정이 사라질 수 있다 | 높음 |
-| `LIVE_START.stream_url` | 세션별 Icecast 마운트 지정. **구현 완료 — 단말 지원 확인 필요** | 높음 |
-| `job_id` 통일 | 현재 `session_id`/`cmd_id`/`job_id` 혼재 — 서버는 셋 다 받아준다 | 중간 |
-| 마을 재배정 | 배정→재배정 시 이전 마을 토픽 구독 해제 동작 | 중간 |
+| `village_id` 외부 표현 | 최신 등록 사양은 12자리, 서버 코드는 DB 정수 ID를 8자리로 변환 | MQTT topic·등록 응답·화면을 함께 전환해야 함 |
+| RF 중 LIVE/FILE 명령 | 상태 우선순위상 LIVE/FILE이 RF보다 높지만 실물 응답은 미확인 | BUSY 처리 여부를 ESP32 측과 확인해야 함 |
 
-### retain CONFIG 순서 문제
-
-목 단말로 실측한 결과, 단말이 재접속하면 브로커가 `all/config` 와
-`device/<mac>/config` 두 개의 retain 메시지를 보낸다. **MQTT 는 서로 다른 토픽 간
-전달 순서를 보장하지 않는다.**
-
-- `all/config` → `device/<mac>/config` 순서면 정상 (배정이 나중에 덮어씀)
-- `device/<mac>/config` → `all/config` 순서인데 펌웨어가 "village_id 미수신 = 리셋"
-  이면 **방금 받은 배정이 지워진다**
-
-목 단말은 "미수신 시 기존 값 유지"로 구현해 뒀다. 실제 펌웨어가 어느 쪽인지 확인이
-필요하고, 리셋 동작이라면 공통 CONFIG 에서 `village_id` 를 아예 다루지 않도록
-(필드가 없으면 무시) 펌웨어 수정이 필요하다.
+세부 근거는 [ESP32 문서 목록](docs/spec/ESP32_문서목록_README.md)과
+[최신 아키텍처 문서](docs/spec/xWIFI_운영서버_아키텍처_260902.md)를 따른다.

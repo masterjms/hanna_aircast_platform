@@ -132,6 +132,10 @@ class Settings(BaseSettings):
 
     # ── 파일 저장 ───────────────────────────────────────
     file_root: Path = Path("./data/files")
+    #: nginx X-Accel-Redirect 내부 location. 비우면 백엔드가 파일 바이트를 직접 보낸다(개발).
+    #: 운영에서는 compose 가 "/_files/" 를 넣는다 — 단말 다운로드가 nginx 정적 서빙으로
+    #: 넘어가서, 마을 전체가 동시에 받아도 파이썬 프로세스가 바이트를 만지지 않는다.
+    file_accel_location: str = ""
     download_token_ttl_sec: int = 600
     ota_token_ttl_sec: int = 7200
 

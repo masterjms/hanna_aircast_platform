@@ -24,6 +24,9 @@ services:
       # 단말별 MQTT 계정 passwd 내보내기 경로. mosquitto 의 entrypoint.sh 가
       # 이 파일을 감시해서 설치+리로드한다. 비우면 기능 꺼짐(개발).
       MOSQUITTO_PASSWD_EXPORT: /var/lib/iotradio/mqtt/passwd.generated
+      # 단말 다운로드(/dl) 바이트는 nginx 가 보낸다. 백엔드는 토큰만 검증하고
+      # X-Accel-Redirect 로 이 internal location 을 가리킨다(nginx.conf 참고).
+      FILE_ACCEL_LOCATION: /_files/
     volumes:
       - files:/var/lib/iotradio/files
       # 단말별 MQTT 계정 전달용 공유 볼륨 (backend 쓰기 → mosquitto 읽기)
@@ -77,11 +80,9 @@ services:
     container_name: xwifi-mosquitto
     restart: unless-stopped
     ports:
+      # 단말은 8883(TLS)만 쓴다. 1883 리스너는 컨테이너 네트워크 안에서 백엔드가
+      # 쓰므로 살아 있지만 호스트로는 열지 않는다(2026-09-02 전환기 개방 종료).
       - "8883:8883"
-      # 전환기 한시 개방. 펌웨어가 mqtts 를 지원하면 이 줄과 보안그룹 1883 을
-      # 함께 지운다. 평문이라 CONNECT 패킷에 ID/PW 가 그대로 실린다 —
-      # 전환 시점에 MQTT 비밀번호를 반드시 교체할 것.
-      - "1883:1883"
     # 단말별 계정 감시 루프를 얹은 래퍼. passwd.generated 가 바뀌면 권한을 맞춰
     # /mosquitto/data/passwd 로 설치하고 SIGHUP 리로드한다.
     entrypoint: ["/bin/sh", "/mosquitto/entrypoint.sh"]
@@ -117,11 +118,10 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      # 전환기 평문 스트림. Icecast 를 직접 노출하지 않고 nginx 가 /live/ 만
-      # 프록시한다(관리 인터페이스 차단). 펌웨어 TLS 반영 후 제거.
-      - "8000:8000"
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # 단말 다운로드 파일을 nginx 가 직접 서빙한다(X-Accel-Redirect). 읽기전용.
+      - files:/var/lib/iotradio/files:ro
       - ./infra/certs:/etc/nginx/certs:ro
       - ./infra/certbot-webroot:/var/www/certbot:ro
       - web:/usr/share/nginx/html:ro
