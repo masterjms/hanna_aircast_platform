@@ -31,6 +31,7 @@ from app.db import session_scope
 from app.models.device import Device
 from app.models.event import BroadcastEvent, DeviceEvent
 from app.models.system import CurrentConfig
+from app.modules.broadcast import service as broadcast_service
 from app.mqtt import topics
 from app.mqtt.publisher import MqttPublisher
 from app.mqtt.status_buffer import (
@@ -294,9 +295,10 @@ async def handle_status(
 
 
 async def handle_result(db: AsyncSession, mac: str, data: dict[str, Any]) -> None:
-    """result 토픽 (LIVE_READY · FILE_END · FILE_ABORT · FILE_STOP_RESULT · OTA_STATUS)."""
+    """result 토픽 (LIVE_READY · LIVE_RESULT · FILE_RESULT · OTA_PROGRESS · OTA_RESULT)."""
     now = dt.datetime.now(dt.timezone.utc)
     result_type = str(data.get("type") or "") or None
+    job_id = _job_id_of(data)
 
     # 결과가 왔다는 건 살아 있다는 뜻이다. 미등록 MAC 이면 여기서도 등록된다.
     await _touch_device(db, mac, payload=None, seen_at=now)
@@ -305,8 +307,16 @@ async def handle_result(db: AsyncSession, mac: str, data: dict[str, Any]) -> Non
         mac=mac,
         result_type=result_type,
         payload=data,
-        job_id=_job_id_of(data),
+        job_id=job_id,
     )
+
+    # 종료 결과(FILE_RESULT · LIVE_RESULT)라면 이걸로 방송이 다 끝났는지 본다.
+    # 이게 없으면 단말은 재생을 마쳤는데 화면은 계속 방송 중이다(문제점 3번).
+    if job_id is not None and result_type in broadcast_service.TERMINAL_RESULTS:
+        try:
+            await broadcast_service.finish_if_all_reported(db, job_id)
+        except Exception:  # noqa: BLE001 - 이력 적재는 이미 끝났다. 종료 판정만 포기한다.
+            log.exception("방송 종료 판정 실패: job_id=%s", job_id)
 
 
 async def dispatch(

@@ -52,23 +52,43 @@ function formatTime(iso: string | null): string {
   return new Date(iso).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
 }
 
+/** 지금 몇 초째인지. 초 단위로만 쓰므로 1초마다 다시 그린다. */
+function useElapsedSec(since: string): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return Math.max(0, Math.floor((now - new Date(since).getTime()) / 1000));
+}
+
 /** 진행 중인 방송 한 건. 단말 응답을 성공/실패/대기로 접어 보여준다. */
 function ActiveCard({
   broadcast,
   onStop,
   busy,
+  readyWaitSec,
 }: {
   broadcast: BroadcastDetail;
   onStop: (broadcast: BroadcastDetail) => void;
   busy: boolean;
+  /** 이 시간을 넘겨도 준비가 안 된 단말이 있으면 알려준다(설정값). */
+  readyWaitSec: number;
 }) {
   const isLive = broadcast.event_type.startsWith('LIVE');
   const done = broadcast.results.filter((r) => r.ok === true).length;
   const failed = broadcast.results.filter((r) => r.ok === false).length;
   // results 는 단말당 1행이라 행 수가 곧 대수다. 예전에는 메시지마다 1행이라
   // 단말 1대가 3행이 되면 "1 / 3대"처럼 대수를 틀리게 셌다.
-  const total = Math.max(broadcast.target_count, broadcast.results.length);
+  const total = Math.max(broadcast.expected_count ?? broadcast.target_count, broadcast.results.length);
   const pct = total > 0 ? Math.round(((done + failed) / total) * 100) : 0;
+
+  // 중지를 눌렀지만 아직 단말 응답을 기다리는 중.
+  const stopping = broadcast.stop_requested_at !== null && broadcast.ended_at === null;
+  const elapsed = useElapsedSec(broadcast.triggered_at);
+  // 라이브인데 기준 시간이 지나도 전부 준비되지 않았다 — 그냥 진행할지, 더
+  // 기다릴지, 중지할지는 방송하는 사람이 판단할 일이라 알리기만 한다.
+  const readyLagging = isLive && !stopping && elapsed >= readyWaitSec && done < total;
 
   return (
     <div className="active-card">
@@ -91,6 +111,18 @@ function ActiveCard({
               마이크가 연결되지 않아 무음이 나가는 중입니다.
             </div>
           )}
+          {stopping && (
+            <div className="hint" style={{ marginTop: 6 }}>
+              중지를 보냈습니다. 단말의 종료 응답을 기다리는 중입니다 ({done + failed}/{total}대
+              응답). 응답이 다 오면 즉시, 늦어지면 설정한 대기 시간 뒤에 종료됩니다.
+            </div>
+          )}
+          {readyLagging && (
+            <div className="hint hint--warn" style={{ marginTop: 6 }}>
+              {elapsed}초가 지났는데 {total - done}대가 아직 준비되지 않았습니다. 그대로
+              방송할지, 더 기다릴지, 중지할지 선택하세요.
+            </div>
+          )}
           {isLive && broadcast.stream_url && (
             <div className="dim mono" style={{ fontSize: 11, marginTop: 6 }}>
               {broadcast.stream_url}
@@ -101,13 +133,19 @@ function ActiveCard({
           type="button"
           className="btn btn--stop"
           onClick={() => onStop(broadcast)}
-          disabled={busy}
+          disabled={busy || stopping}
         >
-          중지
+          {stopping ? '중지 중…' : '중지'}
         </button>
       </div>
 
-      <div className="progress">
+      {/* 막대는 "응답이 온 비율"이다 — 성공(ok=true)과 실패(ok=false)를 함께 센다.
+          라이브의 성공은 LIVE_READY ok=true(P4 오디오 준비 완료), 파일은
+          FILE_RESULT ok=true(재생까지 끝남)를 뜻한다(통신 사양 §5.4). */}
+      <div
+        className="progress"
+        title={`응답 ${done + failed} / ${total}대 (성공 ${done} · 실패 ${failed})`}
+      >
         <span style={{ width: `${pct}%` }} />
       </div>
       <div className="active-card__stats">
@@ -155,6 +193,9 @@ export function BroadcastPage() {
   const [macs, setMacs] = useState<string[]>([]);
   const [fileId, setFileId] = useState<number | ''>('');
   const [storeFlash, setStoreFlash] = useState(false);
+
+  /** 라이브 준비 지연 알림 기준(초). 설정값이고, 못 읽으면 기본 10초. */
+  const [readyWaitSec, setReadyWaitSec] = useState(10);
 
   const [villages, setVillages] = useState<Village[]>([]);
   const [zones, setZones] = useState<Zone[]>([]);
@@ -279,6 +320,14 @@ export function BroadcastPage() {
     }
   };
 
+  // 설정은 자주 바뀌지 않으니 화면을 열 때 한 번만 읽는다. 실패해도 기본값으로 돈다.
+  useEffect(() => {
+    void api.config
+      .get()
+      .then((c) => setReadyWaitSec(c.live_stop_wait_sec))
+      .catch(() => undefined);
+  }, []);
+
   const stop = useCallback(
     async (broadcast: BroadcastDetail) => {
       setBusy(true);
@@ -347,7 +396,13 @@ export function BroadcastPage() {
           <h2 className="section-title">진행 중인 방송 {running.length}건</h2>
           <div className="active-list">
             {running.map((b) => (
-              <ActiveCard key={b.id} broadcast={b} onStop={(x) => void stop(x)} busy={busy} />
+              <ActiveCard
+                key={b.id}
+                broadcast={b}
+                onStop={(x) => void stop(x)}
+                busy={busy}
+                readyWaitSec={readyWaitSec}
+              />
             ))}
           </div>
         </section>

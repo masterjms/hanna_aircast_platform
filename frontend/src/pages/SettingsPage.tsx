@@ -1,9 +1,12 @@
 /**
- * 단말 공통 설정 (super_admin).
+ * 설정 (super_admin).
  *
- * 저장하면 config_version 이 올라가고 서버가 MQTT CONFIG(retain)를 재발행한다.
- * 단말은 config_version 이 바뀔 때만 값을 다시 적용하고, 적용 직후 STATUS 로 echo 한다 —
- * 단말 관리 화면의 CFG 열에서 반영 여부를 확인할 수 있다.
+ * 두 종류가 한 화면에 있다:
+ *   · 단말 공통 설정 — 저장하면 config_version 이 올라가고 서버가 MQTT CONFIG(retain)를
+ *     재발행한다. 단말은 config_version 이 바뀔 때만 값을 다시 적용하고 STATUS 로 echo 한다
+ *     (단말 관리 화면의 CFG 열에서 반영 여부를 볼 수 있다).
+ *   · 서버 설정 — 방송 중지 후 단말 응답을 기다리는 시간. 단말로 나가지 않으므로
+ *     이 값만 바꾸면 config_version 이 올라가지 않는다.
  */
 
 import { useEffect, useState, type FormEvent } from 'react';
@@ -37,6 +40,22 @@ const FIELDS = [
     max: 1,
     unit: '',
   },
+  {
+    key: 'file_stop_wait_sec',
+    label: '파일방송 응답 대기',
+    hint: '중지 후 단말의 종료 응답을 기다리는 시간입니다. 다 오면 즉시 끝내고, 넘기면 못 받은 단말이 있어도 종료로 확정합니다.',
+    min: 10,
+    max: 30,
+    unit: '초',
+  },
+  {
+    key: 'live_stop_wait_sec',
+    label: '라이브방송 응답 대기',
+    hint: '중지 후 종료 응답을 기다리는 시간이자, 방송 시작 후 준비되지 않은 단말을 알려주는 기준입니다.',
+    min: 10,
+    max: 30,
+    unit: '초',
+  },
 ] as const;
 
 type FieldKey = (typeof FIELDS)[number]['key'];
@@ -47,6 +66,8 @@ export function SettingsPage() {
     status_interval_sec: 30,
     live_stats_interval_sec: 10,
     event_qos: 0,
+    file_stop_wait_sec: 10,
+    live_stop_wait_sec: 10,
   });
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -60,6 +81,8 @@ export function SettingsPage() {
           status_interval_sec: c.status_interval_sec,
           live_stats_interval_sec: c.live_stats_interval_sec,
           event_qos: c.event_qos,
+          file_stop_wait_sec: c.file_stop_wait_sec,
+          live_stop_wait_sec: c.live_stop_wait_sec,
         });
       } catch (err) {
         setMessage({

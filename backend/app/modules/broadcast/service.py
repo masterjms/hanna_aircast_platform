@@ -33,6 +33,7 @@ from app.live.registry import LiveRegistry, LiveSession
 from app.models.device import Device
 from app.models.event import BroadcastEvent, DeviceEvent
 from app.models.file import File
+from app.models.system import CurrentConfig
 from app.modules.device import service as device_service
 from app.modules.file import service as file_service
 from app.mqtt.publisher import MqttPublisher
@@ -224,8 +225,12 @@ async def _to_out(
     """
     out = BroadcastOut.model_validate(event)
 
+    # 발행 시점에 명령을 보낸 대수가 있으면 그걸 쓴다 — 진행률의 분모가 방송 중에
+    # 흔들리지 않아야 한다(단말이 꺼지거나 배정이 바뀌면 100%가 영영 안 된다).
+    if event.expected_count:
+        out.target_count = event.expected_count
     # 진행 중일 때만 센다. 끝난 방송은 응답 수가 곧 결과다.
-    if event.ended_at is None:
+    elif event.ended_at is None:
         try:
             macs = await device_service.macs_for_target(
                 db,
@@ -394,6 +399,115 @@ async def _recipient_count(db: AsyncSession, event_id: int) -> int:
     ) or 0
 
 
+#: "이 방송에서 이 단말은 끝났다"를 뜻하는 결과 타입 (통신 사양 §5.4).
+#: LIVE_READY 는 준비 결과라 여기 없다 — 준비됐다고 방송이 끝난 게 아니다.
+TERMINAL_RESULTS = frozenset({"FILE_RESULT", "LIVE_RESULT"})
+
+#: 파일 방송이 스스로 끝났다고 볼 최대 시간 = 재생 길이 + 이 여유(초).
+#: 다운로드·재생 지연과 응답 유실을 감안한 값이다. 이걸 안 두면 도중에 꺼진
+#: 단말 하나 때문에 방송이 영영 "진행 중"으로 남는다.
+FILE_TAIL_GRACE_SEC = 120
+
+
+async def _responded_count(db: AsyncSession, event_id: int) -> int:
+    """종료 결과를 보낸 단말 수(중복 제거)."""
+    return await db.scalar(
+        select(func.count(func.distinct(DeviceEvent.mac))).where(
+            DeviceEvent.event_id == event_id,
+            DeviceEvent.result_type.in_(TERMINAL_RESULTS),
+        )
+    ) or 0
+
+
+async def end_event(db: AsyncSession, event: BroadcastEvent, *, reason: str) -> None:
+    """방송을 종료로 확정한다 — ended_at 과 전송량 추정치를 함께 찍는다.
+
+    종료 경로가 여럿이라(사용자 중지·자연 종료·응답 대기 만료·업링크 끊김)
+    한 군데로 모은다. 여기 안 거치면 bytes_estimated 가 비는 방송이 생긴다.
+    """
+    if event.ended_at is not None:
+        return
+    ended = dt.datetime.now(dt.timezone.utc)
+    recipients = await _recipient_count(db, event.id)
+
+    if event.event_type.startswith("LIVE"):
+        duration = (ended - event.triggered_at).total_seconds()
+        event.bytes_estimated = estimate_live_bytes(duration, recipients)
+    elif event.file_id is not None:
+        size = await db.scalar(select(File.size_bytes).where(File.id == event.file_id))
+        if size is not None:
+            event.bytes_estimated = estimate_file_bytes(size, recipients)
+
+    event.ended_at = ended
+    await db.flush()
+    log.info(
+        "방송 종료 job_id=%s (%s) — 응답 %d/%s대",
+        event.job_id, reason, recipients, event.expected_count or "?",
+    )
+
+
+async def finish_if_all_reported(db: AsyncSession, job_id: int) -> bool:
+    """단말 종료 결과가 도착할 때마다 부른다. 다 왔으면 방송을 끝낸다.
+
+    이게 없으면 파일 방송은 사람이 "중지"를 누를 때까지 영원히 진행 중이다 —
+    단말에서는 이미 재생이 끝났는데 화면만 ON AIR 로 남는다(문제점 3번).
+
+    중지 대기 중(stop_requested_at)인 방송도 여기서 조기 종료된다. 대기 시간을
+    다 쓰지 않고 마지막 단말이 답한 순간 끝난다.
+
+    ⚠ 세션을 새로 열지 않고 호출부 것을 받는다. 방금 넣은 DeviceEvent 가 아직
+      커밋 전이라, 다른 세션에서는 그 행이 안 보여서 영원히 한 대가 모자라다.
+    """
+    event = (
+        await db.execute(
+            select(BroadcastEvent).where(
+                BroadcastEvent.job_id == job_id, BroadcastEvent.ended_at.is_(None)
+            )
+        )
+    ).scalar_one_or_none()
+    if event is None or not event.expected_count:
+        # 대상 대수를 모르면 셀 수 없다(구버전 이력). 시간 기반 종료에 맡긴다.
+        return False
+    if await _responded_count(db, event.id) < event.expected_count:
+        return False
+    await end_event(db, event, reason="전 단말 응답 완료")
+    return True
+
+
+async def _force_end_after(event_id: int, wait_sec: float, *, reason: str) -> None:
+    """기다렸다가, 그때도 안 끝났으면 종료로 확정한다.
+
+    중지 응답 대기(문제점 4·5번)와 파일 방송 자연 종료 상한(3번)이 같은 모양이라
+    하나로 쓴다. 먼저 전 단말이 답하면 finish_if_all_reported 가 이미 끝냈고,
+    여기서는 아무 일도 하지 않는다.
+    """
+    try:
+        await asyncio.sleep(wait_sec)
+        async with session_scope() as db:
+            event = await db.get(BroadcastEvent, event_id)
+            if event is None or event.ended_at is not None:
+                return
+            missing = (event.expected_count or 0) - await _responded_count(db, event.id)
+            if missing > 0:
+                log.warning(
+                    "방송 %d: %d대가 %s초 안에 응답하지 않아 종료로 확정한다 (%s)",
+                    event_id, missing, wait_sec, reason,
+                )
+            await end_event(db, event, reason=reason)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - 종료 확정 실패가 워커를 죽이면 안 된다
+        log.exception("방송 종료 확정 실패: event=%d", event_id)
+
+
+async def _stop_wait_sec(db: AsyncSession, *, live: bool) -> int:
+    """설정에서 응답 대기 시간을 읽는다(문제점 4·5번, 10~30초)."""
+    config = await db.get(CurrentConfig, 1)
+    if config is None:
+        return 10
+    return config.live_stop_wait_sec if live else config.file_stop_wait_sec
+
+
 async def close_orphaned_events(db: AsyncSession) -> int:
     """서버 재시작 뒤 남은 '진행 중' 방송을 정리한다 (A-8, 2026-09-02).
 
@@ -499,6 +613,8 @@ async def start_file_broadcast(
         target_ids=payload.target_ids,
         file_id=audio.id,
         triggered_by=user_id,
+        # 종료 판정의 분모. 지금 명령을 보낸 대수를 그대로 박아둔다.
+        expected_count=len(macs),
     )
     db.add(event)
     await db.flush()
@@ -511,6 +627,17 @@ async def start_file_broadcast(
         macs=macs,
     )
     log.info("파일 방송 시작 job_id=%s 대상 %d대 file=%s", job_id, len(macs), audio.filename)
+
+    # 파일 방송은 단말이 다 재생하면 FILE_RESULT 로 끝을 알린다(그때
+    # finish_if_all_reported 가 끝낸다). 도중에 꺼진 단말이 있으면 그 신호가
+    # 영영 안 오므로, 재생 길이 + 여유를 상한으로 둔다.
+    playback = float(audio.duration_sec) if audio.duration_sec is not None else 0.0
+    asyncio.create_task(
+        _force_end_after(
+            event.id, playback + FILE_TAIL_GRACE_SEC, reason="재생 예상 시간 초과"
+        ),
+        name=f"file-broadcast-end-{job_id}",
+    )
 
     return await _to_out(db, event)
 
@@ -534,6 +661,11 @@ async def stop_file_broadcast(
         raise BroadcastNotFound()
     if event.ended_at is not None:
         raise ApiError("이미 종료된 방송입니다.", code="BROADCAST_ALREADY_ENDED")
+    if event.stop_requested_at is not None:
+        raise ApiError(
+            "이미 중지를 요청했습니다. 단말 응답을 기다리는 중입니다.",
+            code="BROADCAST_STOP_PENDING",
+        )
 
     macs = await device_service.macs_for_target(
         db,
@@ -558,13 +690,17 @@ async def stop_file_broadcast(
             # 죽은 방송에 계속 걸려서 다음 방송을 못 하게 된다.
             log.exception("FILE_STOP 발행 실패 (이력은 종료 처리): event=%d", event_id)
 
-    if event.file_id is not None:
-        size = await db.scalar(select(File.size_bytes).where(File.id == event.file_id))
-        if size is not None:
-            event.bytes_estimated = estimate_file_bytes(size, await _recipient_count(db, event.id))
-    event.ended_at = dt.datetime.now(dt.timezone.utc)
+    # 예전에는 여기서 바로 ended_at 을 찍었다. 단말이 실제로 멈췄는지 확인하지 않고
+    # 화면만 "중지됨"이 되는 게 문제였다(문제점 4번). 이제 중지 요청 시각만 남기고
+    # 단말의 FILE_RESULT 를 기다린다 — 다 오면 그 순간, 안 오면 대기 시간 뒤에 끝난다.
+    wait_sec = await _stop_wait_sec(db, live=False)
+    event.stop_requested_at = dt.datetime.now(dt.timezone.utc)
     await db.flush()
-    log.info("파일 방송 종료 job_id=%s", event.job_id)
+    log.info("파일 방송 중지 요청 job_id=%s — 단말 응답 %d초 대기", event.job_id, wait_sec)
+    asyncio.create_task(
+        _force_end_after(event.id, wait_sec, reason="중지 응답 대기 시간 초과"),
+        name=f"file-stop-wait-{event.job_id}",
+    )
     return await _to_out(db, event)
 
 
@@ -623,6 +759,8 @@ async def start_live_broadcast(
         target_scope=payload.target_scope.value,
         target_ids=payload.target_ids,
         triggered_by=user_id,
+        # 종료 판정의 분모. 지금 명령을 보낸 대수를 그대로 박아둔다.
+        expected_count=len(macs),
     )
     db.add(event)
     await db.flush()
@@ -652,8 +790,7 @@ async def start_live_broadcast(
         # 발행이 실패하면 아무 단말도 못 붙는다. 세워둔 소스를 정리하고
         # 이력도 끝난 것으로 표시한다 — 유령 세션이 겹침 검사를 막으면 안 된다.
         await registry.remove(session_id)
-        event.ended_at = dt.datetime.now(dt.timezone.utc)
-        await db.flush()
+        await end_event(db, event, reason="발행 실패")
         raise
 
     log.info("실시간 방송 시작 session=%d mount=%s 대상 %d대", session_id, mount, len(macs))
@@ -737,6 +874,11 @@ async def stop_live_broadcast(
         raise BroadcastNotFound()
     if event.ended_at is not None:
         raise ApiError("이미 종료된 방송입니다.", code="BROADCAST_ALREADY_ENDED")
+    if event.stop_requested_at is not None:
+        raise ApiError(
+            "이미 중지를 요청했습니다. 단말 응답을 기다리는 중입니다.",
+            code="BROADCAST_STOP_PENDING",
+        )
 
     session_id = event.job_id
     macs = await device_service.macs_for_target(
@@ -759,13 +901,19 @@ async def stop_live_broadcast(
         except Exception:  # noqa: BLE001
             log.exception("LIVE_STOP 발행 실패 (이력은 종료 처리): event=%d", event_id)
 
+    # Icecast 소스는 지금 닫는다. 단말에는 이미 LIVE_STOP 을 보냈으니 더 흘려보낼
+    # 오디오가 없고, 열어두면 유령 마운트가 남는다. 늦추는 것은 "종료 확정"뿐이다.
     if session_id is not None:
         await registry.remove(session_id)
 
-    ended = dt.datetime.now(dt.timezone.utc)
-    duration = (ended - event.triggered_at).total_seconds()
-    event.bytes_estimated = estimate_live_bytes(duration, await _recipient_count(db, event.id))
-    event.ended_at = ended
+    # 단말의 LIVE_RESULT 를 기다린다(문제점 5번). 다 오면 그 순간 끝나고,
+    # 못 받은 단말이 있어도 대기 시간이 지나면 종료로 확정한다.
+    wait_sec = await _stop_wait_sec(db, live=True)
+    event.stop_requested_at = dt.datetime.now(dt.timezone.utc)
     await db.flush()
-    log.info("실시간 방송 종료 session=%s", session_id)
+    log.info("실시간 방송 중지 요청 session=%s — 단말 응답 %d초 대기", session_id, wait_sec)
+    asyncio.create_task(
+        _force_end_after(event.id, wait_sec, reason="중지 응답 대기 시간 초과"),
+        name=f"live-stop-wait-{session_id}",
+    )
     return await _to_out(db, event, registry)

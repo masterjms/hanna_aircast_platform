@@ -970,3 +970,58 @@ class TestResyncDecision:
         assert sb.resync_allowed("aabbccddee01", now + dt.timedelta(seconds=5)) is False
         assert sb.resync_allowed("aabbccddee01", now + dt.timedelta(seconds=61)) is True
         sb._last_resync.clear()
+
+
+# ── 방송 종료 판정 (문제점 3·4·5번) ──────────────────────────────────────
+class TestTerminalResults:
+    """어떤 결과가 "이 단말은 끝났다"인가. 잘못 넣으면 방송이 조기 종료된다."""
+
+    def test_terminal_set_matches_spec(self):
+        from app.modules.broadcast.service import TERMINAL_RESULTS
+
+        # 통신 사양 §5.4: 종료를 말하는 건 이 둘뿐이다.
+        assert {"FILE_RESULT", "LIVE_RESULT"} == TERMINAL_RESULTS
+
+    def test_live_ready_is_not_terminal(self):
+        from app.modules.broadcast.service import TERMINAL_RESULTS
+
+        # LIVE_READY 는 "P4 오디오 준비 완료"지 방송이 끝났다는 뜻이 아니다.
+        # 여기 들어가면 준비되자마자 방송이 종료돼 버린다.
+        assert "LIVE_READY" not in TERMINAL_RESULTS
+        # 진행 알림도 마찬가지다.
+        assert "OTA_PROGRESS" not in TERMINAL_RESULTS
+        assert "LIVE_STATS" not in TERMINAL_RESULTS
+
+
+class TestServerOnlyConfig:
+    """중지 응답 대기는 서버 설정이다 — 단말로 나가지 않는다."""
+
+    def test_stop_wait_is_not_a_device_field(self):
+        from app.constants import DEVICE_CONFIG_FIELDS
+
+        # 여기 들어가면 이 값만 바꿔도 config_version 이 올라가고 전 단말이
+        # 내용상 같은 CONFIG 를 다시 받는다.
+        assert "file_stop_wait_sec" not in DEVICE_CONFIG_FIELDS
+        assert "live_stop_wait_sec" not in DEVICE_CONFIG_FIELDS
+
+    def test_device_fields_are_the_spec_three(self):
+        from app.constants import DEVICE_CONFIG_FIELDS
+
+        assert {
+            "status_interval_sec",
+            "live_stats_interval_sec",
+            "event_qos",
+        } == DEVICE_CONFIG_FIELDS
+
+    def test_stop_wait_range_is_10_to_30(self):
+        from app.constants import CONFIG_LIMITS
+
+        # 문제점 리스트 4·5번이 요구한 범위. 화면·API 가 같은 값으로 막는다.
+        assert CONFIG_LIMITS["file_stop_wait_sec"] == (10, 30)
+        assert CONFIG_LIMITS["live_stop_wait_sec"] == (10, 30)
+
+    def test_every_config_field_has_a_range(self):
+        from app.constants import CONFIG_LIMITS, DEVICE_CONFIG_FIELDS
+
+        # 범위를 빠뜨린 설정이 있으면 _check_range 가 KeyError 로 터진다.
+        assert set(CONFIG_LIMITS) >= DEVICE_CONFIG_FIELDS

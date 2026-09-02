@@ -94,7 +94,14 @@ CONFIG_LIMITS: dict[str, tuple[int, int]] = {
     "status_interval_sec": (10, 3600),
     "live_stats_interval_sec": (1, 60),
     "event_qos": (0, 1),
+    # 서버 전용(단말에 안 나간다). 중지 후 단말 응답을 기다리는 시간.
+    "file_stop_wait_sec": (10, 30),
+    "live_stop_wait_sec": (10, 30),
 }
+
+#: 이 중 단말로 나가는 값들. 여기 없는 설정은 서버 안에서만 쓰이므로 바뀌어도
+#: config_version 을 올리지 않는다(올리면 전 단말이 CONFIG 를 다시 받는다).
+DEVICE_CONFIG_FIELDS = frozenset({"status_interval_sec", "live_stats_interval_sec", "event_qos"})
 
 #: MQTT 로 나가는 village_id 는 8자리 제로패딩 문자열이다.
 VILLAGE_ID_WIDTH = 8

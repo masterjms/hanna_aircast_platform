@@ -59,6 +59,10 @@ class BroadcastOut(ApiModel):
     file_name: str | None = None
     triggered_at: dt.datetime
     ended_at: dt.datetime | None
+    #: 중지를 누른 시각. ended_at 이 없는데 이 값이 있으면 "중지 중 — 응답 대기".
+    stop_requested_at: dt.datetime | None = None
+    #: 발행 시점 대상 대수. 진행률의 분모이자 "다 끝났나" 판정 기준이다.
+    expected_count: int | None = None
     #: 실제 전송량이 아니라 추정치(단말이 바이트 수를 보고하지 않는다). None 이면
     #: 아직 진행 중이거나, 서버 재시작으로 고아 정리된 방송이라 신뢰할 수 없다.
     bytes_estimated: int | None = None

@@ -198,6 +198,9 @@ export interface SystemConfig {
   status_interval_sec: number;
   live_stats_interval_sec: number;
   event_qos: number;
+  /** 중지 후 단말 응답을 기다리는 시간(초). 단말에 나가지 않는 서버 설정이다. */
+  file_stop_wait_sec: number;
+  live_stop_wait_sec: number;
   updated_at: string;
 }
 
@@ -367,6 +370,10 @@ export interface BroadcastDetail {
   file_name: string | null;
   triggered_at: string;
   ended_at: string | null;
+  /** 중지를 누른 시각. ended_at 이 없는데 이 값이 있으면 "중지 중 — 응답 대기". */
+  stop_requested_at: string | null;
+  /** 발행 시점에 명령을 보낸 대상 단말 수. 진행률의 분모다. */
+  expected_count: number | null;
   /** 발행 시점에 온라인이던 대상 단말 수 */
   target_count: number;
   results: DeviceResult[];

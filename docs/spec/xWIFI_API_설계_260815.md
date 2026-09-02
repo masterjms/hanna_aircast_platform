@@ -87,6 +87,23 @@ village_admin은 all과, **목록 중 하나라도** 담당 밖이면 403(일부
 
 **무음 방송 자동 종료**: 라이브 시작 후 LIVE_UPLINK_GRACE_SEC(기본 30초) 안에 마이크 업링크(/ingest)가 한 번도 붙지 않으면 서버가 방송을 자동 종료한다. 화면에는 ON AIR로 보이는데 스피커는 조용한 상태가 프로덕션에서 가장 위험하기 때문이다. 붙었다 끊긴 경우는 재연결 여지가 있으므로 종료하지 않는다.
 
+### 방송 종료 판정 (2026-09-02, 문제점 리스트 3·4·5번)
+
+`broadcast_events`에 `expected_count`(발행 시점에 명령을 보낸 대수)와 `stop_requested_at`(중지를 누른 시각)을 남긴다. 종료를 확정하는 경로는 넷이고 전부 `end_event()`를 거친다(그래야 `bytes_estimated`가 빠지지 않는다).
+
+| 경로 | 언제 | 비고 |
+|---|---|---|
+| 전 단말 응답 | 종료 결과(`FILE_RESULT`·`LIVE_RESULT`)를 보낸 단말 수가 `expected_count`에 도달 | 가장 흔한 경로 |
+| 중지 응답 대기 만료 | 중지 후 `file_stop_wait_sec`/`live_stop_wait_sec`(10~30초, 기본 10초) 경과 | 못 받은 대수를 로그에 남긴다 |
+| 파일 재생 상한 | 시작 + 재생 길이 + 120초 | 도중에 꺼진 단말 때문에 영영 안 끝나는 것을 막는다 |
+| 기동 시 고아 정리 | 서버 재시작 | `close_orphaned_events`, 아래 §6 |
+
+**중지는 즉시 종료가 아니다.** 예전에는 `/stop`이 단말 응답을 보지 않고 바로 `ended_at`을 찍어서, 단말이 실제로 멈췄는지와 무관하게 화면만 "중지됨"이 됐다. 이제 `stop_requested_at`만 찍고 단말의 종료 결과를 기다린다 — 다 오면 그 순간, 안 오면 대기 시간 뒤에 확정한다. 대기 중에 다시 중지를 누르면 `BROADCAST_STOP_PENDING`(409)으로 거절한다. 대기 중인 방송도 겹침 검사에는 계속 잡히므로, 확정 전에는 같은 대상으로 새 방송을 시작할 수 없다. 라이브의 Icecast 소스는 대기하지 않고 중지 요청 즉시 닫는다(단말에는 이미 `LIVE_STOP`을 보냈고, 열어두면 유령 마운트가 남는다).
+
+**진행률 막대의 의미**: `(성공 + 실패) / expected_count`. 즉 "응답이 온 비율"이고 성공률이 아니다. 성공은 라이브면 `LIVE_READY ok=true`(P4 오디오 준비 완료), 파일이면 `FILE_RESULT ok=true`(재생까지 끝남)다. 분모를 `expected_count`로 고정한 이유는, 방송 중에 단말이 꺼지거나 배정이 바뀌면 매번 다시 센 분모가 흔들려서 100%가 영영 안 되기 때문이다.
+
+**⚠ `LIVE_RESULT`는 준비 신호가 아니다.** 통신 사양(§5.4, 2026-08-27 개정)은 `LIVE_READY`=준비 결과, `LIVE_RESULT`=**종료** 결과로 나눈다. `LIVE_RESULT ok=true`는 `STOPPED_BY_SERVER`, 즉 방송이 끝났다는 뜻이라 방송 중에는 오지 않는다. 따라서 "`LIVE_READY`와 `LIVE_RESULT`가 둘 다 true여야 라이브 준비 완료"로 판정하면 방송은 영원히 준비되지 않는다. 스트림 연결 실패는 같은 job_id로 오는 `LIVE_RESULT ok=false`로 알 수 있고, 실제 재생 여부는 STATUS의 `live=PLAYING`이 답한다.
+
 ## 5. 파일 라이브러리
 
 ```
@@ -124,9 +141,13 @@ GET /api/dashboard/map       지도용 좌표+상태 목록
 GET /api/config              현재 값 (current_config 테이블)
 PUT /api/config              {status_interval_sec, live_stats_interval_sec, event_qos}
                               -> DB 갱신 + config_version 증가 + MQTT 재발행
+                             {file_stop_wait_sec, live_stop_wait_sec}
+                              -> DB 갱신만 (서버 전용, 재발행 없음)
 ```
 
 권한: super_admin만 (전체 단말에 영향을 주므로 마을관리자는 접근 불가).
+
+**단말 설정과 서버 설정이 한 테이블에 있다 (2026-09-02)**: `file_stop_wait_sec`·`live_stop_wait_sec`(10~30초, 기본 10초)는 중지 후 단말의 종료 응답을 기다리는 시간이고 단말로 나가지 않는다. 그래서 이 값만 바뀌면 `config_version`을 올리지 않고 MQTT 재발행도 하지 않는다 — 올리면 전 단말이 내용상 같은 CONFIG를 다시 받고 적용 확인까지 오간다. 어떤 필드가 단말용인지는 `constants.DEVICE_CONFIG_FIELDS`가 정본이다. 라이브 값은 방송 시작 후 준비되지 않은 단말을 화면이 알려주는 기준으로도 쓰인다.
 
 ## 9. 자동방송 스케줄
 

@@ -10,7 +10,7 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import CONFIG_LIMITS
+from app.constants import CONFIG_LIMITS, DEVICE_CONFIG_FIELDS
 from app.errors import ApiError
 from app.mqtt.publisher import MqttPublisher
 from app.schemas.system import ConfigOut, ConfigUpdate, HealthOut
@@ -52,8 +52,15 @@ async def update_config(
         _check_range(field, value)
         setattr(config, field, value)
 
-    config.config_version += 1
+    # 단말로 나가지 않는 설정(중지 응답 대기 시간)만 바뀌었으면 버전을 올리지 않는다.
+    # 올리면 전 단말이 내용상 같은 CONFIG 를 다시 받고, 적용 확인까지 오간다.
+    device_changed = any(field in DEVICE_CONFIG_FIELDS for field in data)
+    if device_changed:
+        config.config_version += 1
     await db.flush()
+
+    if not device_changed:
+        return ConfigOut.model_validate(config)
 
     try:
         # 공통 설정만 바뀌었어도 단말별 CONFIG 까지 같이 내보낸다. 단말이 토픽별로

@@ -67,6 +67,10 @@ export function MapView({
   const imageCacheRef = useRef<Map<string, any>>(new Map());
   const tooltipRef = useRef<any>(null);
   const tooltipElRef = useRef<HTMLDivElement | null>(null);
+  /** 지금 화면에 떠 있는 툴팁 내용. 같은 값이면 다시 그리지 않는다(깜빡임 방지). */
+  const shownTooltipRef = useRef<{ mac: string; text: string; lat: number; lng: number } | null>(
+    null,
+  );
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const fittedRef = useRef(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
@@ -198,23 +202,46 @@ export function MapView({
   }, [ready, pins, selectedMac, hoveredMac]);
 
   // 이름 툴팁 — 호버 우선, 없으면 선택된 마커 위에.
+  //
+  // pins 가 의존성에 있어 폴링마다 이 effect 가 다시 돈다. 그때마다 setMap 을
+  // 부르면 오버레이 DOM 이 떨어졌다 붙어서 마우스를 올린 동안 툴팁이 깜빡인다
+  // (2026-09-02 현장 보고). 그래서 지금 떠 있는 내용을 기억해 두고, 실제로
+  // 달라진 것만 손댄다.
   useEffect(() => {
     const maps = mapsRef.current;
     const map = mapRef.current;
     const tooltip = tooltipRef.current;
     const el = tooltipElRef.current;
     if (!ready || !maps || !map || !tooltip || !el) return;
+
     const target = hoveredMac ?? selectedMac;
     const entry = target ? entriesRef.current.get(target) : undefined;
     if (!entry) {
-      tooltip.setMap(null);
+      if (shownTooltipRef.current) {
+        tooltip.setMap(null);
+        shownTooltipRef.current = null;
+      }
       return;
     }
+
     const { pin } = entry;
-    el.textContent =
+    const text =
       (pin.label || pin.mac) + (pin.position_source !== 'device' ? ' · 위치 미입력' : '');
+    const shown = shownTooltipRef.current;
+    if (shown && shown.mac === pin.mac && shown.text === text) {
+      // 같은 단말, 같은 문구 — 폴링이 새 배열을 줬을 뿐이다. 건드리지 않는다.
+      if (shown.lat !== pin.lat || shown.lng !== pin.lng) {
+        tooltip.setPosition(new maps.LatLng(pin.lat, pin.lng));
+        shownTooltipRef.current = { ...shown, lat: pin.lat, lng: pin.lng };
+      }
+      return;
+    }
+
+    if (text !== shown?.text) el.textContent = text;
     tooltip.setPosition(new maps.LatLng(pin.lat, pin.lng));
-    tooltip.setMap(map);
+    // 이미 떠 있으면 다시 붙이지 않는다 — 그게 깜빡임의 원인이다.
+    if (!shown) tooltip.setMap(map);
+    shownTooltipRef.current = { mac: pin.mac, text, lat: pin.lat, lng: pin.lng };
   }, [ready, hoveredMac, selectedMac, pins]);
 
   // 목록에서 선택하면 그 마커로 이동.

@@ -41,6 +41,15 @@ class CurrentConfig(Base):
         Integer, nullable=False, server_default="10"
     )
     event_qos: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    #: 아래 두 값은 단말에 보내지 않는다 — 서버가 "중지"를 확정하기까지 단말 응답을
+    #: 기다리는 시간이다(문제점 리스트 4·5번, 2026-09-02). 그래서 이 값만 바뀔 때는
+    #: config_version 을 올리지 않는다(올리면 전 단말이 의미 없는 CONFIG 를 다시 받는다).
+    file_stop_wait_sec: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="10"
+    )
+    live_stop_wait_sec: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="10"
+    )
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

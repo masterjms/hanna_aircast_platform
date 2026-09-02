@@ -14,6 +14,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     func,
 )
@@ -65,6 +66,13 @@ class BroadcastEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
     ended_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    #: 중지를 누른 시각. ended_at 이 NULL 인데 이 값이 있으면 "중지 중 — 단말 응답
+    #: 대기"다. 단말이 다 답하거나 대기 시간이 지나야 ended_at 이 찍힌다.
+    stop_requested_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    #: 발행 시점에 명령을 실제로 보낸 단말 수. "다 끝났나" 판정의 분모다.
+    #: target_count 처럼 매번 다시 세지 않는다 — 방송 중에 단말이 꺼지거나 배정이
+    #: 바뀌면 분모가 흔들려서 영영 100%가 되지 않는다.
+    expected_count: Mapped[int | None] = mapped_column(Integer)
     #: 실제 전송량이 아니라 추정치다(단말이 바이트 수를 보고하지 않는다) — LIVE 는
     #: 방송 시간 × 24kbps × 수신 단말 수, FILE 은 파일 크기 × 수신 단말 수로 계산해
     #: stop_*_broadcast 가 ended_at 을 찍을 때 같이 채운다. 서버 재시작으로 고아가
