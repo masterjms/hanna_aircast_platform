@@ -1025,3 +1025,130 @@ class TestServerOnlyConfig:
 
         # 범위를 빠뜨린 설정이 있으면 _check_range 가 KeyError 로 터진다.
         assert set(CONFIG_LIMITS) >= DEVICE_CONFIG_FIELDS
+
+
+# ── 마을 경계 도형 변환 (지도 4단계) ─────────────────────────────────────
+def _boundary_module():
+    """scripts/import_boundaries.py 를 불러온다.
+
+    담당자 PC 에서 돌리는 오프라인 도구라 backend 패키지 밖에 있다. pyshp·pyproj
+    없이도 도형 계산 부분은 import 되게 해 뒀으므로(그 모듈 상단 주석) CI 에서도 돈다.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "scripts" / "import_boundaries.py"
+    spec = importlib.util.spec_from_file_location("import_boundaries", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestRingArea:
+    """넓이 부호로 바깥 고리와 구멍을 가른다 — 부호가 뒤집히면 경계가 사라진다."""
+
+    def test_clockwise_is_negative(self):
+        mod = _boundary_module()
+        # SHP 규약: 바깥 고리는 시계방향. y 가 위로 가는 좌표계에서 넓이가 음수다.
+        clockwise = [(0.0, 0.0), (0.0, 1.0), (1.0, 1.0), (1.0, 0.0)]
+        assert mod.ring_area(clockwise) < 0
+
+    def test_counter_clockwise_is_positive(self):
+        mod = _boundary_module()
+        # 반시계 = 구멍.
+        counter = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        assert mod.ring_area(counter) > 0
+
+    def test_unit_square_area_is_one(self):
+        mod = _boundary_module()
+        square = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        assert abs(abs(mod.ring_area(square)) - 1.0) < 1e-12
+
+
+class TestSimplify:
+    """Douglas-Peucker. 여기가 틀리면 경계가 조용히 일그러진다."""
+
+    def test_collinear_points_are_dropped(self):
+        mod = _boundary_module()
+        line = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)]
+        # 직선 위의 중간 점들은 형태에 기여하지 않는다.
+        assert mod.simplify(line, 0.1) == [(0.0, 0.0), (3.0, 0.0)]
+
+    def test_corner_is_kept(self):
+        mod = _boundary_module()
+        corner = [(0.0, 0.0), (1.0, 1.0), (2.0, 0.0)]
+        # 허용 오차보다 크게 튀어나온 꼭짓점은 남아야 한다.
+        assert mod.simplify(corner, 0.1) == corner
+
+    def test_bump_below_tolerance_is_dropped(self):
+        mod = _boundary_module()
+        bump = [(0.0, 0.0), (1.0, 0.001), (2.0, 0.0)]
+        assert mod.simplify(bump, 0.1) == [(0.0, 0.0), (2.0, 0.0)]
+
+    def test_endpoints_never_dropped(self):
+        mod = _boundary_module()
+        pts = [(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]
+        out = mod.simplify(pts, 999.0)
+        assert out[0] == pts[0] and out[-1] == pts[-1]
+
+    def test_short_input_untouched(self):
+        mod = _boundary_module()
+        # 점이 둘뿐이면 줄일 게 없다(빈 배열을 돌려주면 고리가 사라진다).
+        assert mod.simplify([(0.0, 0.0), (1.0, 1.0)], 0.1) == [(0.0, 0.0), (1.0, 1.0)]
+
+
+class TestShapeToGeometry:
+    """SHP 의 parts 를 GeoJSON Polygon/MultiPolygon 으로 가른다."""
+
+    class _Shape:
+        def __init__(self, parts, points):
+            self.parts = parts
+            self.points = points
+
+    @staticmethod
+    def _identity(x, y):
+        return (x, y)
+
+    def _square(self, x0, y0, size=1.0):
+        """시계방향 사각형 = 바깥 고리."""
+        return [(x0, y0), (x0, y0 + size), (x0 + size, y0 + size), (x0 + size, y0), (x0, y0)]
+
+    def test_single_ring_becomes_polygon(self):
+        mod = _boundary_module()
+        shape = self._Shape([0], self._square(0, 0))
+        geometry = mod.shape_to_geometry(shape, self._identity, 1e-9)
+        assert geometry["type"] == "Polygon"
+        ring = geometry["coordinates"][0]
+        assert ring[0] == ring[-1], "고리는 닫혀 있어야 한다"
+
+    def test_two_outer_rings_become_multipolygon(self):
+        mod = _boundary_module()
+        # 섬이 있는 리 — 바깥 고리가 둘이면 MultiPolygon 이다.
+        first, second = self._square(0, 0), self._square(10, 10)
+        shape = self._Shape([0, len(first)], first + second)
+        geometry = mod.shape_to_geometry(shape, self._identity, 1e-9)
+        assert geometry["type"] == "MultiPolygon"
+        assert len(geometry["coordinates"]) == 2
+
+    def test_hole_stays_with_its_outer_ring(self):
+        mod = _boundary_module()
+        outer = self._square(0, 0, 10)
+        # 반시계 = 구멍. 앞선 바깥 고리에 붙어야 한다(별도 폴리곤이 되면 안 된다).
+        hole = [(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0), (2.0, 2.0)]
+        shape = self._Shape([0, len(outer)], outer + hole)
+        geometry = mod.shape_to_geometry(shape, self._identity, 1e-9)
+        assert geometry["type"] == "Polygon"
+        assert len(geometry["coordinates"]) == 2, "바깥 고리 + 구멍 두 개여야 한다"
+
+    def test_degenerate_shape_returns_none(self):
+        mod = _boundary_module()
+        # 점 세 개짜리 자투리는 도형이 아니다 — None 이면 호출부가 건너뛴다.
+        shape = self._Shape([0], [(0.0, 0.0), (1.0, 0.0), (0.0, 0.0)])
+        assert mod.shape_to_geometry(shape, self._identity, 1e-9) is None
+
+    def test_transform_is_applied(self):
+        mod = _boundary_module()
+        shape = self._Shape([0], self._square(0, 0))
+        geometry = mod.shape_to_geometry(shape, lambda x, y: (x + 100, y + 200), 1e-9)
+        for lng, lat in geometry["coordinates"][0]:
+            assert lng >= 100 and lat >= 200

@@ -8,12 +8,15 @@
  * 온라인=초록, 무음(RECONNECTING)=주황, 오프라인=빨강, 위치 미입력(마을 좌표
  * fallback)=반투명. 이름은 항상 그리지 않고 **호버/선택 시 툴팁**으로 보여준다.
  * 폴링마다 마커를 재생성하지 않고 mac 별로 재사용한다(§4.4).
+ *
+ * 마을 경계(§4.8)도 여기서 그린다. 마커 아래 깔리는 배경이라 z-index 를 낮게 두고
+ * 리스너를 달지 않는다 — 폴리곤이 커서를 가로채면 마커 호버가 다시 깨진다.
  */
 
 import { useEffect, useRef, useState } from 'react';
 
 import { loadKakaoMaps } from '../lib/kakao';
-import type { MapPin } from '../api/types';
+import type { GeoGeometry, MapPin, MapVillage } from '../api/types';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -23,6 +26,13 @@ interface Entry {
   imageKey: string;
   /** 마지막으로 준 z-index. 같은 값을 다시 주지 않으려고 기억한다. */
   zIndex: number;
+}
+
+/** 마을 경계 폴리곤 한 채. 마을 id 로 재사용한다. */
+interface BoundaryEntry {
+  polygons: any[];
+  /** 마지막으로 그린 도형. 같은 것이면 다시 만들지 않는다(폴링마다 온다). */
+  signature: string;
 }
 
 /**
@@ -57,9 +67,30 @@ function pinDataUri(color: string, opacity: number): string {
   return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
 }
 
+/**
+ * GeoJSON geometry → 폴리곤별 고리 목록.
+ *
+ * Polygon 은 [바깥 고리, 구멍…] 하나, MultiPolygon 은 그게 여러 개다(섬).
+ * 그래서 반환값은 [폴리곤][고리][점][경도·위도] 네 겹이다.
+ * 좌표는 GeoJSON 규약대로 [경도, 위도] 순서다 — 카카오 LatLng 과 반대라
+ * 넘길 때 뒤집는다.
+ */
+function ringsOf(geometry: GeoGeometry): number[][][][] {
+  return geometry.type === 'Polygon' ? [geometry.coordinates] : geometry.coordinates;
+}
+
+/** 같은 도형인지 싸게 판별하는 지문. 좌표 전체를 비교하지 않는다. */
+function boundarySignature(geometry: GeoGeometry): string {
+  const shape = ringsOf(geometry)
+    .map((rings) => rings.map((ring) => ring.length).join(','))
+    .join('|');
+  return `${geometry.type}:${shape}`;
+}
+
 export function MapView({
   jsKey,
   pins,
+  villages,
   selectedMac,
   hoveredMac,
   onSelect,
@@ -67,6 +98,8 @@ export function MapView({
 }: {
   jsKey: string;
   pins: MapPin[];
+  /** 경계를 그릴 마을. boundary 가 null 인 마을은 건너뛴다. */
+  villages: MapVillage[];
   selectedMac: string | null;
   hoveredMac: string | null;
   onSelect: (mac: string | null) => void;
@@ -83,6 +116,7 @@ export function MapView({
   const shownTooltipRef = useRef<{ mac: string; text: string; lat: number; lng: number } | null>(
     null,
   );
+  const boundariesRef = useRef<Map<number, BoundaryEntry>>(new Map());
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const fittedRef = useRef(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
@@ -186,6 +220,52 @@ export function MapView({
       resizeObserverRef.current = null;
     };
   }, [jsKey]);
+
+  // 마을 경계 동기화 — 마을 id 별 재사용, 사라진 것만 제거.
+  //
+  // 마커보다 먼저 그려서 아래에 깔리게 한다(zIndex 0). 리스너는 달지 않는다 —
+  // 폴리곤이 커서를 받으면 그 위의 마커에 mouseout 이 걸려 이름이 깜빡인다(§4.7).
+  useEffect(() => {
+    const maps = mapsRef.current;
+    const map = mapRef.current;
+    if (!ready || !maps || !map) return;
+
+    const seen = new Set<number>();
+    for (const village of villages) {
+      if (!village.boundary) continue;
+      seen.add(village.id);
+      // 폴링마다 같은 도형이 다시 온다. 좌표를 통째로 비교하면 비싸니 형태와
+      // 점 수만으로 지문을 만든다 — 경계는 사람이 다시 넣기 전에는 안 바뀐다.
+      const signature = boundarySignature(village.boundary);
+      const existing = boundariesRef.current.get(village.id);
+      if (existing) {
+        if (existing.signature === signature) continue;
+        for (const polygon of existing.polygons) polygon.setMap(null);
+      }
+      const polygons = ringsOf(village.boundary).map(
+        (rings) =>
+          new maps.Polygon({
+            // 바깥 고리 + 구멍. 카카오는 경로 배열의 배열로 구멍을 표현한다.
+            path: rings.map((ring) => ring.map(([lng, lat]) => new maps.LatLng(lat, lng))),
+            strokeWeight: 2,
+            strokeColor: '#4a90d9',
+            strokeOpacity: 0.8,
+            strokeStyle: 'solid',
+            fillColor: '#4a90d9',
+            fillOpacity: 0.12,
+            zIndex: 0,
+            map,
+          }),
+      );
+      boundariesRef.current.set(village.id, { polygons, signature });
+    }
+
+    for (const [id, entry] of boundariesRef.current) {
+      if (seen.has(id)) continue;
+      for (const polygon of entry.polygons) polygon.setMap(null);
+      boundariesRef.current.delete(id);
+    }
+  }, [ready, villages]);
 
   // 마커 동기화 — mac 별 재사용, 사라진 것만 제거.
   useEffect(() => {
@@ -313,5 +393,13 @@ export function MapView({
   if (sdkError) {
     return <div className="empty">지도를 불러오지 못했습니다 — {sdkError}</div>;
   }
-  return <div ref={containerRef} style={{ width: '100%', height: '100%', borderRadius: 12 }} />;
+  // 경계를 하나라도 그렸으면 출처를 표시한다. 「구역의 도형」은 공공누리 제1유형이고
+  // 출처 표시가 그 유일한 의무다(지도 설계 §4.8).
+  const showsBoundary = villages.some((v) => v.boundary);
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div ref={containerRef} style={{ width: '100%', height: '100%', borderRadius: 12 }} />
+      {showsBoundary && <div className="map-credit">마을 경계 : 행정안전부 주소정보제공</div>}
+    </div>
+  );
 }

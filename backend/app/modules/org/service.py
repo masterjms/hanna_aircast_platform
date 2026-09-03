@@ -66,6 +66,9 @@ def _to_village_out(village: Village, counts: tuple[int, int]) -> VillageOut:
     out = VillageOut.model_validate(village)
     out.village_token = village_token(village.id)
     out.device_count, out.online_count = counts
+    # 도형 자체는 싣지 않는다 — 있는지 여부만. 수십 KB 짜리가 목록 행마다 붙으면
+    # 마을 관리 화면이 느려지고, 화면은 "경계가 들어왔나"만 알면 된다.
+    out.has_boundary = village.boundary is not None
     return out
 
 

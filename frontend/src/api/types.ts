@@ -266,12 +266,19 @@ export interface MapPin {
   position_source: 'device' | 'zone' | 'village';
 }
 
+/** GeoJSON geometry (WGS84). 경계는 Polygon 또는 섬이 있으면 MultiPolygon. */
+export type GeoGeometry =
+  | { type: 'Polygon'; coordinates: number[][][] }
+  | { type: 'MultiPolygon'; coordinates: number[][][][] };
+
 export interface MapVillage {
   id: number;
   name: string;
   b_code: string | null;
   lat: number | null;
   lng: number | null;
+  /** 마을 경계. 안 넣은 마을은 null — 화면이 건너뛴다. */
+  boundary: GeoGeometry | null;
 }
 
 export interface MapData {

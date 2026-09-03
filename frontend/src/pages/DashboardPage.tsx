@@ -176,6 +176,7 @@ export function DashboardPage() {
           <MapView
             jsKey={map.data.kakao_js_key}
             pins={map.data.pins}
+            villages={map.data.villages}
             selectedMac={selectedMac}
             hoveredMac={hoveredMac}
             onSelect={setSelectedMac}

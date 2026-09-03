@@ -1401,6 +1401,20 @@ tr.is-selected td {
 /* ── 지도 (MapView) ──────────────────────────────────────────────────────
    마커는 SVG 핀(MarkerImage)이라 CSS 가 없다. 여기는 호버/선택 시 뜨는
    이름 툴팁뿐이다 — 카카오 샘플의 인포윈도우 역할. */
+/* 지도 출처 표시. 「구역의 도형」이 공공누리 제1유형이라 출처를 밝혀야 한다. */
+.map-credit {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  z-index: 2;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  color: var(--text-dim, #999);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  pointer-events: none;
+}
+
 .map-tooltip {
   /* 핀(40px) 머리 위로 올린다. 겹쳐 두면 커서가 툴팁에 가려져 마커의
      mouseout 이 튀고, 이름이 빠르게 깜빡인다. */

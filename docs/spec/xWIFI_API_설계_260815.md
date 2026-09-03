@@ -64,6 +64,8 @@ DELETE /api/zones/:id
 
 권한: 마을 생성/삭제는 super_admin만. village_admin은 자기 담당 마을 내 구역 관리까지만.
 
+**마을 경계 (2026-09-03)**: `villages.boundary` 에 GeoJSON geometry(WGS84)를 넣으면 대시보드 지도가 마을 영역을 그린다. 값은 `PATCH /api/villages/{id}` 의 `boundary` 로 들어가고, 넣는 것은 사람이 아니라 `scripts/import_boundaries.py`(담당자 PC 에서 실행)다. 목록 응답에는 도형 대신 `has_boundary` 불리언만 실린다 — 행마다 수십 KB 가 붙으면 화면이 느려진다. 도형 자체는 `GET /api/dashboard/map` 으로만 내려간다. 데이터 출처와 이용조건은 지도 설계 §4.8.
+
 ## 4. 방송 제어
 
 ```
@@ -132,7 +134,7 @@ GET /api/events/:id          상세 (device_events 결과 포함)
 
 ```
 GET /api/dashboard/summary   요약 타일(온라인/오프라인/방송중/미배정 수) - 역할 범위 내 집계
-GET /api/dashboard/map       지도용 좌표+상태 목록
+GET /api/dashboard/map       지도용 좌표+상태 목록 (마을 경계 폴리곤 포함) (마을 경계 폴리곤 포함)
 ```
 
 ## 8. 설정 (CONFIG)

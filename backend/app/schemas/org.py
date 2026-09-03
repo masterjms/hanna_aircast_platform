@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -27,6 +28,9 @@ class VillageCreate(BaseModel):
 
 class VillageUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
+    #: 경계 폴리곤(GeoJSON geometry, WGS84). scripts/import_boundaries.py 가 넣는다.
+    #: 사람이 화면에서 입력하는 값이 아니라 VillageCreate 에는 두지 않는다.
+    boundary: dict[str, Any] | None = None
     sido: str | None = Field(default=None, max_length=50)
     sigungu: str | None = Field(default=None, max_length=50)
     address_detail: str | None = Field(default=None, max_length=255)
@@ -48,6 +52,9 @@ class VillageOut(ApiModel):
     jibun_address: str | None = None
     lat: float | None
     lng: float | None
+    #: 경계가 들어와 있는지만 화면에 알려준다. 도형 자체는 지도 API 로 내려간다
+    #: (목록 응답마다 수십 KB 를 실으면 마을 관리 화면이 무거워진다).
+    has_boundary: bool = False
     created_at: dt.datetime
     #: MQTT 로 나가는 8자리 표현. 디버깅할 때 화면에서 바로 보이면 편하다.
     village_token: str = ""

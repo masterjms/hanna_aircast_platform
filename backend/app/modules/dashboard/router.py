@@ -92,13 +92,16 @@ class MapPin(BaseModel):
 
 
 class MapVillage(BaseModel):
-    """지도 위 마을 라벨·경계용. 경계 도형은 b_code 로 정적 GeoJSON 과 조인한다(4차)."""
+    """지도 위 마을 라벨·경계용."""
 
     id: int
     name: str
     b_code: str | None
     lat: float | None
     lng: float | None
+    #: 경계 폴리곤(GeoJSON geometry, WGS84). 안 넣은 마을은 null 이라 화면이 건너뛴다.
+    #: 「구역의 도형」을 b_code 로 조인해 넣는다 — scripts/import_boundaries.py.
+    boundary: dict[str, Any] | None = None
 
 
 class MapOut(BaseModel):
@@ -279,7 +282,9 @@ async def device_map(db: Db, scope: Scope) -> MapOut:
 
     village_stmt = scope.apply(select(Village).order_by(Village.name), Village.id)
     villages = [
-        MapVillage(id=v.id, name=v.name, b_code=v.b_code, lat=v.lat, lng=v.lng)
+        MapVillage(
+            id=v.id, name=v.name, b_code=v.b_code, lat=v.lat, lng=v.lng, boundary=v.boundary
+        )
         for v in (await db.scalars(village_stmt)).all()
     ]
 

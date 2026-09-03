@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
@@ -13,6 +14,7 @@ from sqlalchemy import (
     String,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.constants import Role
@@ -43,6 +45,10 @@ class Village(Base):
     #: 대표 주소. 주소 검색이 도로명·지번을 같이 채운다 — 농촌은 두 표기가 병용된다.
     road_address: Mapped[str | None] = mapped_column(String(255))
     jibun_address: Mapped[str | None] = mapped_column(String(255))
+    #: 마을 경계 폴리곤(GeoJSON geometry, WGS84). 「구역의 도형」의 리 경계를
+    #: b_code 로 조인해 넣는다 — scripts/import_boundaries.py 참고.
+    #: PostGIS 를 쓰지 않는다: 그리기만 하고 공간 질의는 하지 않는다.
+    boundary: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     lat: Mapped[float | None] = mapped_column(Float)
     lng: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[dt.datetime] = mapped_column(
