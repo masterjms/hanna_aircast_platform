@@ -16,7 +16,11 @@ export function loadKakaoMaps(jsKey: string): Promise<KakaoMaps> {
   if (loaded) return loaded;
   loaded = new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(jsKey)}&autoload=false`;
+    // libraries=clusterer: 마커 클러스터러(지도 설계 §4.4). 한 마을에 단말이 몰리면
+    // 핀이 겹쳐 안 보이는 것을 화면에서 묶어 푼다 — 데이터는 다 받고 렌더링만 묶는다.
+    script.src =
+      `https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(jsKey)}` +
+      '&autoload=false&libraries=clusterer';
     script.async = true;
     script.onload = () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

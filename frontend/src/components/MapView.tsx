@@ -45,6 +45,15 @@ interface BoundaryEntry {
  */
 const HOVER_CLEAR_DELAY_MS = 140;
 
+/**
+ * 이 확대 수준 이상(=더 멀리서 볼 때)이면 마커를 묶는다. 카카오 level 은 1이 가장
+ * 가깝고 14가 전국이다. 5 는 마을 하나가 화면에 한 덩어리로 보이는 축척쯤이라,
+ * 그보다 멀면 마을 단위 숫자로, 들어오면 개별 핀으로 보인다.
+ */
+const CLUSTER_MIN_LEVEL = 5;
+/** 단말을 선택하면 이 수준까지 확대한다. 건물과 골목이 보이는 축척이다. */
+const SELECT_LEVEL = 3;
+
 const PIN_W = 28;
 const PIN_H = 40;
 //: 선택된 핀은 한 단계 크게 — 색만으로는 어느 것을 골랐는지 안 보인다.
@@ -117,6 +126,7 @@ export function MapView({
     null,
   );
   const boundariesRef = useRef<Map<number, BoundaryEntry>>(new Map());
+  const clustererRef = useRef<any>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const fittedRef = useRef(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
@@ -191,6 +201,32 @@ export function MapView({
         });
         // 빈 곳 클릭 = 선택 해제.
         maps.event.addListener(mapRef.current, 'click', () => onSelectRef.current(null));
+        // 줌 ± 버튼. 휠·더블클릭도 되지만 태블릿·마우스 없는 환경에서는 이게 유일하다.
+        mapRef.current.addControl(new maps.ZoomControl(), maps.ControlPosition.RIGHT);
+        // 마커 클러스터러 — 확대 수준이 CLUSTER_MIN_LEVEL 이상(멀리서 볼 때)이면
+        // 가까운 핀을 숫자 하나로 묶는다. 마을 안으로 들어가면 개별 핀이 된다.
+        clustererRef.current = new maps.MarkerClusterer({
+          map: mapRef.current,
+          averageCenter: true,
+          minLevel: CLUSTER_MIN_LEVEL,
+          // 클릭하면 SDK 가 한 단계 확대한다 — 묶인 것을 풀어 보는 자연스러운 동작.
+          disableClickZoom: false,
+          styles: [
+            {
+              width: '40px',
+              height: '40px',
+              borderRadius: '20px',
+              background: 'rgba(74, 144, 217, 0.85)',
+              border: '2px solid #ffffff',
+              color: '#ffffff',
+              textAlign: 'center',
+              lineHeight: '36px',
+              fontSize: '13px',
+              fontWeight: '700',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.35)',
+            },
+          ],
+        });
         // 이름 툴팁 — 호버/선택된 마커 위에 하나만 띄워 재사용한다.
         const el = document.createElement('div');
         el.className = 'map-tooltip';
@@ -274,6 +310,8 @@ export function MapView({
     if (!ready || !maps || !map) return;
 
     const seen = new Set<string>();
+    // 마커가 생기거나 움직였으면 클러스터를 다시 계산해야 한다.
+    let clusterDirty = false;
     for (const pin of pins) {
       seen.add(pin.mac);
       const selected = pin.mac === selectedMac;
@@ -281,19 +319,23 @@ export function MapView({
       let entry = entriesRef.current.get(pin.mac);
       if (!entry) {
         const { img, key } = markerImage(pin, selected);
+        // map 을 직접 주지 않는다 — 클러스터러가 확대 수준에 따라 붙이고 떼어낸다.
         const marker = new maps.Marker({
           position: new maps.LatLng(pin.lat, pin.lng),
           image: img,
-          map,
         });
         maps.event.addListener(marker, 'click', () => onSelectRef.current(pin.mac));
         maps.event.addListener(marker, 'mouseover', () => emitHover(pin.mac));
         maps.event.addListener(marker, 'mouseout', () => emitHover(null));
         entry = { marker, pin, imageKey: key, zIndex: 1 };
         entriesRef.current.set(pin.mac, entry);
+        clustererRef.current?.addMarker(marker);
+        clusterDirty = true;
       } else {
         if (entry.pin.lat !== pin.lat || entry.pin.lng !== pin.lng) {
           entry.marker.setPosition(new maps.LatLng(pin.lat, pin.lng));
+          // 클러스터러는 위치 변경을 스스로 알지 못한다 — 아래에서 다시 그리게 표시.
+          clusterDirty = true;
         }
         const { img, key } = markerImage(pin, selected);
         // setImage 는 이미지가 실제로 바뀔 때만 — 폴링마다 부르면 깜빡인다.
@@ -313,10 +355,13 @@ export function MapView({
     }
     for (const [mac, entry] of entriesRef.current) {
       if (!seen.has(mac)) {
+        clustererRef.current?.removeMarker(entry.marker);
         entry.marker.setMap(null);
         entriesRef.current.delete(mac);
+        clusterDirty = true;
       }
     }
+    if (clusterDirty) clustererRef.current?.redraw();
 
     // 첫 데이터에서 한 번만 전체 핀이 보이게 맞춘다 — 폴링마다 하면 지도가 널뛴다.
     if (!fittedRef.current && pins.length > 0) {
@@ -381,13 +426,24 @@ export function MapView({
     shownTooltipRef.current = { mac: pin.mac, text, lat: pin.lat, lng: pin.lng };
   }, [ready, hoveredMac, selectedMac, pins]);
 
-  // 목록에서 선택하면 그 마커로 이동.
+  // 목록(또는 마커)에서 선택하면 그 단말로 확대해서 이동한다.
+  //
+  // 이미 더 가까이 보고 있으면 확대 수준은 그대로 두고 위치만 옮긴다 — 사용자가
+  // 잡아둔 축척을 멀어지는 쪽으로 바꾸지 않는다. 확대는 클러스터도 풀어준다
+  // (SELECT_LEVEL 은 CLUSTER_MIN_LEVEL 보다 가까워야 한다).
   useEffect(() => {
     const maps = mapsRef.current;
     const map = mapRef.current;
     if (!ready || !maps || !map || !selectedMac) return;
     const entry = entriesRef.current.get(selectedMac);
-    if (entry) map.panTo(new maps.LatLng(entry.pin.lat, entry.pin.lng));
+    if (!entry) return;
+    const target = new maps.LatLng(entry.pin.lat, entry.pin.lng);
+    if (map.getLevel() > SELECT_LEVEL) {
+      // setLevel 의 anchor 는 "이 점을 화면 그 자리에 둔 채 확대"다. 그 뒤 panTo 로
+      // 가운데로 가져온다 — 순서를 바꾸면 확대 중 목표점이 화면 밖으로 튄다.
+      map.setLevel(SELECT_LEVEL, { anchor: target });
+    }
+    map.panTo(target);
   }, [ready, selectedMac]);
 
   if (sdkError) {

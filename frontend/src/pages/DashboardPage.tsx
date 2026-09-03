@@ -83,10 +83,22 @@ export function DashboardPage() {
   return (
     // 상단바가 이미 "전체 개요"를 보여주므로 제목을 반복하지 않는다.
     <div style={{ display: 'flex', gap: 14, height: 'calc(100vh - 120px)', minHeight: 480 }}>
-      {/* ── 왼쪽 4: 요약 + 마을별 단말 + 이상단말 ── */}
-      <div style={{ flex: 4, minWidth: 0, overflowY: 'auto', paddingRight: 4 }}>
+      {/* ── 왼쪽 4: 요약 + 마을별 단말 + 이상단말 ──
+          세로 flex 로 세 구역을 쌓고, 단말 목록만 남는 높이를 차지해 안에서
+          스크롤한다. 단말·마을이 늘어도 화면 전체가 길어지지 않는다 — 타일과
+          이상단말은 항상 제자리에 있어야 한다(2026-09-03 현장 요청). */}
+      <div
+        style={{
+          flex: 4,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 14,
+          paddingRight: 4,
+        }}
+      >
         {/* 좁은 왼쪽 칼럼에서도 와이어프레임처럼 2×2 를 유지한다 */}
-        <div className="tiles" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+        <div className="tiles" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: 0 }}>
           <Tile
             label="온라인"
             value={devices.online}
@@ -119,7 +131,7 @@ export function DashboardPage() {
           )}
         </div>
 
-        <section className="card" style={{ padding: 10, marginBottom: 14 }}>
+        <section className="card" style={{ padding: 10, flex: 1, minHeight: 0, overflowY: 'auto' }}>
           <VillageDeviceList
             pins={map.data?.pins ?? []}
             missing={map.data?.missing_location ?? []}
@@ -130,14 +142,15 @@ export function DashboardPage() {
           />
         </section>
 
-        <section>
+        <section style={{ flex: 'none' }}>
           <h2 className="section-title">
             이상단말{' '}
             {alerts.length > 0 && (
               <span style={{ color: 'var(--danger-text)', fontSize: 12 }}>{alerts.length}건</span>
             )}
           </h2>
-          <div className="table-wrap table-wrap--scroll">
+          {/* 이상단말이 많아져도 이 높이 안에서만 스크롤한다 */}
+          <div className="table-wrap table-wrap--scroll" style={{ maxHeight: 180, overflowY: 'auto' }}>
             {alerts.length === 0 ? (
               <div className="empty">모든 단말이 정상입니다.</div>
             ) : (

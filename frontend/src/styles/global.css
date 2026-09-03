@@ -1398,6 +1398,76 @@ tr.is-selected td {
   border-radius: var(--r-sm);
 }
 
+/* ── 대시보드 마을별 단말 목록 (VillageDeviceList) ───────────────────────
+   구분선은 마을 묶음 사이에만. 단말 행은 선 없이 촘촘하게 — 표가 아니라 목록이다. */
+.vlist__group + .vlist__group {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.vlist__head {
+  display: block;
+  width: 100%;
+  padding: 5px 6px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vlist__head:hover {
+  background: var(--surface-input);
+}
+
+.vlist__count {
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.vlist__items {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 14px;
+}
+
+.vlist__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.vlist__item:hover,
+.vlist__item.is-active {
+  background: var(--surface-input);
+  color: var(--text);
+}
+
+.vlist__item.is-active {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.vlist__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── 지도 (MapView) ──────────────────────────────────────────────────────
    마커는 SVG 핀(MarkerImage)이라 CSS 가 없다. 여기는 호버/선택 시 뜨는
    이름 툴팁뿐이다 — 카카오 샘플의 인포윈도우 역할. */

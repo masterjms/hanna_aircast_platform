@@ -77,41 +77,34 @@ export function VillageDeviceList({
   }
 
   return (
-    <div>
+    // 구분선은 마을 사이에만 둔다. 단말 사이에 줄을 그으면 목록이 표처럼 무거워지고,
+    // 어차피 마을 머리말이 묶음을 말해 준다(2026-09-03 현장 요청).
+    <div className="vlist">
       {groups.map(([village, list]) => {
         const online = list.filter((p) => p.online).length;
         const isCollapsed = collapsed.has(village);
         return (
-          <section key={village} style={{ marginBottom: 10 }}>
+          <section key={village} className="vlist__group">
             <button
               type="button"
-              className="btn btn--ghost"
-              style={{ width: '100%', textAlign: 'left', fontWeight: 700 }}
+              className="vlist__head"
               onClick={() => toggle(village)}
               aria-expanded={!isCollapsed}
             >
               <span aria-hidden="true">{isCollapsed ? '▶' : '▼'}</span> {village}{' '}
-              <span className="dim" style={{ fontWeight: 400 }}>
+              <span className="dim vlist__count">
                 온라인 {online}/{list.length}
               </span>
             </button>
             {!isCollapsed && (
-              <ul className="plain-list" style={{ marginLeft: 14 }}>
+              <ul className="vlist__items">
                 {list.map((p) => {
                   const active = p.mac === selectedMac || p.mac === hoveredMac;
                   return (
                     <li key={p.mac}>
                       <button
                         type="button"
-                        className="btn btn--ghost btn--sm"
-                        style={{
-                          width: '100%',
-                          textAlign: 'left',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          gap: 8,
-                          outline: active ? '2px solid var(--accent)' : 'none',
-                        }}
+                        className={`vlist__item${active ? ' is-active' : ''}`}
                         ref={(el) => {
                           // 마커 클릭 → 목록이 그 항목으로 따라온다(§4.5)
                           if (el && p.mac === selectedMac) el.scrollIntoView({ block: 'nearest' });
@@ -121,9 +114,7 @@ export function VillageDeviceList({
                         onMouseLeave={() => onHover(null)}
                         title={p.position_source !== 'device' ? '위치 미입력 — 마을 좌표에 표시' : undefined}
                       >
-                        <span className="strong" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                          {p.label || p.mac}
-                        </span>
+                        <span className="strong vlist__name">{p.label || p.mac}</span>
                         {statusBadge(p)}
                       </button>
                     </li>
