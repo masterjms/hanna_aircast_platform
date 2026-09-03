@@ -213,6 +213,29 @@ def _stats_text(payload: dict) -> str | None:
     return " · ".join(parts) or None
 
 
+def _phase_of(event: BroadcastEvent, results: list[DeviceResultOut]) -> str:
+    """서버가 보는 방송 국면. 화면 머리말에 그대로 쓴다.
+
+    "시작됐다·끝났다"를 서버가 어느 시점에 보는지가 여기 한 곳에 있다(문제점 10번).
+      라이브: 준비 중(LIVE_READY 대기) → 송출 중 → 중지 중(LIVE_RESULT 대기) → 종료
+      파일  : 전송 중(FILE_RESULT 대기) → 재생 중 | 저장 완료 → 중지 중 → 종료
+    """
+    if event.ended_at is not None:
+        return "종료"
+    if event.stop_requested_at is not None:
+        return "중지 중"
+    expected = event.expected_count or 0
+    if event.event_type.startswith("LIVE"):
+        ready = sum(1 for r in results if r.ok is True)
+        return "송출 중" if expected and ready >= expected else "준비 중"
+    if event.playing_since is not None:
+        return "재생 중"
+    reported = sum(1 for r in results if r.result_type in TERMINAL_RESULTS)
+    if expected and reported >= expected and event.autoplay is False:
+        return "저장 완료"
+    return "전송 중"
+
+
 # ── 조회 ─────────────────────────────────────────────────────────────────
 async def _to_out(
     db: AsyncSession, event: BroadcastEvent, registry: LiveRegistry | None = None
@@ -321,6 +344,7 @@ async def _to_out(
     results.sort(key=lambda r: (r.ok is not False, r.mac))
 
     out.results = results
+    out.phase = _phase_of(event, results)
 
     # 실시간 방송이면 살아 있는 세션에서 스트림 정보를 붙인다.
     # 서버가 재기동되면 레지스트리가 비므로 진행 중이던 LIVE 는 여기서 빈다 —
@@ -398,6 +422,9 @@ async def _recipient_count(db: AsyncSession, event_id: int) -> int:
         )
     ) or 0
 
+
+#: 파일 재생 종료 판정 여유(초). 단말의 재생 시작 지연·디코더 버퍼를 덮는다.
+PLAYBACK_TAIL_SEC = 5.0
 
 #: "이 방송에서 이 단말은 끝났다"를 뜻하는 결과 타입 (통신 사양 §5.4).
 #: LIVE_READY 는 준비 결과라 여기 없다 — 준비됐다고 방송이 끝난 게 아니다.
@@ -503,16 +530,48 @@ async def finish_if_all_reported(db: AsyncSession, job_id: int) -> bool:
         return False
     if await _responded_count(db, event.id) < event.expected_count:
         return False
-    await end_event(db, event, reason="전 단말 응답 완료")
-    return True
+
+    # 라이브의 LIVE_RESULT, 중지 요청 뒤의 응답, 저장만 하는 파일은 "전원 응답 = 끝".
+    if (
+        event.event_type.startswith("LIVE")
+        or event.stop_requested_at is not None
+        or event.autoplay is False
+    ):
+        await end_event(db, event, reason="전 단말 응답 완료")
+        return True
+
+    # 재생하는 파일 방송: FILE_RESULT ok=true 는 "저장 끝, 지금부터 재생"이다
+    # (문제점 10번, 단말 요청 2026-09-03 §2.3). 여기서 끝내면 스피커가 나오는 중에
+    # 화면은 "종료"가 된다. 재생 중으로 넘기고 재생 길이 뒤에 끝낸다 — 마지막 단말이
+    # 가장 늦게 시작하니 그 시각 기준이면 전원이 끝난 뒤다.
+    if event.playing_since is not None:
+        return False  # 이미 재생 타이머가 걸려 있다(늦은 중복 결과)
+    event.playing_since = dt.datetime.now(dt.timezone.utc)
+    await db.flush()
+    duration = await db.scalar(select(File.duration_sec).where(File.id == event.file_id))
+    # 길이를 못 잰 파일(ffprobe 없음)은 사양 상한 10분으로 본다 — 짧게 잡아 재생 중에
+    # 끊는 것보다 길게 잡아 조금 늦게 끝내는 편이 낫다.
+    play_sec = float(duration) if duration is not None else float(FILE_MAX_DURATION_SEC)
+    asyncio.create_task(
+        _force_end_after(event.id, play_sec + PLAYBACK_TAIL_SEC, reason="재생 완료"),
+        name=f"file-playback-end-{job_id}",
+    )
+    log.info("파일 방송 재생 시작 job_id=%s — %.0f초 뒤 종료 예정", job_id, play_sec)
+    return False
 
 
-async def _force_end_after(event_id: int, wait_sec: float, *, reason: str) -> None:
+async def _force_end_after(
+    event_id: int, wait_sec: float, *, reason: str, only_if_missing: bool = False
+) -> None:
     """기다렸다가, 그때도 안 끝났으면 종료로 확정한다.
 
-    중지 응답 대기(문제점 4·5번)와 파일 방송 자연 종료 상한(3번)이 같은 모양이라
-    하나로 쓴다. 먼저 전 단말이 답하면 finish_if_all_reported 가 이미 끝냈고,
-    여기서는 아무 일도 하지 않는다.
+    중지 응답 대기(문제점 4·5번)·파일 저장 완료 상한(3번)·파일 재생 종료(10번)가
+    같은 모양이라 하나로 쓴다. 먼저 전 단말이 답하면 finish_if_all_reported 가
+    이미 끝냈고, 여기서는 아무 일도 하지 않는다.
+
+    only_if_missing: 응답 안 한 단말이 있을 때만 끝낸다. 파일 저장 대기 상한이
+    이걸 쓴다 — 전원이 저장을 마치고 재생 중인 방송을 "저장 대기 만료"로 끊으면
+    안 되기 때문이다(그 방송은 재생 타이머가 따로 끝낸다).
     """
     try:
         await asyncio.sleep(wait_sec)
@@ -521,6 +580,8 @@ async def _force_end_after(event_id: int, wait_sec: float, *, reason: str) -> No
             if event is None or event.ended_at is not None:
                 return
             missing = (event.expected_count or 0) - await _responded_count(db, event.id)
+            if missing <= 0 and only_if_missing:
+                return
             if missing > 0:
                 log.warning(
                     "방송 %d: %d대가 %s초 안에 응답하지 않아 종료로 확정한다 (%s)",
@@ -646,6 +707,9 @@ async def start_file_broadcast(
         triggered_by=user_id,
         # 종료 판정의 분모. 지금 명령을 보낸 대수를 그대로 박아둔다.
         expected_count=len(macs),
+        # 저장만 하는 방송(autoplay=False)은 FILE_RESULT 가 곧 끝이고, 재생하는
+        # 방송은 그 뒤 재생 길이만큼 더 이어진다 — finish_if_all_reported 가 가른다.
+        autoplay=payload.autoplay,
     )
     db.add(event)
     await db.flush()
@@ -659,14 +723,18 @@ async def start_file_broadcast(
     )
     log.info("파일 방송 시작 job_id=%s 대상 %d대 file=%s", job_id, len(macs), audio.filename)
 
-    # 단말은 파일을 받아 검증·저장까지 끝내면 FILE_RESULT 를 보낸다(재생 완료가
-    # 아니다 — 단말 요청 2026-09-03 §2.3). 그때 finish_if_all_reported 가 끝낸다.
-    # 도중에 꺼진 단말이 있으면 그 신호가 영영 안 오므로 상한을 둔다. 저장이
-    # 느려서(LittleFS 80~100KB/s, 3MB 면 40초) 10초로 끊으면 정상 동작을 실패로
-    # 본다 — 단말 자체 포기 시간(120초)을 기본 상한으로 쓴다.
-    wait_sec = await _config_int(db, "file_result_wait_sec", 120)
+    # 단말은 파일을 받아 검증·저장까지 끝내면 FILE_RESULT ok=true 를 보내고 그때
+    # 재생을 시작한다(단말 요청 2026-09-03 §2.3 — 재생 완료 신호가 아니다). 전 단말이
+    # 보내면 finish_if_all_reported 가 "재생 중"으로 넘기고 재생 길이 뒤에 끝낸다.
+    # 도중에 꺼진 단말이 있으면 그 신호가 영영 안 오므로 상한을 둔다. 저장이 느려서
+    # (LittleFS 80~100KB/s, 3MB 면 40초) 짧게 끊으면 정상 동작을 실패로 본다 — 단말
+    # 자체 포기 시간(120초)이 기본이다. 전원이 응답했으면 이 워치독은 손대지 않는다
+    # (재생 중인 방송을 저장 대기 만료로 끊으면 안 된다).
+    wait_sec = await _config_int(db, "file_wait_sec", 120)
     asyncio.create_task(
-        _force_end_after(event.id, wait_sec, reason="저장 완료 응답 대기 시간 초과"),
+        _force_end_after(
+            event.id, wait_sec, reason="저장 완료 응답 대기 시간 초과", only_if_missing=True
+        ),
         name=f"file-broadcast-end-{job_id}",
     )
 
@@ -724,7 +792,7 @@ async def stop_file_broadcast(
     # 예전에는 여기서 바로 ended_at 을 찍었다. 단말이 실제로 멈췄는지 확인하지 않고
     # 화면만 "중지됨"이 되는 게 문제였다(문제점 4번). 이제 중지 요청 시각만 남기고
     # 단말의 FILE_RESULT 를 기다린다 — 다 오면 그 순간, 안 오면 대기 시간 뒤에 끝난다.
-    wait_sec = await _config_int(db, "file_stop_wait_sec", 10)
+    wait_sec = await _config_int(db, "file_wait_sec", 120)
     event.stop_requested_at = dt.datetime.now(dt.timezone.utc)
     await db.flush()
     log.info("파일 방송 중지 요청 job_id=%s — 단말 응답 %d초 대기", event.job_id, wait_sec)

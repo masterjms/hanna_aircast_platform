@@ -93,11 +93,25 @@ village_admin은 all과, **목록 중 하나라도** 담당 밖이면 403(일부
 
 `broadcast_events`에 `expected_count`(발행 시점에 명령을 보낸 대수)와 `stop_requested_at`(중지를 누른 시각)을 남긴다. 종료를 확정하는 경로는 넷이고 전부 `end_event()`를 거친다(그래야 `bytes_estimated`가 빠지지 않는다).
 
-| 경로 | 언제 | 비고 |
+**서버가 보는 국면(`phase`, 2026-09-03 문제점 10번)** — 화면 머리말에 그대로 나간다.
+
+| 종류 | 국면 | 넘어가는 조건 |
 |---|---|---|
-| 전 단말 응답 | 종료 결과(`FILE_RESULT`·`LIVE_RESULT`)를 보낸 단말 수가 `expected_count`에 도달 | 가장 흔한 경로. 라이브 실측 1.5초 |
-| 중지 응답 대기 만료 | 중지 후 `file_stop_wait_sec`/`live_stop_wait_sec`(10~30초, 기본 10초) 경과 | 못 받은 대수를 로그에 남긴다 |
-| 파일 저장 완료 상한 | 시작 + `file_result_wait_sec`(30~180초, 기본 120초) | `FILE_RESULT`는 **저장 완료** 신호라 재생 길이와 무관. 저장이 느려(3MB ≈ 40초) 짧게 잡으면 정상 동작을 실패로 본다. 단말 자체 포기가 120초 |
+| 라이브 | 준비 중 → **송출 중** | `LIVE_READY ok=true`가 `expected_count`만큼 |
+| 라이브 | → 중지 중 → 종료 | 중지 → `LIVE_RESULT` 전원 도착 또는 `live_stop_wait_sec` 경과 → **그때 스트림 닫기** |
+| 파일 | 전송 중 → **재생 중** | `FILE_RESULT ok=true`가 전원 도착 = 저장 끝, **이때 재생이 시작**된다(`playing_since`) |
+| 파일 | 재생 중 → 종료 | `playing_since` + 재생 길이(`files.duration_sec`, 없으면 10분) + 5초 |
+| 파일(autoplay=false) | 전송 중 → 저장 완료 → 종료 | 저장만 하는 방송은 `FILE_RESULT`가 곧 끝 |
+| 파일 | → 중지 중 → 종료 | 중지 → 종료 응답 전원 도착 또는 `file_wait_sec` 경과 |
+
+예전에는 파일 방송을 `FILE_RESULT`에 바로 끝냈다. `FILE_RESULT`는 「받아서 저장까지 끝냈다」는 신호고 그 뒤에 재생이 시작되므로(단말 요청 2026-09-03 §2.3), 스피커가 나오는 중에 화면은 「종료」였다. 이제 마지막 단말의 저장 완료 시각을 재생 시작으로 보고 재생 길이 뒤에 끝낸다 — 마지막 단말이 가장 늦게 시작하니 그 기준이면 전원이 끝난 뒤다. 재생 완료 신호는 단말 프로토콜에 없어서(파일은 응답이 `FILE_RESULT` 하나) 시간으로 판단한다.
+
+| 종료 경로 | 언제 | 비고 |
+|---|---|---|
+| 전 단말 응답 | 종료 결과(`FILE_RESULT`·`LIVE_RESULT`)를 보낸 단말 수가 `expected_count`에 도달 | 라이브·중지 대기 중·저장만 하는 파일은 즉시 종료. 재생하는 파일은 「재생 중」으로 |
+| 재생 완료 | `playing_since` + 재생 길이 + 5초 | 파일만 |
+| 중지 응답 대기 만료 | 중지 후 `live_stop_wait_sec`(10~30초, 기본 10) / `file_wait_sec`(30~180초, 기본 120) 경과 | 못 받은 대수를 로그에 남긴다 |
+| 파일 저장 완료 상한 | 시작 + `file_wait_sec` 경과인데 **아직 응답 안 한 단말이 있을 때만** | 전원이 저장을 마쳐 재생 중인 방송은 이 경로로 끊지 않는다 |
 | 기동 시 고아 정리 | 서버 재시작 | `close_orphaned_events`, 아래 §6 |
 
 **중지는 즉시 종료가 아니다.** 예전에는 `/stop`이 단말 응답을 보지 않고 바로 `ended_at`을 찍어서, 단말이 실제로 멈췄는지와 무관하게 화면만 "중지됨"이 됐다. 이제 `stop_requested_at`만 찍고 단말의 종료 결과를 기다린다 — 다 오면 그 순간, 안 오면 대기 시간 뒤에 확정한다. 대기 중에 다시 중지를 누르면 `BROADCAST_STOP_PENDING`(409)으로 거절한다. 대기 중인 방송도 겹침 검사에는 계속 잡히므로, 확정 전에는 같은 대상으로 새 방송을 시작할 수 없다.
@@ -157,22 +171,26 @@ GET /api/dashboard/map       지도용 좌표+상태 목록 (마을 경계 폴�
 GET /api/config              현재 값 (current_config 테이블)
 PUT /api/config              {status_interval_sec, live_stats_interval_sec, event_qos}
                               -> DB 갱신 + config_version 증가 + MQTT 재발행
-                             {file_stop_wait_sec, live_stop_wait_sec}
+                             {live_ready_timeout_sec, live_stop_wait_sec, file_wait_sec}
                               -> DB 갱신만 (서버 전용, 재발행 없음)
 ```
 
 권한: super_admin만 (전체 단말에 영향을 주므로 마을관리자는 접근 불가).
 
-**단말 설정과 서버 설정이 한 테이블에 있다 (2026-09-02, 09-03 보완)**: 아래 넷은 CONFIG 토픽으로 나가지 않는다. 그래서 이 값만 바뀌면 `config_version`을 올리지 않고 MQTT 재발행도 하지 않는다 — 올리면 전 단말이 내용상 같은 CONFIG를 다시 받고 적용 확인까지 오간다. 어떤 필드가 CONFIG 토픽용인지는 `constants.DEVICE_CONFIG_FIELDS`가 정본이다.
+**설정은 두 묶음이다 (2026-09-02, 09-03 정리 — 문제점 7·8·9·10번, 단말 요청 §3.4)**: 화면도 두 구역으로 나뉜다.
 
-| 설정 | 기본 | 범위 | 단말에 전달 | 쓰는 곳 |
-|---|---|---|---|---|
-| `live_ready_timeout_sec` 라이브 준비 제한 | 30 | 1~60 (사양) | **예** — `LIVE_START.ready_timeout_sec` | 화면 준비 지연 알림 = 이 값 **+ 5** |
-| `live_stop_wait_sec` 라이브 종료 대기 | 10 | 10~30 | 아니오 | 중지 후 `LIVE_RESULT` 대기 상한. 그 뒤 스트림 닫기 |
-| `file_result_wait_sec` 파일 저장 완료 대기 | 120 | 30~180 | 아니오 | 시작 후 `FILE_RESULT` 상한 |
-| `file_stop_wait_sec` 파일 중지 대기 | 10 | 10~30 | 아니오 | 중지 후 `FILE_RESULT` 대기 상한 |
+- **단말 공통 CONFIG** — `status_interval_sec`·`live_stats_interval_sec`·`event_qos`. 저장하면 `config_version`이 올라가고 MQTT CONFIG가 재발행된다. 정본은 `constants.DEVICE_CONFIG_FIELDS`.
+- **방송 응답 시간** — 아래 셋. CONFIG 토픽으로 나가지 않으므로 이 값만 바뀌면 `config_version`을 올리지 않고 재발행도 하지 않는다(올리면 전 단말이 내용상 같은 CONFIG를 다시 받고 적용 확인까지 오간다). 문구는 시작을 먼저, 종료를 뒤에 쓴다.
 
-「라이브 시작 대기」는 설정으로 두지 않는다 — `live_ready_timeout_sec + 5`로 계산한다. +5는 단말 펌웨어 상수라 별도 설정으로 두면 둘이 어긋난다(단말 요청 2026-09-03 §3.4). 타임아웃은 상한이지 고정 대기가 아니다 — 단말이 모두 응답하면 그 자리에서 끝나므로 넉넉히 잡아도 정상 동작에서는 비용이 없다.
+| 설정 | 기본 | 범위 | 단말에 전달 | 시작에서 | 종료에서 |
+|---|---|---|---|---|---|
+| `live_ready_timeout_sec` 라이브 준비 제한 | 30 | 1~60 (사양) | **예** — `LIVE_START.ready_timeout_sec` | 화면 준비 지연 알림 = 이 값 **+ 5** | — |
+| `live_stop_wait_sec` 라이브 종료 대기 | 10 | 10~30 | 아니오 | — | 중지 후 `LIVE_RESULT` 대기 상한. 그 뒤 스트림 닫기 |
+| `file_wait_sec` 파일방송 응답 대기 | 120 | 30~180 | 아니오 | 시작 후 `FILE_RESULT ok=true`(저장 완료 → 재생 시작) 대기 상한 | 중지 후 종료 응답 대기 상한 |
+
+파일은 **설정 하나가 시작과 종료를 같이** 맡는다(문제점 8번). 예전의 `file_stop_wait_sec`(10~30, 기본 10)는 저장 40초짜리 파일에서 정상 동작을 실패로 봤기 때문에 `file_wait_sec`로 개명하고 범위·기본을 단말 자체 포기 시간에 맞췄다(마이그레이션 0011 — 0010은 이미 운영에 적용돼 손대지 않고, 옛 범위에 남아 있던 값은 120으로 올린다).
+
+「라이브 시작 대기」는 설정으로 두지 않는다 — `live_ready_timeout_sec + 5`로 계산한다. +5는 단말 펌웨어 상수라 별도 설정으로 두면 둘이 어긋난다. 타임아웃은 상한이지 고정 대기가 아니다 — 단말이 모두 응답하면 그 자리에서 끝나므로 넉넉히 잡아도 정상 동작에서는 비용이 없다.
 
 ## 9. 자동방송 스케줄
 

@@ -14,13 +14,13 @@ class ConfigOut(ApiModel):
     status_interval_sec: int
     live_stats_interval_sec: int
     event_qos: int
-    #: 중지 후 단말 응답을 기다리는 시간(초). 단말에 나가지 않는 서버 설정이다.
-    file_stop_wait_sec: int
-    live_stop_wait_sec: int
+    # ── 방송 응답 시간. CONFIG 토픽으로 나가지 않는다 ──
     #: LIVE_START.ready_timeout_sec 로 단말에 전달. 화면의 준비 지연 기준은 이 값 + 5.
     live_ready_timeout_sec: int
-    #: 파일 시작 후 FILE_RESULT(저장 완료)를 기다리는 상한.
-    file_result_wait_sec: int
+    #: 라이브 중지 후 LIVE_RESULT 대기 상한.
+    live_stop_wait_sec: int
+    #: 파일 시작(저장 완료 → 재생 시작)·중지 응답 대기 상한. 둘에 같이 쓴다.
+    file_wait_sec: int
     updated_at: dt.datetime
 
 
@@ -30,14 +30,13 @@ class ConfigUpdate(BaseModel):
     status_interval_sec: int | None = Field(default=None, ge=10, le=3600)
     live_stats_interval_sec: int | None = Field(default=None, ge=1, le=60)
     event_qos: int | None = Field(default=None, ge=0, le=1)
-    #: 중지를 누른 뒤 단말의 종료 응답을 기다리는 시간. 다 오면 그 즉시 끝내고,
-    #: 이 시간을 넘기면 못 받은 단말이 있어도 종료로 확정한다.
-    file_stop_wait_sec: int | None = Field(default=None, ge=10, le=30)
-    live_stop_wait_sec: int | None = Field(default=None, ge=10, le=30)
+    # ── 방송 응답 시간 (범위는 constants.CONFIG_LIMITS 와 같다) ──
     #: 단말 준비 제한. LIVE_START 에 실려 나가고 단말은 +5초까지 기다린다(사양 1~60).
     live_ready_timeout_sec: int | None = Field(default=None, ge=1, le=60)
-    #: 파일 저장 완료(FILE_RESULT) 대기 상한. 크기에 비례해 길어진다 — 3MB 면 40초.
-    file_result_wait_sec: int | None = Field(default=None, ge=30, le=180)
+    #: 라이브 중지 후 LIVE_RESULT 대기 상한. 다 오면 즉시 끝내고 스트림을 닫는다.
+    live_stop_wait_sec: int | None = Field(default=None, ge=10, le=30)
+    #: 파일 시작(저장 완료)·중지 응답 대기 상한. 3MB 저장에 40초라 짧으면 오판한다.
+    file_wait_sec: int | None = Field(default=None, ge=30, le=180)
 
 
 class HealthOut(BaseModel):

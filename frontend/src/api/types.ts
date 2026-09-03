@@ -198,13 +198,13 @@ export interface SystemConfig {
   status_interval_sec: number;
   live_stats_interval_sec: number;
   event_qos: number;
-  /** 중지 후 단말 응답을 기다리는 시간(초). 단말에 나가지 않는 서버 설정이다. */
-  file_stop_wait_sec: number;
-  live_stop_wait_sec: number;
+  // ── 방송 응답 시간. CONFIG 토픽으로 나가지 않는다 ──
   /** LIVE_START.ready_timeout_sec 로 단말에 전달. 화면의 준비 지연 기준은 이 값 + 5. */
   live_ready_timeout_sec: number;
-  /** 파일 시작 후 FILE_RESULT(저장 완료)를 기다리는 상한. */
-  file_result_wait_sec: number;
+  /** 라이브 중지 후 LIVE_RESULT 대기 상한. */
+  live_stop_wait_sec: number;
+  /** 파일 시작(저장 완료)·중지 응답 대기 상한. 둘에 같이 쓴다. */
+  file_wait_sec: number;
   updated_at: string;
 }
 
@@ -385,6 +385,10 @@ export interface BroadcastDetail {
   stop_requested_at: string | null;
   /** 발행 시점에 명령을 보낸 대상 단말 수. 진행률의 분모다. */
   expected_count: number | null;
+  /** 파일 방송이 재생으로 넘어간 시각. 전송 중이면 null. */
+  playing_since: string | null;
+  /** 서버가 보는 국면 — 준비 중 · 송출 중 · 전송 중 · 재생 중 · 저장 완료 · 중지 중 · 종료 */
+  phase: string;
   /** 발행 시점에 온라인이던 대상 단말 수 */
   target_count: number;
   results: DeviceResult[];

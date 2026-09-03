@@ -41,25 +41,25 @@ class CurrentConfig(Base):
         Integer, nullable=False, server_default="10"
     )
     event_qos: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
-    #: 아래 두 값은 단말에 보내지 않는다 — 서버가 "중지"를 확정하기까지 단말 응답을
-    #: 기다리는 시간이다(문제점 리스트 4·5번, 2026-09-02). 그래서 이 값만 바뀔 때는
-    #: config_version 을 올리지 않는다(올리면 전 단말이 의미 없는 CONFIG 를 다시 받는다).
-    file_stop_wait_sec: Mapped[int] = mapped_column(
-        SmallInteger, nullable=False, server_default="10"
-    )
-    live_stop_wait_sec: Mapped[int] = mapped_column(
-        SmallInteger, nullable=False, server_default="10"
-    )
+    # ── 아래 셋은 방송 응답 시간이다. CONFIG 토픽으로 나가지 않으므로 이 값만 바뀔 때는
+    #    config_version 을 올리지 않는다(올리면 전 단말이 의미 없는 CONFIG 를 다시 받는다).
+    #    단말 요청 2026-09-03 §3.4 — "서버가 관리할 값은 셋": 라이브 준비 제한, 라이브
+    #    종료 대기, 파일 대기.
+
     #: LIVE_START 에 실어 보내는 단말 준비 제한(사양 1~60). 단말은 이 값 + 5초까지
-    #: 기다렸다가 LIVE_READY 를 보내므로, 서버 화면의 "준비 지연" 기준은 이 값 + 5 다
-    #: (단말 요청 2026-09-03 §3.1). CONFIG 토픽으로는 안 나가서 config_version 무관.
+    #: 기다렸다가 LIVE_READY 를 보내므로, 서버 화면의 "준비 지연" 기준은 이 값 + 5 다.
     live_ready_timeout_sec: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, server_default="30"
     )
-    #: 파일 방송을 시작한 뒤 FILE_RESULT 를 기다리는 상한. FILE_RESULT 는 "받아서
-    #: 저장까지 끝냈다"는 신호라 재생 길이와 무관하고, 저장(LittleFS 80~100KB/s)이
-    #: 길다 — 3MB 면 40초. 단말 자체 포기 시간이 120초라 그 이상 잡을 이유가 없다.
-    file_result_wait_sec: Mapped[int] = mapped_column(
+    #: 라이브 중지 후 단말별 LIVE_RESULT 를 기다리는 상한. 다 오면 그 순간 스트림을 닫는다.
+    live_stop_wait_sec: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="10"
+    )
+    #: 파일 방송 응답 대기 — **시작과 중지에 같이 쓴다**(문제점 8번). 시작 후에는
+    #: 단말의 FILE_RESULT ok=true(받아서 저장까지 끝냄 → 재생 시작)를, 중지 후에는
+    #: 종료 응답을 이 시간까지 기다린다. 저장이 느려서(LittleFS 80~100KB/s, 3MB 면
+    #: 40초) 짧게 잡으면 정상 저장 중인 단말을 실패로 본다. 단말 자체 포기가 120초.
+    file_wait_sec: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, server_default="120"
     )
     updated_at: Mapped[dt.datetime] = mapped_column(

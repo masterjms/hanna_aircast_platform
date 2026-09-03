@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -73,6 +74,12 @@ class BroadcastEvent(Base):
     #: target_count 처럼 매번 다시 세지 않는다 — 방송 중에 단말이 꺼지거나 배정이
     #: 바뀌면 분모가 흔들려서 영영 100%가 되지 않는다.
     expected_count: Mapped[int | None] = mapped_column(Integer)
+    #: 파일 방송의 autoplay. False 면 저장만 하고 재생하지 않으므로 FILE_RESULT 가
+    #: 곧 끝이다. True 면 FILE_RESULT 뒤에 재생이 시작된다(문제점 10번).
+    autoplay: Mapped[bool | None] = mapped_column(Boolean)
+    #: 파일 방송이 "재생 중"으로 넘어간 시각 = 마지막 단말의 FILE_RESULT ok=true.
+    #: 여기서 재생 길이 + 여유가 지나면 종료로 확정한다. NULL 이면 아직 전송 중.
+    playing_since: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     #: 실제 전송량이 아니라 추정치다(단말이 바이트 수를 보고하지 않는다) — LIVE 는
     #: 방송 시간 × 24kbps × 수신 단말 수, FILE 은 파일 크기 × 수신 단말 수로 계산해
     #: stop_*_broadcast 가 ended_at 을 찍을 때 같이 채운다. 서버 재시작으로 고아가

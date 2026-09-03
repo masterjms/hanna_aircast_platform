@@ -96,7 +96,7 @@ function ActiveCard({
         <div>
           <div className="active-card__eyebrow">
             <span className="active-card__dot" />
-            {isLive ? 'ON AIR · 실시간' : '송출 중 · 파일'}
+            {broadcast.phase || (isLive ? '송출 중' : '전송 중')} · {isLive ? '실시간' : '파일'}
           </div>
           <div className="active-card__title">
             {broadcast.file_name ?? (isLive ? '실시간 방송' : broadcast.event_type)} ·{' '}

@@ -1001,7 +1001,7 @@ class TestServerOnlyConfig:
 
         # 여기 들어가면 이 값만 바꿔도 config_version 이 올라가고 전 단말이
         # 내용상 같은 CONFIG 를 다시 받는다.
-        assert "file_stop_wait_sec" not in DEVICE_CONFIG_FIELDS
+        assert "file_wait_sec" not in DEVICE_CONFIG_FIELDS
         assert "live_stop_wait_sec" not in DEVICE_CONFIG_FIELDS
 
     def test_device_fields_are_the_spec_three(self):
@@ -1013,11 +1013,10 @@ class TestServerOnlyConfig:
             "event_qos",
         } == DEVICE_CONFIG_FIELDS
 
-    def test_stop_wait_range_is_10_to_30(self):
+    def test_live_stop_wait_range_is_10_to_30(self):
         from app.constants import CONFIG_LIMITS
 
-        # 문제점 리스트 4·5번이 요구한 범위. 화면·API 가 같은 값으로 막는다.
-        assert CONFIG_LIMITS["file_stop_wait_sec"] == (10, 30)
+        # 문제점 리스트 5번이 요구한 범위. 화면·API 가 같은 값으로 막는다.
         assert CONFIG_LIMITS["live_stop_wait_sec"] == (10, 30)
 
     def test_ready_timeout_matches_device_spec_range(self):
@@ -1028,15 +1027,17 @@ class TestServerOnlyConfig:
         # LIVE_START 필드로 나가는 값이라 CONFIG 토픽 필드가 아니다 — 바꿔도
         # config_version 이 올라가면 안 된다.
         assert "live_ready_timeout_sec" not in DEVICE_CONFIG_FIELDS
-        assert "file_result_wait_sec" not in DEVICE_CONFIG_FIELDS
 
-    def test_file_result_wait_covers_device_own_limit(self):
+    def test_file_wait_covers_device_own_limit(self):
         from app.constants import CONFIG_LIMITS
 
         # 단말은 저장 완료를 120초까지 스스로 기다린다. 서버 상한이 그 아래로
-        # 잠기면 정상 저장 중인 단말을 실패로 본다.
-        low, high = CONFIG_LIMITS["file_result_wait_sec"]
+        # 잠기면 정상 저장 중인 단말을 실패로 본다. 시작·중지에 같이 쓴다(문제점 8번).
+        low, high = CONFIG_LIMITS["file_wait_sec"]
         assert low <= 120 <= high
+        # 셋이어야 한다(단말 요청 §3.4) — 파일을 시작/중지로 쪼개면 넷이 된다.
+        timing = {k for k in CONFIG_LIMITS if k.endswith("_sec") and "interval" not in k}
+        assert timing == {"live_ready_timeout_sec", "live_stop_wait_sec", "file_wait_sec"}
 
     def test_every_config_field_has_a_range(self):
         from app.constants import CONFIG_LIMITS, DEVICE_CONFIG_FIELDS

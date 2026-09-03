@@ -63,6 +63,11 @@ class BroadcastOut(ApiModel):
     stop_requested_at: dt.datetime | None = None
     #: 발행 시점 대상 대수. 진행률의 분모이자 "다 끝났나" 판정 기준이다.
     expected_count: int | None = None
+    #: 파일 방송이 재생으로 넘어간 시각(전 단말 저장 완료). 전송 중이면 None.
+    playing_since: dt.datetime | None = None
+    #: 서버가 보는 국면 — 화면 머리말에 그대로 쓴다. 라이브: 준비 중 → 송출 중 → 중지 중.
+    #: 파일: 전송 중 → 재생 중(또는 저장 완료) → 중지 중. 끝나면 종료.
+    phase: str = ""
     #: 실제 전송량이 아니라 추정치(단말이 바이트 수를 보고하지 않는다). None 이면
     #: 아직 진행 중이거나, 서버 재시작으로 고아 정리된 방송이라 신뢰할 수 없다.
     bytes_estimated: int | None = None

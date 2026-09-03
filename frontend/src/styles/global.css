@@ -1252,6 +1252,26 @@ tr.is-selected td {
   padding: 8px 24px 24px;
 }
 
+/* 설정 묶음(단말 CONFIG / 방송 응답 시간). 묶음 사이에만 굵은 구분을 둔다. */
+.settings-group + .settings-group {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 2px solid var(--border);
+}
+
+.settings-group__title {
+  margin: 16px 0 4px;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.settings-group__hint {
+  margin: 0 0 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
 .settings-row {
   display: flex;
   align-items: center;
