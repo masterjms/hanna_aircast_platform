@@ -1007,6 +1007,23 @@ textarea {
   gap: 12px;
 }
 
+/* 입력란 오른쪽에 버튼을 붙이는 줄 (TTS 의 파일 이름 + 음성 만들기). */
+.field-inline {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.field-inline input {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-inline .btn {
+  flex: none;
+  white-space: nowrap;
+}
+
 .hint {
   margin: 6px 0 0;
   font-size: 11.5px;
@@ -1385,6 +1402,9 @@ tr.is-selected td {
    마커는 SVG 핀(MarkerImage)이라 CSS 가 없다. 여기는 호버/선택 시 뜨는
    이름 툴팁뿐이다 — 카카오 샘플의 인포윈도우 역할. */
 .map-tooltip {
+  /* 핀(40px) 머리 위로 올린다. 겹쳐 두면 커서가 툴팁에 가려져 마커의
+     mouseout 이 튀고, 이름이 빠르게 깜빡인다. */
+  transform: translateY(-46px);
   padding: 4px 10px;
   border-radius: 8px;
   font-size: 12px;

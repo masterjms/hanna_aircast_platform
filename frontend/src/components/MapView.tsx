@@ -21,7 +21,19 @@ interface Entry {
   marker: any;
   pin: MapPin;
   imageKey: string;
+  /** 마지막으로 준 z-index. 같은 값을 다시 주지 않으려고 기억한다. */
+  zIndex: number;
 }
+
+/**
+ * 마커를 벗어난 뒤 이름을 지우기까지의 유예(ms).
+ *
+ * 마커 위에 마우스를 두고 가만히 있어도 mouseout 이 튀는 순간이 있다 — 지도가
+ * 다시 그려지거나 오버레이가 커서 아래를 스칠 때다. 그때마다 곧바로 지우면
+ * mouseout → 이름 사라짐 → mouseover → 이름 나타남이 반복되어 빠르게 깜빡인다.
+ * 짧게 유예하고 그 사이에 다시 들어오면 없던 일로 한다.
+ */
+const HOVER_CLEAR_DELAY_MS = 140;
 
 const PIN_W = 28;
 const PIN_H = 40;
@@ -82,6 +94,35 @@ export function MapView({
   onSelectRef.current = onSelect;
   onHoverRef.current = onHover;
 
+  /** 마커를 벗어났다고 알리기 전에 잠깐 기다리는 타이머. */
+  const hoverClearRef = useRef<number | null>(null);
+
+  /**
+   * 마커 호버 전달. 들어올 때는 즉시, 나갈 때는 유예를 두고 알린다
+   * (위 HOVER_CLEAR_DELAY_MS 주석 참고 — 이름이 깜빡이는 것을 막는다).
+   */
+  const emitHover = (mac: string | null) => {
+    if (hoverClearRef.current !== null) {
+      window.clearTimeout(hoverClearRef.current);
+      hoverClearRef.current = null;
+    }
+    if (mac !== null) {
+      onHoverRef.current(mac);
+      return;
+    }
+    hoverClearRef.current = window.setTimeout(() => {
+      hoverClearRef.current = null;
+      onHoverRef.current(null);
+    }, HOVER_CLEAR_DELAY_MS);
+  };
+
+  useEffect(
+    () => () => {
+      if (hoverClearRef.current !== null) window.clearTimeout(hoverClearRef.current);
+    },
+    [],
+  );
+
   /** 상태·투명도·크기별 MarkerImage. 같은 조합은 캐시해서 재사용한다. */
   const markerImage = (pin: MapPin, selected: boolean) => {
     const maps = mapsRef.current;
@@ -120,9 +161,14 @@ export function MapView({
         const el = document.createElement('div');
         el.className = 'map-tooltip';
         tooltipElRef.current = el;
+        // yAnchor 1 = 오버레이 아래끝이 좌표(핀 끝)에 온다. 거기서 핀 높이만큼
+        // 더 올리는 것은 CSS 의 transform 이 한다 — 오버레이 높이에 비례하는
+        // yAnchor 로는 "핀보다 위"를 안정적으로 맞출 수 없다(글자 길이에 따라
+        // 높이가 달라진다). 예전 값(1.15)은 핀 몸통과 겹쳐서, 커서가 툴팁에
+        // 가려지며 mouseout 이 튀는 원인이었다.
         tooltipRef.current = new maps.CustomOverlay({
           content: el,
-          yAnchor: 1.15, // 핀 머리 위
+          yAnchor: 1,
           zIndex: 40,
           clickable: false,
         });
@@ -161,9 +207,9 @@ export function MapView({
           map,
         });
         maps.event.addListener(marker, 'click', () => onSelectRef.current(pin.mac));
-        maps.event.addListener(marker, 'mouseover', () => onHoverRef.current(pin.mac));
-        maps.event.addListener(marker, 'mouseout', () => onHoverRef.current(null));
-        entry = { marker, pin, imageKey: key };
+        maps.event.addListener(marker, 'mouseover', () => emitHover(pin.mac));
+        maps.event.addListener(marker, 'mouseout', () => emitHover(null));
+        entry = { marker, pin, imageKey: key, zIndex: 1 };
         entriesRef.current.set(pin.mac, entry);
       } else {
         if (entry.pin.lat !== pin.lat || entry.pin.lng !== pin.lng) {
@@ -177,7 +223,13 @@ export function MapView({
         }
       }
       entry.pin = pin;
-      entry.marker.setZIndex(selected ? 30 : hovered ? 20 : 1);
+      // 값이 그대로면 건드리지 않는다 — 호버할 때마다 전 마커를 다시 만지면
+      // 커서 아래에서 마커가 다시 그려져 mouseout 이 튄다.
+      const z = selected ? 30 : hovered ? 20 : 1;
+      if (entry.zIndex !== z) {
+        entry.zIndex = z;
+        entry.marker.setZIndex(z);
+      }
     }
     for (const [mac, entry] of entriesRef.current) {
       if (!seen.has(mac)) {
@@ -240,7 +292,12 @@ export function MapView({
     if (text !== shown?.text) el.textContent = text;
     tooltip.setPosition(new maps.LatLng(pin.lat, pin.lng));
     // 이미 떠 있으면 다시 붙이지 않는다 — 그게 깜빡임의 원인이다.
-    if (!shown) tooltip.setMap(map);
+    if (!shown) {
+      tooltip.setMap(map);
+      // SDK 가 만든 바깥 래퍼에도 이벤트를 통과시킨다. 내용(el)에만 걸어두면
+      // 래퍼가 커서를 가로채 마커에 mouseout 이 걸린다.
+      if (el.parentElement) el.parentElement.style.pointerEvents = 'none';
+    }
     shownTooltipRef.current = { mac: pin.mac, text, lat: pin.lat, lng: pin.lng };
   }, [ready, hoveredMac, selectedMac, pins]);
 

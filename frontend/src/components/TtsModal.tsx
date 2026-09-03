@@ -6,13 +6,16 @@
  * 나가는 일을 막기 위해서다.
  *
  * 화면은 하나다(2026-09-02 단순화). 문구·언어·보이스·파일 이름을 넣고
- * [파일 만들기] → 같은 자리에서 들어보고 → [완료] 로 끝난다.
+ * 파일 이름 옆의 [음성 만들기] → 같은 자리에서 들어보고 → [음성 저장하기] 로 끝난다.
+ * 하단 버튼 줄은 없다.
  *
- * 「완료를 눌러야 파일함에 남는다」가 이 화면의 규칙이다:
+ * **만들고 나면 입력을 잠근다.** 문구를 고쳤는데 아래 음원은 예전 것인 상태가
+ * 생기면, 들은 것과 저장되는 것이 달라진다. 다시 만들려면 닫고 새로 연다.
+ *
+ * 「저장을 눌러야 파일함에 남는다」가 이 화면의 규칙이다:
  *   · 서버는 합성하는 즉시 파일 행을 만든다(별도 저장 단계가 없다).
- *   · 그래서 완료를 안 누르고 닫거나, 문구를 고쳐 다시 만들면
- *     앞서 만든 것을 여기서 지운다. 안 그러면 들어보고 버린 음성이
- *     파일함에 그대로 쌓인다.
+ *   · 그래서 저장을 안 누르고 닫으면 앞서 만든 것을 여기서 지운다.
+ *     안 그러면 들어보고 버린 음성이 파일함에 그대로 쌓인다.
  *   · 단, 기존 합성본을 재사용한 경우(cached)는 지우지 않는다 —
  *     전에 만들어 쓰던 남의 파일을 이 화면이 지우면 안 된다.
  */
@@ -27,7 +30,7 @@ const MAX_TEXT = 1000;
 
 interface TtsModalProps {
   onClose: () => void;
-  /** 완료로 확정된 파일. 파일함이 목록을 새로고침한다. */
+  /** 저장으로 확정된 파일. 파일함이 목록을 새로고침한다. */
   onCreated: (file: AudioFile) => void;
 }
 
@@ -40,13 +43,13 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  /** 방금 만든 파일. 서버에는 이미 저장돼 있고, 완료를 눌러야 확정된다. */
+  /** 방금 만든 파일. 서버에는 이미 저장돼 있고, 저장을 눌러야 확정된다. */
   const [made, setMade] = useState<AudioFile | null>(null);
   const [cached, setCached] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   /**
-   * 아직 확정되지 않은 파일 id. 닫히거나 다시 만들 때 이걸 지운다.
+   * 아직 확정되지 않은 파일 id. 저장 없이 닫을 때 이걸 지운다.
    * state 가 아니라 ref 인 이유: 언마운트 정리에서 최신값을 봐야 한다.
    */
   const pendingId = useRef<number | null>(null);
@@ -74,21 +77,18 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
   };
 
   // 언어를 바꾸면 그 언어의 첫 보이스로 맞춘다 — 남의 언어 보이스가 남으면 서버가 거절한다.
+  // 만든 뒤에는 선택이 잠기므로 이 경로로 결과가 사라질 일은 없지만, 혹시 그렇게
+  // 되더라도 확정 전 음성이 서버에 남지 않도록 같이 지운다.
   useEffect(() => {
     setVoice(voicesForLanguage[0]?.id ?? '');
+    discardPending();
     setMade(null);
+    // discardPending 은 ref 만 읽어서 렌더링마다 바뀌어도 의존성에 넣을 필요가 없다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voicesForLanguage]);
 
-  // 입력을 고치면 앞서 만든 결과는 무효다. 확정 전이면 서버에서도 지운다.
-  const invalidate = () => {
-    discardPending();
-    setMade(null);
-  };
-
   const synthesize = async () => {
-    if (!text.trim()) return;
-    // 다시 만들기 전에 앞의 것을 정리한다(같은 문구면 서버가 캐시로 돌려주므로 낭비가 없다).
-    discardPending();
+    if (!text.trim() || made) return;
     setBusy(true);
     setError(null);
     try {
@@ -126,26 +126,13 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
   };
 
   const over = text.length > MAX_TEXT;
+  /** 한 번 만들면 입력을 잠근다 — 문구와 아래 음원이 어긋나지 않게. */
+  const locked = made !== null;
 
   return (
-    <Modal
-      title="TTS 음성 만들기"
-      onClose={handleClose}
-      footer={
-        // 만들기 전에는 [파일 만들기] 하나만. 만든 뒤에는 아래 [완료] 가 유일한 다음
-        // 동작이라 하단 줄을 아예 없앤다(버튼 줄이 둘이면 무엇을 눌러야 할지 헷갈린다).
-        made ? undefined : (
-          <button
-            type="button"
-            className="btn btn--primary"
-            onClick={() => void synthesize()}
-            disabled={busy || !text.trim() || over || !catalog}
-          >
-            {busy ? '만드는 중…' : '파일 만들기'}
-          </button>
-        )
-      }
-    >
+    // 하단 버튼 줄은 두지 않는다. 만들기는 파일 이름 옆에, 저장은 결과 카드 안에
+    // 있어서 "지금 눌러야 할 것"이 화면에 하나뿐이다.
+    <Modal title="TTS 음성 만들기" onClose={handleClose}>
       {error && (
         <div className="alert" style={{ marginBottom: 14 }}>
           {error}
@@ -158,10 +145,8 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
           id="tts-text"
           rows={4}
           value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            invalidate();
-          }}
+          onChange={(e) => setText(e.target.value)}
+          disabled={locked}
           placeholder="예) 주민 여러분께 알려드립니다. 오늘 오후 두 시에 마을회관에서 반상회가 있겠습니다."
         />
         <p className={`hint${over ? ' hint--warn' : ''}`}>
@@ -176,7 +161,7 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
             id="tts-lang"
             value={language}
             onChange={(e) => setLanguage(e.target.value)}
-            disabled={!catalog}
+            disabled={!catalog || locked}
           >
             {Object.entries(catalog?.languages ?? {}).map(([code, label]) => (
               <option key={code} value={code}>
@@ -191,11 +176,8 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
           <select
             id="tts-voice"
             value={voice}
-            onChange={(e) => {
-              setVoice(e.target.value);
-              invalidate();
-            }}
-            disabled={voicesForLanguage.length === 0}
+            onChange={(e) => setVoice(e.target.value)}
+            disabled={voicesForLanguage.length === 0 || locked}
           >
             {voicesForLanguage.map((v) => (
               <option key={v.id} value={v.id}>
@@ -208,13 +190,24 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
 
       <div className="field">
         <label htmlFor="tts-name">파일 이름</label>
-        <input
-          id="tts-name"
-          type="text"
-          value={filename}
-          onChange={(e) => setFilename(e.target.value)}
-          placeholder="비워두면 문구 앞부분으로 만듭니다"
-        />
+        <div className="field-inline">
+          <input
+            id="tts-name"
+            type="text"
+            value={filename}
+            onChange={(e) => setFilename(e.target.value)}
+            disabled={locked}
+            placeholder="비워두면 문구 앞부분으로 만듭니다"
+          />
+          <button
+            type="button"
+            className="btn btn--primary"
+            onClick={() => void synthesize()}
+            disabled={busy || locked || !text.trim() || over || !catalog}
+          >
+            {busy ? '만드는 중…' : '음성 만들기'}
+          </button>
+        </div>
       </div>
 
       {made && (
@@ -234,8 +227,8 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
           />
           <p className="hint">
             {cached
-              ? '같은 문구가 이미 있어 기존 음성을 그대로 씁니다. 완료를 누르면 파일함에서 확인할 수 있습니다.'
-              : '들어보고 완료를 누르면 파일함에 등록됩니다. 그냥 닫으면 등록하지 않습니다.'}
+              ? '같은 문구가 이미 있어 기존 음성을 그대로 씁니다. 저장하면 파일함에서 확인할 수 있습니다.'
+              : '들어보고 저장하면 파일함에 등록됩니다. 그냥 닫으면 등록하지 않습니다.'}
           </p>
           <button
             type="button"
@@ -243,7 +236,7 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
             style={{ marginTop: 10 }}
             onClick={confirm}
           >
-            완료
+            음성 저장하기
           </button>
         </div>
       )}
