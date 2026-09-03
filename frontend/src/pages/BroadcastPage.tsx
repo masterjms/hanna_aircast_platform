@@ -114,7 +114,8 @@ function ActiveCard({
           {stopping && (
             <div className="hint" style={{ marginTop: 6 }}>
               중지를 보냈습니다. 단말의 종료 응답을 기다리는 중입니다 ({done + failed}/{total}대
-              응답). 응답이 다 오면 즉시, 늦어지면 설정한 대기 시간 뒤에 종료됩니다.
+              응답). 응답이 다 오면 즉시, 늦어지면 설정한 대기 시간 뒤에 종료하고 스트림을
+              닫습니다.
             </div>
           )}
           {readyLagging && (
@@ -194,8 +195,13 @@ export function BroadcastPage() {
   const [fileId, setFileId] = useState<number | ''>('');
   const [storeFlash, setStoreFlash] = useState(false);
 
-  /** 라이브 준비 지연 알림 기준(초). 설정값이고, 못 읽으면 기본 10초. */
-  const [readyWaitSec, setReadyWaitSec] = useState(10);
+  /**
+   * 라이브 준비 지연 알림 기준(초) = 단말에 보낸 ready_timeout_sec + 5.
+   * +5 는 단말 펌웨어 상수다(받은 값에 여유 5초를 더해 잰다). 서버가 30을 보내고
+   * 30초에 알리면 32초에 준비를 마친 단말이 "실패로 본 단말에서 소리가 나는"
+   * 구멍이 생긴다(단말 요청 2026-09-03 §3.1). 못 읽으면 기본 30+5.
+   */
+  const [readyWaitSec, setReadyWaitSec] = useState(35);
 
   const [villages, setVillages] = useState<Village[]>([]);
   const [zones, setZones] = useState<Zone[]>([]);
@@ -324,7 +330,7 @@ export function BroadcastPage() {
   useEffect(() => {
     void api.config
       .get()
-      .then((c) => setReadyWaitSec(c.live_stop_wait_sec))
+      .then((c) => setReadyWaitSec(c.live_ready_timeout_sec + 5))
       .catch(() => undefined);
   }, []);
 

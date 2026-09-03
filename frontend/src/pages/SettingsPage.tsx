@@ -50,10 +50,26 @@ const FIELDS = [
   },
   {
     key: 'live_stop_wait_sec',
-    label: '라이브방송 응답 대기',
-    hint: '중지 후 종료 응답을 기다리는 시간이자, 방송 시작 후 준비되지 않은 단말을 알려주는 기준입니다.',
+    label: '라이브 종료 대기',
+    hint: '중지 후 단말의 LIVE_RESULT 를 기다리는 시간입니다. 다 오면 즉시 끝내고, 그때 스트림을 닫습니다. 실측 1.5초.',
     min: 10,
     max: 30,
+    unit: '초',
+  },
+  {
+    key: 'live_ready_timeout_sec',
+    label: '라이브 준비 제한',
+    hint: '단말에 LIVE_START 로 전달됩니다. 단말은 이 값 + 5초까지 준비를 기다리므로, 화면의 「준비 지연」 알림도 이 값 + 5초에 뜹니다.',
+    min: 1,
+    max: 60,
+    unit: '초',
+  },
+  {
+    key: 'file_result_wait_sec',
+    label: '파일 저장 완료 대기',
+    hint: '파일 방송 시작 후 단말의 저장 완료 응답을 기다리는 상한입니다. 저장이 느려(3MB 약 40초) 짧게 잡으면 정상 동작을 실패로 봅니다. 단말 자체 포기가 120초입니다.',
+    min: 30,
+    max: 180,
     unit: '초',
   },
 ] as const;
@@ -68,6 +84,8 @@ export function SettingsPage() {
     event_qos: 0,
     file_stop_wait_sec: 10,
     live_stop_wait_sec: 10,
+    live_ready_timeout_sec: 30,
+    file_result_wait_sec: 120,
   });
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -83,6 +101,8 @@ export function SettingsPage() {
           event_qos: c.event_qos,
           file_stop_wait_sec: c.file_stop_wait_sec,
           live_stop_wait_sec: c.live_stop_wait_sec,
+          live_ready_timeout_sec: c.live_ready_timeout_sec,
+          file_result_wait_sec: c.file_result_wait_sec,
         });
       } catch (err) {
         setMessage({

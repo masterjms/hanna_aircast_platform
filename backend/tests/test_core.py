@@ -1020,6 +1020,24 @@ class TestServerOnlyConfig:
         assert CONFIG_LIMITS["file_stop_wait_sec"] == (10, 30)
         assert CONFIG_LIMITS["live_stop_wait_sec"] == (10, 30)
 
+    def test_ready_timeout_matches_device_spec_range(self):
+        from app.constants import CONFIG_LIMITS, DEVICE_CONFIG_FIELDS
+
+        # 사양: ready_timeout_sec 는 1~60, 벗어나면 단말이 기본 30 으로 되돌린다.
+        assert CONFIG_LIMITS["live_ready_timeout_sec"] == (1, 60)
+        # LIVE_START 필드로 나가는 값이라 CONFIG 토픽 필드가 아니다 — 바꿔도
+        # config_version 이 올라가면 안 된다.
+        assert "live_ready_timeout_sec" not in DEVICE_CONFIG_FIELDS
+        assert "file_result_wait_sec" not in DEVICE_CONFIG_FIELDS
+
+    def test_file_result_wait_covers_device_own_limit(self):
+        from app.constants import CONFIG_LIMITS
+
+        # 단말은 저장 완료를 120초까지 스스로 기다린다. 서버 상한이 그 아래로
+        # 잠기면 정상 저장 중인 단말을 실패로 본다.
+        low, high = CONFIG_LIMITS["file_result_wait_sec"]
+        assert low <= 120 <= high
+
     def test_every_config_field_has_a_range(self):
         from app.constants import CONFIG_LIMITS, DEVICE_CONFIG_FIELDS
 
@@ -1152,3 +1170,37 @@ class TestShapeToGeometry:
         geometry = mod.shape_to_geometry(shape, lambda x, y: (x + 100, y + 200), 1e-9)
         for lng, lat in geometry["coordinates"][0]:
             assert lng >= 100 and lat >= 200
+
+
+# ── 종료된 job 의 늦은 telemetry 버리기 (단말 요청 2026-09-03 §2.5) ──────────
+class TestEndedJobs:
+    """정지 뒤에 도착한 LIVE_STATS 를 적재하면 끝난 방송이 되살아나 보인다."""
+
+    def setup_method(self):
+        from app.modules.broadcast import service
+
+        service.ENDED_JOBS.clear()
+
+    def test_marked_job_is_ended(self):
+        from app.modules.broadcast import service
+
+        service.mark_job_ended(95)
+        assert service.is_job_ended(95)
+        assert not service.is_job_ended(96)
+
+    def test_none_job_is_never_ended(self):
+        from app.modules.broadcast import service
+
+        # job_id 를 못 뽑은 메시지는 어느 방송의 것인지 모른다 — 버리지 않는다.
+        service.mark_job_ended(None)
+        assert not service.is_job_ended(None)
+
+    def test_set_is_bounded_and_drops_oldest(self):
+        from app.modules.broadcast import service
+
+        for job in range(service._ENDED_JOBS_MAX + 10):
+            service.mark_job_ended(job)
+        assert len(service.ENDED_JOBS) == service._ENDED_JOBS_MAX
+        # 가장 오래된 것부터 밀려난다. 최근 것은 남아 있어야 한다.
+        assert not service.is_job_ended(0)
+        assert service.is_job_ended(service._ENDED_JOBS_MAX + 9)

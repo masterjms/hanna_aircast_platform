@@ -42,6 +42,10 @@ class LiveSession:
     #: 마지막으로 오디오 바이트가 들어온 시각. 워치독의 기준이다.
     #: 시작 시각으로 초기화한다 — 아직 한 번도 안 붙은 방송도 같은 잣대로 잰다.
     last_audio_at: dt.datetime = field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
+    #: LIVE_STOP 을 보내고 단말 응답을 기다리는 중. 이 동안 mount·source 는 살아
+    #: 있어야 하고(단말이 "끊긴 건지 끝난 건지" 판단할 일을 만들지 않는다 — 단말
+    #: 요청 2026-09-03 §1), 무음 워치독은 이 세션을 건드리지 않아야 한다.
+    stopping: bool = False
 
     def touch_audio(self) -> None:
         self.last_audio_at = dt.datetime.now(dt.timezone.utc)

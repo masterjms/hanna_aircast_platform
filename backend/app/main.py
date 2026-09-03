@@ -78,6 +78,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.publisher = publisher
     # 실시간 방송 세션. 라우터는 LiveReg 의존성으로 꺼내 쓴다.
     app.state.live_registry = LiveRegistry()
+    # 방송 종료 확정(end_event)이 스트림도 닫을 수 있게 레지스트리를 넘긴다.
+    broadcast_service.set_live_registry(app.state.live_registry)
     app.state.status_buffer = status_buffer
     await connection.start()
     if status_buffer is not None:

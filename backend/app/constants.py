@@ -94,9 +94,13 @@ CONFIG_LIMITS: dict[str, tuple[int, int]] = {
     "status_interval_sec": (10, 3600),
     "live_stats_interval_sec": (1, 60),
     "event_qos": (0, 1),
-    # 서버 전용(단말에 안 나간다). 중지 후 단말 응답을 기다리는 시간.
+    # 서버 전용(CONFIG 토픽으로 안 나간다). 중지 후 단말 응답을 기다리는 시간.
     "file_stop_wait_sec": (10, 30),
     "live_stop_wait_sec": (10, 30),
+    # LIVE_START.ready_timeout_sec 로 나간다(CONFIG 가 아니라 명령 필드). 사양 1~60.
+    "live_ready_timeout_sec": (1, 60),
+    # 파일 시작 후 FILE_RESULT 상한. 단말 자체 포기(120초)를 넘길 이유가 없다.
+    "file_result_wait_sec": (30, 180),
 }
 
 #: 이 중 단말로 나가는 값들. 여기 없는 설정은 서버 안에서만 쓰이므로 바뀌어도

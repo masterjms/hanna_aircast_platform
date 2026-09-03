@@ -50,6 +50,18 @@ class CurrentConfig(Base):
     live_stop_wait_sec: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, server_default="10"
     )
+    #: LIVE_START 에 실어 보내는 단말 준비 제한(사양 1~60). 단말은 이 값 + 5초까지
+    #: 기다렸다가 LIVE_READY 를 보내므로, 서버 화면의 "준비 지연" 기준은 이 값 + 5 다
+    #: (단말 요청 2026-09-03 §3.1). CONFIG 토픽으로는 안 나가서 config_version 무관.
+    live_ready_timeout_sec: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="30"
+    )
+    #: 파일 방송을 시작한 뒤 FILE_RESULT 를 기다리는 상한. FILE_RESULT 는 "받아서
+    #: 저장까지 끝냈다"는 신호라 재생 길이와 무관하고, 저장(LittleFS 80~100KB/s)이
+    #: 길다 — 3MB 면 40초. 단말 자체 포기 시간이 120초라 그 이상 잡을 이유가 없다.
+    file_result_wait_sec: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="120"
+    )
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

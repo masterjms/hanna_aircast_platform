@@ -167,6 +167,11 @@ async def _insert_device_event(
     event_id = await _event_id_for(db, job_id) if job_id is not None else None
 
     if result_type in TELEMETRY_RESULTS:
+        if broadcast_service.is_job_ended(job_id):
+            # 정지 뒤에도 그 방송의 LIVE_STATS 가 한 번 더 온다(날아가던 것). 적재하면
+            # 끝난 방송이 잠깐 되살아나 보인다 — 단말 요청 2026-09-03 §2.5.
+            # 결과(LIVE_RESULT 등)는 이력이라 그대로 남긴다.
+            return
         # 주기 telemetry 는 tick 마다 행을 쌓지 않고 최신값만 덮어쓴다.
         # DeviceEvent docstring 의 STATUS 정책과 같은 이유다 — LIVE_STATS 를
         # 그대로 쌓으면 300대 × 10초 주기면 방송 10분에 18,000 행이 되고,

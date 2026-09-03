@@ -86,6 +86,13 @@ services:
     # 단말별 계정 감시 루프를 얹은 래퍼. passwd.generated 가 바뀌면 권한을 맞춰
     # /mosquitto/data/passwd 로 설치하고 SIGHUP 리로드한다.
     entrypoint: ["/bin/sh", "/mosquitto/entrypoint.sh"]
+    # MQTT 연결 하나 = fd 하나. 컨테이너 기본 한도가 1024 인 환경이면 약 1,000대에서
+    # "Too many open files" 로 접속이 거절되고, 단말 쪽에서는 계정 문제와 구분되지
+    # 않는다(단말 질문 2026-09-01 §3). systemd 가 아니라 compose 에서 올린다.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     volumes:
       - ./infra/mosquitto/config:/mosquitto/config:ro
       - ./infra/mosquitto/entrypoint.sh:/mosquitto/entrypoint.sh:ro

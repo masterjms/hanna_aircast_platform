@@ -201,6 +201,10 @@ export interface SystemConfig {
   /** 중지 후 단말 응답을 기다리는 시간(초). 단말에 나가지 않는 서버 설정이다. */
   file_stop_wait_sec: number;
   live_stop_wait_sec: number;
+  /** LIVE_START.ready_timeout_sec 로 단말에 전달. 화면의 준비 지연 기준은 이 값 + 5. */
+  live_ready_timeout_sec: number;
+  /** 파일 시작 후 FILE_RESULT(저장 완료)를 기다리는 상한. */
+  file_result_wait_sec: number;
   updated_at: string;
 }
 
