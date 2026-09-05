@@ -280,7 +280,12 @@ async def issue_credential(
 
 
 # ── 변경 ─────────────────────────────────────────────────────────────────
-async def create_device(db: AsyncSession, payload: DeviceCreate, scope: VillageScope) -> DeviceOut:
+async def create_device(
+    db: AsyncSession,
+    payload: DeviceCreate,
+    scope: VillageScope,
+    publisher: MqttPublisher | None = None,
+) -> DeviceOut:
     if await db.get(Device, payload.mac) is not None:
         raise DeviceAlreadyExists(detail={"mac": payload.mac})
     await _validate_assignment(db, payload.village_id, payload.zone_id, scope)
@@ -295,6 +300,21 @@ async def create_device(db: AsyncSession, payload: DeviceCreate, scope: VillageS
     db.add(device)
     await db.flush()
     await export_broker_accounts(db)
+
+    # 마을을 정해서 등록했으면 그 단말의 CONFIG 를 바로 내려둔다. 재조정 주기나 첫
+    # STATUS 의 불일치 감지를 기다리지 않아도 접속 즉시 마을 topic 을 구독한다.
+    if publisher is not None and device.village_id is not None:
+        village = await db.get(Village, device.village_id)
+        config = await db.get(CurrentConfig, 1)
+        token = token_for(device.village_id, village.village_code if village else None)
+        try:
+            await publisher.publish_device_config(
+                mac=device.mac,
+                village_token=token,
+                config_version=config.config_version if config is not None else 1,
+            )
+        except Exception:  # noqa: BLE001 - 재조정 주기가 따라잡는다
+            log.exception("등록 직후 CONFIG 발행 실패: %s", device.mac)
     return DeviceOut.from_row(device, online=False)
 
 

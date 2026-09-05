@@ -438,7 +438,7 @@ PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유�
 | POST | `/api/files/tts` | 로그인 | 합성 후 파일함 등록 |
 | GET | `/dl/{token}` | 단말 token | 단말 MP3 다운로드 |
 
-업로드는 MP3만 허용하며 2.5 MiB, 600초 상한을 적용한다. 서버가 SHA-256과 duration을 계산하고 실제 파일은 `FILE_ROOT/upload`, TTS는 `FILE_ROOT/tts` 아래에 둔다.
+업로드는 MP3만 허용하며 50 MiB 상한을 적용한다. 2.5 MiB와 600초 상한은 방송 시작 시 검사한다. 서버가 SHA-256과 duration을 계산하고 실제 파일은 `FILE_ROOT/upload`, TTS는 `FILE_ROOT/tts` 아래에 둔다.
 
 TTS 요청:
 
@@ -605,7 +605,7 @@ wss://<host>/ingest?session=<broadcast_events.id>
 | 4004 | 세션 없음 또는 이미 종료 |
 | 4009 | 다른 업링크가 이미 연결됨 |
 
-업링크가 중간에 끊겼다는 이유만으로 즉시 방송 이벤트를 끝내지는 않는다. 세션은 유지되고 오디오가 없어 무음이 될 수 있으며, 화면은 `uplink_connected=false`를 표시한다. 다만 시작 후 한 번도 업링크가 붙지 않은 경우에는 grace watchdog이 종료한다.
+업링크가 끊겨도 세션은 즉시 종료되지 않고 화면에 `uplink_connected=false`가 표시된다. 마지막 오디오 수신 후 `LIVE_UPLINK_GRACE_SEC` 기본 30초 동안 오디오가 없으면 grace watchdog이 방송을 종료한다. 한 번도 연결되지 않은 경우도 같은 기준이다.
 
 ## 11. 현재 없는 API
 

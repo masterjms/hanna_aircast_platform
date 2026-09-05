@@ -57,8 +57,10 @@ async def list_unassigned(db: Db, _: SuperAdmin) -> list[DeviceOut]:
 
 
 @router.post("", response_model=DeviceOut, status_code=status.HTTP_201_CREATED)
-async def create_device(payload: DeviceCreate, db: Db, scope: Scope) -> DeviceOut:
-    return await service.create_device(db, payload, scope)
+async def create_device(
+    payload: DeviceCreate, db: Db, scope: Scope, publisher: Publisher
+) -> DeviceOut:
+    return await service.create_device(db, payload, scope, publisher)
 
 
 @router.post("/credential", response_model=NewDevicePasswordOut)
