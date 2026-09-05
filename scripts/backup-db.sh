@@ -29,6 +29,35 @@ SERVICE="${DB_SERVICE:-postgres}"   # compose 서비스 이름
 
 [ -f .env ] || { echo "!! .env 가 없다"; exit 1; }
 
+# ── 실패를 소리나게 만든다 ──────────────────────────────────────────
+# cron 으로 도는 스크립트라 실패해도 아무도 안 본다. 매일 점검 스크립트가
+# "최근 백업이 N시간 전" 으로 잡아주기는 하지만, 그때는 이미 며칠이 지나 있다.
+# 실패한 그 자리에서 알린다.
+NOTIFIED=0
+
+notify() {
+    local hook
+    hook="$(grep -E '^SLACK_WEBHOOK_URL=' .env | cut -d= -f2- | tr -d '"'"'"'' || true)"
+    [ -n "$hook" ] || return 0
+    curl -sS -X POST -H 'Content-type: application/json'          --data "$(python3 -c 'import json,sys; print(json.dumps({"text": sys.stdin.read()}))' <<< "$1")"          "$hook" >/dev/null 2>&1 || true
+}
+
+fail() {
+    echo "!! $1"
+    notify "🔴 *DB 백업 실패*"$'
+'"  $1"
+    NOTIFIED=1
+    exit 1
+}
+
+on_exit() {
+    local code=$?
+    [ "$code" -eq 0 ] && return 0
+    [ "$NOTIFIED" -eq 1 ] && return 0
+    notify "🔴 *DB 백업 실패* — 종료코드 $code"
+}
+trap on_exit EXIT
+
 # .env 에서 DB 접속 정보를 읽는다(따옴표·주석 무시).
 DB_USER="$(grep -E '^POSTGRES_USER=' .env | cut -d= -f2- | tr -d '"'"'"'' || true)"
 DB_NAME="$(grep -E '^POSTGRES_DB=' .env | cut -d= -f2- | tr -d '"'"'"'' || true)"
@@ -47,9 +76,8 @@ echo "== 백업 시작 ($DB_NAME)"
 if ! docker compose exec -T "$SERVICE" \
         pg_dump -U "$DB_USER" -d "$DB_NAME" --clean --if-exists \
      | gzip > "$FILE"; then
-    echo "!! pg_dump 실패"
     rm -f "$FILE"
-    exit 1
+    fail "pg_dump 실패"
 fi
 
 SIZE="$(du -h "$FILE" | cut -f1)"
@@ -58,16 +86,28 @@ SIZE="$(du -h "$FILE" | cut -f1)"
 # gzip 은 성공할 수 있어서, 크기를 직접 확인한다.
 BYTES="$(stat -c %s "$FILE")"
 if [ "$BYTES" -lt 1000 ]; then
-    echo "!! 백업 파일이 너무 작다(${BYTES}B) — 덤프가 제대로 안 됐다"
     rm -f "$FILE"
-    exit 1
+    fail "백업 파일이 너무 작다(${BYTES}B) — 덤프가 제대로 안 됐다"
+fi
+
+# gz 가 온전한지 먼저 본다. 덤프가 중간에 끊기면 여기서 걸린다.
+if ! gzip -t "$FILE" 2>/dev/null; then
+    rm -f "$FILE"
+    fail "백업 파일이 손상됐다 — 덤프가 중간에 끊겼다"
 fi
 
 # 내용도 확인한다. 테이블 생성 구문이 없으면 껍데기다.
-if ! zcat "$FILE" | grep -q "CREATE TABLE"; then
-    echo "!! 백업에 테이블 정의가 없다 — 덤프 실패로 본다"
+#
+# pipefail 을 이 검사에서만 끄는 이유:
+#   grep -q 는 첫 일치에서 바로 끝나며 파이프를 닫는다. 덤프가 파이프 버퍼
+#   (64KiB) 보다 크면 아직 쓰는 중이던 zcat 이 SIGPIPE 로 죽고, pipefail 이
+#   켜져 있으면 파이프라인 전체가 실패로 잡힌다. 그러면 멀쩡한 백업을
+#   "껍데기" 로 판정해 지우고 나간다. DB 가 작을 때는 통째로 버퍼에 들어가
+#   드러나지 않다가, 데이터가 늘면 어느 날부터 매일 조용히 실패한다.
+#   (2026-09-03 부터 실제로 이렇게 멈춰 있었다)
+if ! ( set +o pipefail; zcat "$FILE" | grep -q "CREATE TABLE" ); then
     rm -f "$FILE"
-    exit 1
+    fail "백업에 테이블 정의가 없다 — 덤프 실패로 본다"
 fi
 
 echo "   $FILE ($SIZE)"
