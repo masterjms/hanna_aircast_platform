@@ -35,8 +35,8 @@ class ConfigUpdate(BaseModel):
     live_ready_timeout_sec: int | None = Field(default=None, ge=1, le=60)
     #: 라이브 중지 후 LIVE_RESULT 대기 상한. 다 오면 즉시 끝내고 스트림을 닫는다.
     live_stop_wait_sec: int | None = Field(default=None, ge=10, le=30)
-    #: 파일 시작(저장 완료)·중지 응답 대기 상한. 3MB 저장에 40초라 짧으면 오판한다.
-    file_wait_sec: int | None = Field(default=None, ge=30, le=180)
+    #: 파일 시작(받고 검증 완료)·중지 응답 대기 상한. 저장은 백그라운드라 무관.
+    file_wait_sec: int | None = Field(default=None, ge=10, le=60)
 
 
 class HealthOut(BaseModel):

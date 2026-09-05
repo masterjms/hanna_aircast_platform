@@ -53,10 +53,10 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from app.core.village_token import village_tokens
 from app.db import session_scope
 from app.models.device import Device
 from app.models.system import CurrentConfig
-from app.mqtt import topics
 from app.mqtt.publisher import MqttPublisher
 
 log = logging.getLogger(__name__)
@@ -93,13 +93,15 @@ def resync_allowed(mac: str, now: dt.datetime) -> bool:
 
 
 async def publish_resync(
-    publisher: MqttPublisher, *, mac: str, village_id: int, config_version: int
+    publisher: MqttPublisher, *, mac: str, village_token: str, config_version: int
 ) -> None:
     """단말 CONFIG 재발행. 실패해도 삼킨다 — 다음 STATUS 에서 다시 시도된다."""
-    log.info("CONFIG 불일치 자동 복구 %s (village=%d, version=%d)", mac, village_id, config_version)
+    log.info(
+        "CONFIG 불일치 자동 복구 %s (village=%s, version=%d)", mac, village_token, config_version
+    )
     try:
         await publisher.publish_device_config(
-            mac=mac, village_id=village_id, config_version=config_version
+            mac=mac, village_token=village_token, config_version=config_version
         )
     except Exception:  # noqa: BLE001
         log.exception("CONFIG 자동 복구 발행 실패: %s", mac)
@@ -213,21 +215,26 @@ class StatusBuffer:
             # 전 단말이 같은 값을 읽던 조회를 flush 당 한 번으로 줄인 지점이다.
             config = await db.get(CurrentConfig, 1)
             expected_version = config.config_version if config is not None else None
+            # 마을 id → MQTT 문자열(12자리 코드). 마을 수만큼이라 한 번의 IN 조회다.
+            tokens = await village_tokens(db, set(assigned.values()))
 
-        stale: list[tuple[str, int]] = []
+        stale: list[tuple[str, str]] = []
         for mac, village_id in assigned.items():
             payload, _ = batch[mac]
+            expected_village = tokens.get(village_id)
+            if expected_village is None:
+                continue
             if needs_resync(
                 reported_village=str(payload.get("village_id") or ""),
-                expected_village=topics.village_token(village_id),
+                expected_village=expected_village,
                 reported_version=payload.get("config_version"),
                 expected_version=expected_version,
             ) and resync_allowed(mac, now):
-                stale.append((mac, village_id))
+                stale.append((mac, expected_village))
 
-        for mac, village_id in stale:
+        for mac, token in stale:
             await publish_resync(
-                publisher, mac=mac, village_id=village_id,
+                publisher, mac=mac, village_token=token,
                 config_version=expected_version or 1,
             )
         return len(rows)

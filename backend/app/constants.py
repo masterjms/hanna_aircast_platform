@@ -99,15 +99,17 @@ CONFIG_LIMITS: dict[str, tuple[int, int]] = {
     "live_ready_timeout_sec": (1, 60),
     # 라이브 중지 후 LIVE_RESULT 대기 상한.
     "live_stop_wait_sec": (10, 30),
-    # 파일 시작(저장 완료)·중지 응답 대기 상한. 단말 자체 포기(120초)를 넘길 이유가 없다.
-    "file_wait_sec": (30, 180),
+    # 파일 시작(다 받고 검증 완료 = FILE_RESULT)·중지 응답 대기 상한. 저장은 방송 중에
+    # 단말이 알아서 하므로 이 시간과 무관하다(716KB 실측 3.6초 — 단말 확인 2026-09-04).
+    "file_wait_sec": (10, 60),
 }
 
 #: 이 중 단말로 나가는 값들. 여기 없는 설정은 서버 안에서만 쓰이므로 바뀌어도
 #: config_version 을 올리지 않는다(올리면 전 단말이 CONFIG 를 다시 받는다).
 DEVICE_CONFIG_FIELDS = frozenset({"status_interval_sec", "live_stats_interval_sec", "event_qos"})
 
-#: MQTT 로 나가는 village_id 는 8자리 제로패딩 문자열이다.
+#: 예전 방식 village_id 자릿수(DB id 제로패딩). 지금 기본은 법정동코드 12자리이고
+#: (레지스트리 사양 §2.4, app/core/village_token.py), 주소 없는 마을만 이걸 쓴다.
 VILLAGE_ID_WIDTH = 8
 
 #: MAC 정규형: 콜론 없는 소문자 12자리.

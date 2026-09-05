@@ -9,7 +9,8 @@
         --server https://hanna-aircast.co.kr --user admin
 
 무엇을 하나
-    1. TL_SCCO_LI.shp 에서 리 경계를 읽는다 (LI_CD = 법정동코드 10자리)
+    1. TL_SCCO_LI.shp 에서 리 경계를, 같은 폴더의 TL_SCCO_EMD.shp 에서 읍면동 경계를
+       읽는다 (LI_CD = 법정동코드 10자리, EMD_CD = 앞 8자리 — 동 단위 마을용)
     2. EPSG:5179(UTM-K) → WGS84 재투영. 원본에 .prj 가 없어 좌표계를 직접 준다
        (「도로명주소 공간데이터 활용가이드」 확인, 2026-09-03)
     3. 화면에 안 보일 만큼의 점을 줄인다(Douglas-Peucker)
@@ -35,6 +36,7 @@ import math
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 # 도형 계산(simplify·ring_area·shape_to_geometry)은 이 두 패키지 없이도 돌아간다.
 # 그래야 테스트가 SHP 리더 없이 그 부분만 검증할 수 있다 — 계산이 틀리면 경계가
@@ -144,18 +146,34 @@ def shape_to_geometry(shape, transform, tolerance: float) -> dict | None:
     }
 
 
-def load_boundaries(shp_path: str, tolerance: float) -> dict[str, dict]:
-    """b_code → GeoJSON geometry."""
+def _load_layer(shp_path: str, code_field: str, tolerance: float) -> dict[str, dict]:
     reader = shapefile.Reader(shp_path, encoding="cp949")
     to_wgs84 = Transformer.from_crs(SOURCE_CRS, TARGET_CRS, always_xy=True).transform
     out: dict[str, dict] = {}
     for i, record in enumerate(reader.iterRecords()):
-        code = str(record["LI_CD"]).strip()
+        code = str(record[code_field]).strip()
         if not code:
             continue
         geometry = shape_to_geometry(reader.shape(i), to_wgs84, tolerance)
         if geometry is not None:
             out[code] = geometry
+    return out
+
+
+def load_boundaries(shp_path: str, tolerance: float) -> dict[str, dict]:
+    """b_code(10자리) → GeoJSON geometry.
+
+    두 레이어를 합친다(문제점 15번 — 산본동처럼 **동** 단위 마을은 리 레이어에 없다):
+      · TL_SCCO_LI  — 리 경계. LI_CD 10자리 = b_code 그대로
+      · TL_SCCO_EMD — 읍면동 경계. EMD_CD 8자리 = b_code 앞 8자리. b_code 가 `00` 으로
+        끝나는(리가 없는 동) 마을은 이 레이어의 도형을 b_code 키로 넣는다.
+    `--shp` 는 TL_SCCO_LI 경로이고, EMD 는 같은 폴더에서 찾는다(없으면 리만).
+    """
+    out = _load_layer(shp_path, "LI_CD", tolerance)
+    emd_path = shp_path[: -len("TL_SCCO_LI")] + "TL_SCCO_EMD" if shp_path.endswith("TL_SCCO_LI") else None
+    if emd_path and Path(emd_path + ".shp").exists():
+        for emd_cd, geometry in _load_layer(emd_path, "EMD_CD", tolerance).items():
+            out.setdefault(f"{emd_cd}00", geometry)
     return out
 
 

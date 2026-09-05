@@ -107,7 +107,8 @@ def render_passwd(device_accounts: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_acl(device_villages: dict[str, int | None]) -> str:
+def render_acl(device_villages: dict[str, str | None]) -> str:
+    # 값은 마을의 MQTT 문자열(core.village_token.token_for) — DB id 가 아니다.
     """aclfile 전체 내용. 단말마다 **자기 마을 topic 만** 읽기를 연다.
 
     단말측 통신 사양 §2.1: `village/<village_id>/cmd` 자리는 MAC 이 아니라 서버가
@@ -120,8 +121,6 @@ def render_acl(device_villages: dict[str, int | None]) -> str:
     - `pattern ... %u` = 자기 MAC 토픽만
     - `user <mac>` 블록 = 그 단말의 마을 한 줄. 미배정은 블록을 만들지 않는다
     """
-    from app.mqtt.topics import village_token  # 순환 import 회피(topics ← constants 만)
-
     lines = [
         "# 자동 생성 파일 — 손대지 말 것. 정본은 서버 DB 다.",
         "# 등록·삭제·마을 배정 변경 때마다 통째로 다시 만든다 (app/core/mqtt_accounts.py).",
@@ -147,7 +146,7 @@ def render_acl(device_villages: dict[str, int | None]) -> str:
         if village_id is None:
             continue
         lines.append(f"user {mac}")
-        lines.append(f"topic read iotradio/village/{village_token(village_id)}/cmd")
+        lines.append(f"topic read iotradio/village/{village_id}/cmd")
     return "\n".join(lines) + "\n"
 
 
@@ -195,7 +194,7 @@ def acl_export_path() -> Path | None:
     return Path(target).parent / "aclfile.generated" if target else None
 
 
-def export_acl(device_villages: dict[str, int | None]) -> bool:
+def export_acl(device_villages: dict[str, str | None]) -> bool:
     """aclfile 을 공유 볼륨에 쓴다. passwd 와 같은 규칙(실패는 로그만)."""
     target = acl_export_path()
     if target is None:

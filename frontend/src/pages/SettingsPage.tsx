@@ -24,7 +24,8 @@ import type { SystemConfig } from '../api/types';
  *            단말에 CONFIG 로 나가지 않아 config_version 이 바뀌지 않는다.
  *            (라이브 준비 제한만 LIVE_START 명령 필드로 실려 나간다.)
  *
- * 문구는 시작을 먼저, 종료를 뒤에 쓴다(문제점 8·9번).
+ * 문구는 시작을 먼저, 종료를 뒤에 쓴다(문제점 8·9번). 항목 순서는 파일 → 라이브
+ * 준비 → 라이브 종료(문제점 12번 — 방송 흐름 순서).
  */
 const GROUPS = [
   {
@@ -69,6 +70,15 @@ const FIELDS = [
   },
   {
     group: 'timing',
+    key: 'file_wait_sec',
+    label: '파일방송 응답 대기',
+    hint: '방송 시작 후 단말이 파일을 다 받고 무결성 검증을 마쳤다고(FILE_RESULT — 이때 재생이 시작됩니다) 응답하기까지 기다리는 시간이자, 방송 중지 후 종료 응답을 기다리는 시간입니다. 저장은 방송 중에 단말이 알아서 하므로 이 시간과 무관하며, 파일 크기가 커져도 응답은 늦어지지 않습니다. 716KB 실측 3.6초.',
+    min: 10,
+    max: 60,
+    unit: '초',
+  },
+  {
+    group: 'timing',
     key: 'live_ready_timeout_sec',
     label: '라이브 준비 제한',
     hint: '방송 시작 후 단말이 준비(LIVE_READY)를 마쳐야 하는 시간입니다. LIVE_START 로 단말에 전달되고, 단말은 이 값 + 5초까지 기다리므로 화면의 「준비 지연」 알림도 이 값 + 5초에 뜹니다.',
@@ -85,15 +95,6 @@ const FIELDS = [
     max: 30,
     unit: '초',
   },
-  {
-    group: 'timing',
-    key: 'file_wait_sec',
-    label: '파일방송 응답 대기',
-    hint: '방송 시작 후 단말이 파일을 받아 저장을 마치고(FILE_RESULT, 이때 재생이 시작됩니다) 응답하기까지 기다리는 시간이자, 방송 중지 후 종료 응답을 기다리는 시간입니다. 저장이 느려(3MB 약 40초) 짧게 잡으면 정상 동작을 실패로 봅니다. 단말 자체 포기가 120초입니다.',
-    min: 30,
-    max: 180,
-    unit: '초',
-  },
 ] as const;
 
 type FieldKey = (typeof FIELDS)[number]['key'];
@@ -106,7 +107,7 @@ export function SettingsPage() {
     event_qos: 0,
     live_ready_timeout_sec: 30,
     live_stop_wait_sec: 10,
-    file_wait_sec: 120,
+    file_wait_sec: 30,
   });
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);

@@ -15,6 +15,7 @@ from app.constants import Role
 from app.core.presence import online_clause, online_cutoff
 from app.core.scope import VillageScope
 from app.core.security import hash_password
+from app.core.village_token import next_village_code, token_for
 from app.errors import (
     ApiError,
     DuplicateUsername,
@@ -24,7 +25,6 @@ from app.errors import (
 )
 from app.models.device import Device
 from app.models.org import User, UserVillage, Village, Zone
-from app.mqtt.topics import village_token
 from app.schemas.org import (
     UserCreate,
     UserOut,
@@ -64,7 +64,7 @@ async def _village_device_counts(
 
 def _to_village_out(village: Village, counts: tuple[int, int]) -> VillageOut:
     out = VillageOut.model_validate(village)
-    out.village_token = village_token(village.id)
+    out.village_token = token_for(village.id, village.village_code)
     out.device_count, out.online_count = counts
     # 도형 자체는 싣지 않는다 — 있는지 여부만. 수십 KB 짜리가 목록 행마다 붙으면
     # 마을 관리 화면이 느려지고, 화면은 "경계가 들어왔나"만 알면 된다.
@@ -88,10 +88,27 @@ async def get_village(db: AsyncSession, village_id: int, scope: VillageScope) ->
     return _to_village_out(village, counts.get(village_id, (0, 0)))
 
 
+async def _assign_village_code(db: AsyncSession, village: Village) -> bool:
+    """b_code 가 있고 코드가 아직 없으면 12자리 코드를 만든다. 만들었으면 True.
+
+    한 번 만든 코드는 b_code 가 바뀌어도 그대로 둔다(레지스트리 사양 §2 — 행정구역
+    개편 때 바꾸면 그 마을 전 단말 재설정 + 과거 이력 단절).
+    """
+    if village.village_code is not None or not village.b_code:
+        return False
+    taken = await db.scalars(
+        select(Village.village_code).where(Village.village_code.like(f"{village.b_code}%"))
+    )
+    village.village_code = next_village_code(village.b_code, [t for t in taken if t])
+    await db.flush()
+    return True
+
+
 async def create_village(db: AsyncSession, payload: VillageCreate) -> VillageOut:
     village = Village(**payload.model_dump())
     db.add(village)
     await db.flush()
+    await _assign_village_code(db, village)
     return _to_village_out(village, (0, 0))
 
 
@@ -105,6 +122,8 @@ async def update_village(
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(village, key, value)
     await db.flush()
+    # 주소가 처음 들어오면 그때 12자리 코드가 생긴다(그 전엔 legacy 8자리).
+    await _assign_village_code(db, village)
     counts = await _village_device_counts(db, [village_id])
     return _to_village_out(village, counts.get(village_id, (0, 0)))
 

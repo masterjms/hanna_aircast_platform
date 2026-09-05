@@ -56,7 +56,9 @@ class VillageOut(ApiModel):
     #: (목록 응답마다 수십 KB 를 실으면 마을 관리 화면이 무거워진다).
     has_boundary: bool = False
     created_at: dt.datetime
-    #: MQTT 로 나가는 8자리 표현. 디버깅할 때 화면에서 바로 보이면 편하다.
+    #: 법정동코드(10)+연번(2) 12자리. 주소가 없어 못 만든 마을은 null.
+    village_code: str | None = None
+    #: MQTT 로 나가는 village_id 문자열 — village_code, 없으면 예전 방식 id 8자리.
     village_token: str = ""
     #: 등록된 단말 수(설치 현황).
     device_count: int = 0

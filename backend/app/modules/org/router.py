@@ -46,9 +46,22 @@ async def create_village(payload: VillageCreate, db: Db, _: SuperAdmin) -> Villa
 
 @router.patch("/api/villages/{village_id}", response_model=VillageOut)
 async def update_village(
-    village_id: int, payload: VillageUpdate, db: Db, scope: Scope, _: SuperAdmin
+    village_id: int,
+    payload: VillageUpdate,
+    db: Db,
+    scope: Scope,
+    _: SuperAdmin,
+    publisher: Publisher,
 ) -> VillageOut:
-    return await service.update_village(db, village_id, payload, scope)
+    """마을 수정. 주소를 처음 넣어 MQTT 문자열이 legacy → 12자리로 바뀌면
+    그 마을 단말들의 CONFIG 를 새 버전으로 다시 내리고 ACL 도 다시 만든다 —
+    단말이 구독하는 topic 이 바뀌기 때문이다."""
+    before = await service.get_village(db, village_id, scope)
+    out = await service.update_village(db, village_id, payload, scope)
+    if out.village_token != before.village_token:
+        await device_service.resync_config(db, publisher)
+        await device_service.export_broker_accounts(db)
+    return out
 
 
 @router.delete("/api/villages/{village_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -56,11 +56,12 @@ class CurrentConfig(Base):
         SmallInteger, nullable=False, server_default="10"
     )
     #: 파일 방송 응답 대기 — **시작과 중지에 같이 쓴다**(문제점 8번). 시작 후에는
-    #: 단말의 FILE_RESULT ok=true(받아서 저장까지 끝냄 → 재생 시작)를, 중지 후에는
-    #: 종료 응답을 이 시간까지 기다린다. 저장이 느려서(LittleFS 80~100KB/s, 3MB 면
-    #: 40초) 짧게 잡으면 정상 저장 중인 단말을 실패로 본다. 단말 자체 포기가 120초.
+    #: 단말의 FILE_RESULT ok=true(다 받고 무결성 검증 완료 → 재생 시작)를, 중지 후에는
+    #: 종료 응답을 이 시간까지 기다린다. 저장은 방송 중에 단말이 알아서 하므로 이
+    #: 시간과 무관하고, 파일이 커져도 응답은 늦어지지 않는다(716KB 실측 3.6초 —
+    #: 단말 확인 2026-09-04, 문제점 19번). 기본 30초, 10~60초.
     file_wait_sec: Mapped[int] = mapped_column(
-        SmallInteger, nullable=False, server_default="120"
+        SmallInteger, nullable=False, server_default="30"
     )
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

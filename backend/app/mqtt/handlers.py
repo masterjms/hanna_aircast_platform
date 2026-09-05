@@ -27,9 +27,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import TELEMETRY_RESULTS, DeviceState, ResultType
+from app.core.village_token import token_for
 from app.db import session_scope
 from app.models.device import Device
 from app.models.event import BroadcastEvent, DeviceEvent
+from app.models.org import Village
 from app.models.system import CurrentConfig
 from app.modules.broadcast import service as broadcast_service
 from app.mqtt import topics
@@ -195,6 +197,20 @@ async def _insert_device_event(
         )
         return
 
+    # QoS 1 은 중복 배달이 가능하다. 브로커가 LIVE_START 를 재배달하면 정상 방송
+    # 중인 단말도 LIVE_READY ok=false code=BUSY 로 답한다(사양 §5.1 선착순). 이미
+    # 그 job 에 ok=true 를 받은 단말의 BUSY 는 실패가 아니다 — 남기면 화면이 그
+    # 단말을 실패로 뒤집는다(단말 확인 2026-09-04, 문제점 17번).
+    if (
+        result_type == "LIVE_READY"
+        and event_id is not None
+        and payload.get("ok") is False
+        and payload.get("code") == "BUSY"
+        and await _has_live_ready_ok(db, event_id, mac)
+    ):
+        log.info("LIVE_READY BUSY 무시 (이미 준비 완료한 단말, 재배달): %s job=%s", mac, job_id)
+        return
+
     stmt = pg_insert(DeviceEvent).values(
         event_id=event_id,
         mac=mac,
@@ -203,6 +219,21 @@ async def _insert_device_event(
         dedup_key=_dedup_key(mac, result_type, job_id, payload),
     )
     await db.execute(stmt.on_conflict_do_nothing())
+
+
+async def _has_live_ready_ok(db: AsyncSession, event_id: int, mac: str) -> bool:
+    """이 방송에서 이 단말이 이미 LIVE_READY ok=true 를 보냈는가."""
+    found = await db.scalar(
+        select(DeviceEvent.id)
+        .where(
+            DeviceEvent.event_id == event_id,
+            DeviceEvent.mac == mac,
+            DeviceEvent.result_type == "LIVE_READY",
+            DeviceEvent.payload["ok"].as_boolean().is_(True),
+        )
+        .limit(1)
+    )
+    return found is not None
 
 
 async def _resync_if_stale(
@@ -227,10 +258,12 @@ async def _resync_if_stale(
 
     config = await db.get(CurrentConfig, 1)
     expected_version = config.config_version if config is not None else None
+    village = await db.get(Village, device.village_id)
+    expected_village = token_for(device.village_id, village.village_code if village else None)
 
     if not needs_resync(
         reported_village=str(data.get("village_id") or ""),
-        expected_village=topics.village_token(device.village_id),
+        expected_village=expected_village,
         reported_version=data.get("config_version"),
         expected_version=expected_version,
     ):
@@ -241,7 +274,7 @@ async def _resync_if_stale(
     await publish_resync(
         publisher,
         mac=mac,
-        village_id=device.village_id,
+        village_token=expected_village,
         config_version=expected_version or 1,
     )
 

@@ -22,6 +22,7 @@ from collections.abc import Mapping, Sequence
 from app.config import settings
 from app.constants import MQTT_MAX_PAYLOAD_BYTES, TargetScope
 from app.core.scope import VillageScope
+from app.core.village_token import UNASSIGNED_TOKEN
 from app.errors import ApiError, PayloadTooLarge
 from app.mqtt import topics
 from app.mqtt.connection import MqttConnection
@@ -110,7 +111,7 @@ class MqttPublisher:
         self,
         *,
         mac: str,
-        village_id: int | None,
+        village_token: str | None,
         config_version: int,
     ) -> None:
         """단말별 마을 배정 (사양 §4.2).
@@ -123,25 +124,25 @@ class MqttPublisher:
         구조라(사양 §4.3), 두 토픽의 버전이 어긋나면 단말이 낡은 값을 최종본으로
         보고하게 된다.
 
-        village_id=None(미배정)이면 retain 을 지운다 — 빈 payload 를 retain 으로 보내는 것이
-        MQTT 에서 "이 토픽의 보관 메시지 삭제"를 뜻한다. 단말이 재접속해도
-        지난 배정이 되살아나지 않는다.
+        village_token=None(미배정)이면 **전부 0 인 village_id 를 명시해서** 발행한다.
+        예전에는 빈 payload 로 retain 을 지웠는데, 단말은 빈 payload 를 무시해서
+        이전 배정이 그대로 남았다(단말 확인 2026-09-04, 문제점 18번). 전부 0 은
+        사양 §2.2 의 미배정 값이고, 단말은 그 값이면 마을 topic 을 구독하지 않는다.
+        단말이 적용하려면 config_version 이 올라가 있어야 한다 — 부르는 쪽이 올린다.
         """
-        topic = topics.device_config(mac)
-        if village_id is None:
-            await self._conn.raw_publish(topic, b"", qos=_QOS_CONFIG, retain=True)
-            log.info("MQTT → %s (retain 삭제: 미배정)", topic)
-            return
-
         await self._send(
-            topic,
+            topics.device_config(mac),
             {
                 "config_version": config_version,
-                "village_id": topics.village_token(village_id),
+                "village_id": village_token if village_token is not None else UNASSIGNED_TOKEN,
             },
             qos=_QOS_CONFIG,
             retain=True,
         )
+        if village_token is None:
+            log.info(
+                "MQTT → %s (미배정 CONFIG, version=%d)", topics.device_config(mac), config_version
+            )
 
     # ── CMD payload 빌더 ────────────────────────────────────────────────
     # 통신 사양 §3.2 의 필드명을 그대로 쓴다. 단말이 모르는 필드는 무시하지만
@@ -247,19 +248,22 @@ class MqttPublisher:
         target_scope: TargetScope,
         scope: VillageScope,
         village_ids: Sequence[int] = (),
+        village_tokens: Mapping[int, str] | None = None,
         macs: Sequence[str] = (),
     ) -> list[str]:
         """방송·OTA 명령을 대상에 맞는 토픽으로 발행한다.
 
         대상별 토픽 선택:
           all      → iotradio/all/cmd            (super_admin 만)
-          village  → 마을마다 iotradio/village/<id8>/cmd — 같은 payload(같은
+          village  → 마을마다 iotradio/village/<village_id>/cmd — 같은 payload(같은
                      job_id·stream_url)를 여러 마을 토픽에 발행한다. 단말들이
                      같은 마운트로 모여 한 방송을 같이 듣는 구조다
           zone     → 소속 단말 MAC 별 개별 토픽으로 펼친다(구역은 단말이 모른다)
           device   → iotradio/device/<mac>/cmd
 
         zone/device 는 호출자가 macs 를 채워서 넘긴다(대상 해석은 device 모듈의 일이다).
+        village 는 id(권한 검사용)와 함께 village_tokens(id → MQTT 문자열)를 넘긴다 —
+        토픽에 들어가는 건 id 가 아니라 12자리 코드다(core.village_token).
         발행한 토픽 목록을 돌려준다 — 이력 기록과 테스트에 쓴다.
 
         retain=False 고정. cmd 에 retain 을 걸면 단말 재접속 때 지난 방송이 되살아난다.
@@ -278,7 +282,13 @@ class MqttPublisher:
                 raise ApiError("마을 대상 명령에는 village_ids 가 필요합니다.")
             for village_id in village_ids:
                 scope.ensure_allowed(village_id)
-            targets = [topics.village_cmd(v) for v in village_ids]
+            tokens = village_tokens or {}
+            missing = [v for v in village_ids if v not in tokens]
+            if missing:
+                raise ApiError(
+                    f"마을 MQTT 문자열을 모릅니다: {missing}", code="VILLAGE_TOKEN_MISSING"
+                )
+            targets = [topics.village_cmd(tokens[v]) for v in village_ids]
 
         else:  # ZONE · DEVICE — 둘 다 MAC 단위로 펼쳐서 보낸다
             if not macs:

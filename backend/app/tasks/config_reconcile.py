@@ -23,8 +23,10 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.village_token import token_for
 from app.db import session_scope
 from app.models.device import Device
+from app.models.org import Village
 from app.models.system import CurrentConfig
 from app.mqtt.publisher import MqttPublisher
 
@@ -44,12 +46,14 @@ async def load_config(db: AsyncSession) -> CurrentConfig:
     return config
 
 
-async def assigned_devices(db: AsyncSession) -> list[tuple[str, int]]:
-    """마을이 배정된 단말 (mac, village_id) 목록."""
+async def assigned_devices(db: AsyncSession) -> list[tuple[str, str]]:
+    """마을이 배정된 단말 (mac, village MQTT 문자열) 목록."""
     rows = await db.execute(
-        select(Device.mac, Device.village_id).where(Device.village_id.is_not(None))
+        select(Device.mac, Device.village_id, Village.village_code)
+        .join(Village, Village.id == Device.village_id)
+        .where(Device.village_id.is_not(None))
     )
-    return [(mac, village_id) for mac, village_id in rows.all()]
+    return [(mac, token_for(vid, code)) for mac, vid, code in rows.all()]
 
 
 async def unassigned_devices(db: AsyncSession) -> list[str]:
@@ -87,20 +91,22 @@ async def _publish(publisher: MqttPublisher, db: AsyncSession) -> None:
         event_qos=config.event_qos,
     )
 
-    # DB 가 미배정인데 브로커에 보관본이 남아 있으면, 그 단말은 재접속할 때
-    # 없어진 배정을 다시 물려받는다. 빈 payload 로 지운다 — 이미 비어 있으면
-    # 아무 일도 일어나지 않으므로 매 주기 돌려도 무해하다.
+    # DB 가 미배정인 단말에는 "전부 0" village_id 를 같은 버전으로 명시해 보낸다.
+    # 빈 payload 로 지우는 방식은 단말이 무시해서 옛 배정이 남았다(문제점 18번).
+    # 같은 값을 매 주기 다시 보내도 버전이 같으면 단말은 무시하므로 무해하다.
     for mac in await unassigned_devices(db):
         try:
-            await publisher.publish_device_config(mac=mac, village_id=None, config_version=0)
+            await publisher.publish_device_config(
+                mac=mac, village_token=None, config_version=version
+            )
         except Exception:  # noqa: BLE001
-            log.exception("미배정 단말 CONFIG retain 삭제 실패: %s", mac)
+            log.exception("미배정 단말 CONFIG 발행 실패: %s", mac)
 
     published = 0
-    for mac, village_id in devices:
+    for mac, token in devices:
         try:
             await publisher.publish_device_config(
-                mac=mac, village_id=village_id, config_version=version
+                mac=mac, village_token=token, config_version=version
             )
             published += 1
         except Exception:  # noqa: BLE001

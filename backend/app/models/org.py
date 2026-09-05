@@ -42,6 +42,10 @@ class Village(Base):
     #: ⚠ 행정구역 개편으로 코드가 바뀔 수 있다(2026년 전남광주 통합 실측) —
     #:   바뀌면 이 속성만 갱신하고 village_id 는 그대로 둔다(지도 설계 §1.3).
     b_code: Mapped[str | None] = mapped_column(String(10))
+    #: MQTT village_id — 법정동코드(10) + 마을 연번(2) = 12자리(레지스트리 사양 §2.4).
+    #: b_code 가 처음 채워질 때 한 번 만들고 그 뒤에는 바꾸지 않는다(행정구역 개편에도).
+    #: NULL 이면(주소 없는 마을) 예전 방식 id 8자리를 쓴다 — app/core/village_token.py.
+    village_code: Mapped[str | None] = mapped_column(String(12), unique=True)
     #: 대표 주소. 주소 검색이 도로명·지번을 같이 채운다 — 농촌은 두 표기가 병용된다.
     road_address: Mapped[str | None] = mapped_column(String(255))
     jibun_address: Mapped[str | None] = mapped_column(String(255))

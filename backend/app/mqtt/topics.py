@@ -5,7 +5,8 @@
 
 토픽 표 (통신 사양 §MQTT 토픽):
     iotradio/device/<mac>/cmd        S→D  개별 명령        QoS1  retain=False
-    iotradio/village/<id8>/cmd       S→D  마을 명령        QoS1  retain=False
+    iotradio/village/<village_id>/cmd S→D 마을 명령        QoS1  retain=False
+        village_id 는 법정동코드(10)+연번(2) 12자리 문자열 — app/core/village_token.py
     iotradio/all/cmd                 S→D  전체 명령        QoS1  retain=False
     iotradio/device/<mac>/result     D→S  명령 결과        QoS1
     iotradio/device/<mac>/status     D→S  STATUS/STATS/LWT QoS0|1
@@ -20,7 +21,7 @@ from __future__ import annotations
 import re
 
 from app.config import settings
-from app.constants import MAC_LENGTH, VILLAGE_ID_WIDTH
+from app.constants import MAC_LENGTH
 
 ROOT = settings.mqtt_topic_root
 
@@ -38,18 +39,14 @@ def normalize_mac(raw: str) -> str:
     return mac
 
 
-def village_token(village_id: int) -> str:
-    """DB 정수 id → MQTT 8자리 문자열. 변환은 여기서만 한다."""
-    return str(village_id).zfill(VILLAGE_ID_WIDTH)
-
-
 # ── 서버 → 단말 ──────────────────────────────────────────────────────────
 def device_cmd(mac: str) -> str:
     return f"{ROOT}/device/{mac}/cmd"
 
 
-def village_cmd(village_id: int) -> str:
-    return f"{ROOT}/village/{village_token(village_id)}/cmd"
+def village_cmd(village_token: str) -> str:
+    """village_token 은 마을의 MQTT 문자열(core.village_token.token_for)이다 — id 가 아니다."""
+    return f"{ROOT}/village/{village_token}/cmd"
 
 
 def all_cmd() -> str:

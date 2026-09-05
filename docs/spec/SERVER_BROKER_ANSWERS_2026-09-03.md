@@ -125,6 +125,12 @@ docker exec xwifi-mosquitto sh -c 'grep "open files" /proc/1/limits'
 
 ---
 
+## 추가 (2026-09-05)
+
+- **village_id 형식**: 레지스트리 사양 §2.4대로 **법정동코드(10)+연번(2) 12자리**로 바꿨다(문제점 16번). 주소 없는 시험 마을만 예전 8자리를 유지한다. 배포 후 기동 시 재조정이 새 값을 CONFIG로 내린다.
+- **CONFIG 해제**: 빈 retain 대신 `village_id` 전부 0 + 올린 `config_version`을 발행한다(문제점 18번, 단말 요청대로).
+- **LIVE_READY BUSY 재배달**: 이미 `ok=true`를 받은 단말의 BUSY는 버린다(문제점 17번).
+
 ## 관련
 
 | | |

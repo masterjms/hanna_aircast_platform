@@ -66,6 +66,9 @@ export interface Village extends VillageBrief {
   lng: number | null;
   created_at: string;
   /** MQTT 로 나가는 8자리 표현 */
+  /** 법정동코드(10)+연번(2) 12자리. 주소가 없어 못 만든 마을은 null. */
+  village_code: string | null;
+  /** MQTT 로 나가는 village_id — village_code, 없으면 예전 방식 id 8자리. */
   village_token: string;
   /** 등록된 단말 수(설치 현황) */
   device_count: number;

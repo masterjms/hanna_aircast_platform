@@ -33,6 +33,38 @@ function webSerial(): { requestPort(): Promise<SerialPortLike> } | null {
 const MAC_RE = /^[0-9a-fA-F]{12}$/;
 
 /** QR 문자열 → 5필드. 앞 5개만 해석, 뒤는 무시(생산 사양 §3.2.2). */
+/**
+ * 물리 키 코드 → 스캔 문자열의 한 글자. IME 상태와 무관하다.
+ *
+ * QR 내용은 `mac|모델|버전|모델|버전` 이라 영문·숫자·`|:-._` 만 나온다. 그 밖의
+ * 키(방향키·Tab 등)는 null 을 돌려 브라우저 기본 동작에 맡긴다.
+ */
+function scanKeyToChar(code: string, shift: boolean): string | null {
+  if (code === 'Backspace') return '\b';
+  if (/^Key[A-Z]$/.test(code)) {
+    const letter = code.slice(3);
+    return shift ? letter : letter.toLowerCase();
+  }
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^Numpad[0-9]$/.test(code)) return code.slice(6);
+  switch (code) {
+    case 'Backslash':
+      return shift ? '|' : '\\';
+    case 'Semicolon':
+      return shift ? ':' : ';';
+    case 'Minus':
+    case 'NumpadSubtract':
+      return shift ? '_' : '-';
+    case 'Period':
+    case 'NumpadDecimal':
+      return '.';
+    case 'Space':
+      return ' ';
+    default:
+      return null;
+  }
+}
+
 function parseScan(raw: string): {
   mac: string;
   p4Model: string;
@@ -452,13 +484,28 @@ export function RegisterDeviceDialog({
           <input
             ref={scanInputRef}
             className="mono"
+            lang="en"
+            autoComplete="off"
             placeholder="여기에 포커스를 두고 QR/바코드를 스캔 (붙여넣기도 가능)"
             onKeyDown={(e) => {
-              // HID 스캐너는 문자열 끝에 Enter(기본 접미사)를 보낸다.
+              // HID 스캐너는 키 입력을 흘려보내고 끝에 Enter(기본 접미사)를 보낸다.
+              //
+              // 한글 IME 가 켜져 있으면 스캐너의 영문 키가 자모로 조합돼 전부 깨진다
+              // (문제점 20번). 문자가 아니라 **물리 키(e.code)** 로 직접 조립하고
+              // 기본 동작을 막으면 IME 가 끼어들 틈이 없다 — 어느 입력기 상태든 같다.
+              const el = e.target as HTMLInputElement;
               if (e.key === 'Enter') {
-                applyScan((e.target as HTMLInputElement).value);
-                (e.target as HTMLInputElement).value = '';
+                e.preventDefault();
+                applyScan(el.value);
+                el.value = '';
+                return;
               }
+              if (e.ctrlKey || e.metaKey || e.altKey) return; // 붙여넣기(Ctrl+V)는 그대로
+              const ch = scanKeyToChar(e.code, e.shiftKey);
+              if (ch === null) return; // 방향키 등은 브라우저에 맡긴다
+              e.preventDefault();
+              if (ch === '\b') el.value = el.value.slice(0, -1);
+              else el.value += ch;
             }}
             style={{ marginTop: 8 }}
           />

@@ -16,6 +16,7 @@ from app.config import settings
 from app.core import mqtt_accounts
 from app.core.presence import is_online, online_clause, online_cutoff
 from app.core.scope import VillageScope
+from app.core.village_token import token_for
 from app.errors import ApiError, DeviceAlreadyExists, DeviceNotFound, VillageNotFound
 from app.models.device import Device
 from app.models.org import Village, Zone
@@ -238,13 +239,16 @@ async def export_broker_accounts(db: AsyncSession) -> None:
     """
     rows = (
         await db.execute(
-            select(Device.mac, Device.mqtt_password, Device.village_id).where(
-                Device.mqtt_password.is_not(None)
-            )
+            select(Device.mac, Device.mqtt_password, Device.village_id, Village.village_code)
+            .outerjoin(Village, Village.id == Device.village_id)
+            .where(Device.mqtt_password.is_not(None))
         )
     ).all()
-    mqtt_accounts.export_passwd({mac: pw for mac, pw, _ in rows})
-    mqtt_accounts.export_acl({mac: village_id for mac, _, village_id in rows})
+    mqtt_accounts.export_passwd({mac: pw for mac, pw, _, _ in rows})
+    # ACL 의 마을 topic 은 12자리 코드(없으면 legacy id)로 — 발행 토픽과 같아야 읽힌다.
+    mqtt_accounts.export_acl(
+        {mac: (token_for(vid, code) if vid is not None else None) for mac, _, vid, code in rows}
+    )
 
 
 async def issue_credential(
@@ -364,11 +368,11 @@ async def update_device(
 
     if village_changed:
         if new_village is None:
-            # 해제는 그 단말의 보관본을 명시적으로 지워야 한다. resync 는 배정된
-            # 단말만 발행하므로, 안 지우면 옛 배정이 브로커에 남아서 단말이
-            # 재접속할 때 되살아난다.
-            await clear_device_configs(publisher, [mac])
-        await resync_config(db, publisher)
+            # 해제는 미배정(전부 0) CONFIG 를 새 버전으로 명시해야 단말이 마을 topic
+            # 구독을 끊는다. clear_device_configs 가 버전을 올리고 전체를 다시 맞춘다.
+            await clear_device_configs(publisher, [mac], db)
+        else:
+            await resync_config(db, publisher)
         # ACL 도 마을을 따라간다 — 이 단말이 읽을 수 있는 village topic 이 바뀐다.
         await export_broker_accounts(db)
 
@@ -415,21 +419,26 @@ async def delete_device(
 
 
 async def clear_device_configs(
-    publisher: MqttPublisher, macs: Sequence[str], db: AsyncSession | None = None
+    publisher: MqttPublisher, macs: Sequence[str], db: AsyncSession
 ) -> None:
-    """단말별 CONFIG retain 을 지운다.
+    """단말별 CONFIG 를 미배정으로 되돌린다 (마을 삭제 · 단말 삭제 · 배정 해제).
 
-    안 지우면 단말이 재접속할 때 브로커가 없어진 배정을 다시 물려준다.
-    마을 삭제 · 단말 삭제 · 배정 해제 후에 부른다.
+    빈 payload 로 retain 을 지우는 방식은 단말이 무시해서 이전 배정이 그대로 남았다
+    (단말 확인 2026-09-04, 문제점 18번). 이제 **전부 0 인 village_id 를 새 버전으로**
+    발행한다 — 단말은 버전이 올라야 적용하므로 먼저 config_version 을 올리고 전
+    단말 CONFIG 를 다시 맞춘 뒤(resync), 넘어온 MAC 에 미배정 값을 명시한다.
 
-    db 를 넘기면 config_version 을 올려 두 토픽을 다시 맞춘다 — 안 그러면 남은
-    단말들이 낡은 버전을 최종본으로 들고 있게 된다.
+    resync 가 DB 의 미배정 단말에는 이미 0 값을 보내지만, 삭제된 단말은 DB 에 없어
+    거기 포함되지 않는다 — 그래서 MAC 목록을 따로 받아 한 번 더 보낸다(중복 무해).
     """
+    await resync_config(db, publisher)
+    config = await db.get(CurrentConfig, 1)
+    version = config.config_version if config is not None else 1
     for mac in macs:
         try:
-            await publisher.publish_device_config(mac=mac, village_id=None, config_version=0)
+            await publisher.publish_device_config(
+                mac=mac, village_token=None, config_version=version
+            )
         except Exception:  # noqa: BLE001
-            log.exception("CONFIG retain 삭제 실패: %s", mac)
+            log.exception("미배정 CONFIG 발행 실패: %s", mac)
 
-    if db is not None:
-        await resync_config(db, publisher)

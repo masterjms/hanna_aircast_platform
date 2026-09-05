@@ -25,6 +25,7 @@ from app.config import settings
 from app.constants import TELEMETRY_RESULTS, EventType, TargetScope
 from app.core.ids import next_job_id
 from app.core.scope import VillageScope
+from app.core.village_token import village_tokens
 from app.db import session_scope
 from app.errors import ApiError, BroadcastOverlap, NotFound
 from app.live.icecast import IcecastSource
@@ -540,8 +541,8 @@ async def finish_if_all_reported(db: AsyncSession, job_id: int) -> bool:
         await end_event(db, event, reason="전 단말 응답 완료")
         return True
 
-    # 재생하는 파일 방송: FILE_RESULT ok=true 는 "저장 끝, 지금부터 재생"이다
-    # (문제점 10번, 단말 요청 2026-09-03 §2.3). 여기서 끝내면 스피커가 나오는 중에
+    # 재생하는 파일 방송: FILE_RESULT ok=true 는 "다 받고 검증 끝, 지금부터 재생"이다
+    # (문제점 10·19번). 여기서 끝내면 스피커가 나오는 중에
     # 화면은 "종료"가 된다. 재생 중으로 넘기고 재생 길이 뒤에 끝낸다 — 마지막 단말이
     # 가장 늦게 시작하니 그 시각 기준이면 전원이 끝난 뒤다.
     if event.playing_since is not None:
@@ -718,22 +719,21 @@ async def start_file_broadcast(
         payload=cmd,
         target_scope=payload.target_scope,
         scope=scope,
-        village_ids=_village_ids(payload.target_scope, payload.target_ids),
+        **await _village_kw(db, payload.target_scope, payload.target_ids),
         macs=macs,
     )
     log.info("파일 방송 시작 job_id=%s 대상 %d대 file=%s", job_id, len(macs), audio.filename)
 
-    # 단말은 파일을 받아 검증·저장까지 끝내면 FILE_RESULT ok=true 를 보내고 그때
-    # 재생을 시작한다(단말 요청 2026-09-03 §2.3 — 재생 완료 신호가 아니다). 전 단말이
-    # 보내면 finish_if_all_reported 가 "재생 중"으로 넘기고 재생 길이 뒤에 끝낸다.
-    # 도중에 꺼진 단말이 있으면 그 신호가 영영 안 오므로 상한을 둔다. 저장이 느려서
-    # (LittleFS 80~100KB/s, 3MB 면 40초) 짧게 끊으면 정상 동작을 실패로 본다 — 단말
-    # 자체 포기 시간(120초)이 기본이다. 전원이 응답했으면 이 워치독은 손대지 않는다
-    # (재생 중인 방송을 저장 대기 만료로 끊으면 안 된다).
-    wait_sec = await _config_int(db, "file_wait_sec", 120)
+    # 단말은 파일을 다 받아 무결성 검증을 마치면 FILE_RESULT ok=true 를 보내고 그때
+    # 재생을 시작한다(재생 완료 신호가 아니다). 저장은 방송 중에 단말이 알아서 하므로
+    # 응답 시간과 무관하다(716KB 실측 3.6초 — 단말 확인 2026-09-04). 전 단말이 보내면
+    # finish_if_all_reported 가 "재생 중"으로 넘기고 재생 길이 뒤에 끝낸다. 도중에
+    # 꺼진 단말이 있으면 그 신호가 영영 안 오므로 상한을 둔다(기본 30초). 전원이
+    # 응답했으면 이 워치독은 손대지 않는다(재생 중인 방송을 끊으면 안 된다).
+    wait_sec = await _config_int(db, "file_wait_sec", 30)
     asyncio.create_task(
         _force_end_after(
-            event.id, wait_sec, reason="저장 완료 응답 대기 시간 초과", only_if_missing=True
+            event.id, wait_sec, reason="수신 완료 응답 대기 시간 초과", only_if_missing=True
         ),
         name=f"file-broadcast-end-{job_id}",
     )
@@ -781,7 +781,7 @@ async def stop_file_broadcast(
                 payload=cmd,
                 target_scope=TargetScope(event.target_scope),
                 scope=scope,
-                village_ids=_village_ids(TargetScope(event.target_scope), event.target_ids),
+                **await _village_kw(db, TargetScope(event.target_scope), event.target_ids),
                 macs=macs,
             )
         except Exception:  # noqa: BLE001
@@ -792,7 +792,7 @@ async def stop_file_broadcast(
     # 예전에는 여기서 바로 ended_at 을 찍었다. 단말이 실제로 멈췄는지 확인하지 않고
     # 화면만 "중지됨"이 되는 게 문제였다(문제점 4번). 이제 중지 요청 시각만 남기고
     # 단말의 FILE_RESULT 를 기다린다 — 다 오면 그 순간, 안 오면 대기 시간 뒤에 끝난다.
-    wait_sec = await _config_int(db, "file_wait_sec", 120)
+    wait_sec = await _config_int(db, "file_wait_sec", 30)
     event.stop_requested_at = dt.datetime.now(dt.timezone.utc)
     await db.flush()
     log.info("파일 방송 중지 요청 job_id=%s — 단말 응답 %d초 대기", event.job_id, wait_sec)
@@ -809,6 +809,14 @@ def _village_ids(target_scope: TargetScope, target_ids: list[str]) -> list[int]:
     if target_scope is not TargetScope.VILLAGE:
         return []
     return [int(v) for v in target_ids]
+
+
+async def _village_kw(
+    db: AsyncSession, target_scope: TargetScope, target_ids: list[str]
+) -> dict[str, object]:
+    """publish_command 에 넘길 마을 인자 — id(권한 검사)와 MQTT 문자열(토픽) 둘 다."""
+    ids = _village_ids(target_scope, target_ids)
+    return {"village_ids": ids, "village_tokens": await village_tokens(db, ids)}
 
 
 async def start_live_broadcast(
@@ -887,7 +895,7 @@ async def start_live_broadcast(
             ),
             target_scope=payload.target_scope,
             scope=scope,
-            village_ids=_village_ids(payload.target_scope, payload.target_ids),
+            **await _village_kw(db, payload.target_scope, payload.target_ids),
             macs=macs,
         )
     except Exception:
@@ -1013,7 +1021,7 @@ async def stop_live_broadcast(
                 payload=publisher.live_stop_payload(job_id=session_id),
                 target_scope=TargetScope(event.target_scope),
                 scope=scope,
-                village_ids=_village_ids(TargetScope(event.target_scope), event.target_ids),
+                **await _village_kw(db, TargetScope(event.target_scope), event.target_ids),
                 macs=macs,
             )
         except Exception:  # noqa: BLE001

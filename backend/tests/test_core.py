@@ -99,14 +99,34 @@ class TestTopics:
         with pytest.raises(ValueError):
             topics.normalize_mac(bad)
 
-    def test_village_token_is_zero_padded_8(self):
-        assert topics.village_token(1) == "00000001"
-        assert topics.village_token(12345678) == "12345678"
+    def test_village_token_prefers_12_digit_code(self):
+        from app.core.village_token import legacy_token, token_for
+
+        # 레지스트리 사양 §2.4: 법정동코드(10)+연번(2). 코드가 있으면 그것.
+        assert token_for(5, "128103302101") == "128103302101"
+        # 주소 없는 마을은 예전 방식(id 8자리)으로 — 단말은 자릿수를 가리지 않는다.
+        assert token_for(1, None) == "00000001"
+        assert legacy_token(12345678) == "12345678"
+
+    def test_next_village_code_fills_first_free_seq(self):
+        from app.core.village_token import next_village_code
+
+        assert next_village_code("1281033021", []) == "128103302101"
+        # 같은 리에 방송 그룹이 하나 더 — 02
+        assert next_village_code("1281033021", ["128103302101"]) == "128103302102"
+        # 삭제된 연번은 재사용한다(연번은 식별자가 아니다)
+        assert next_village_code("1281033021", ["128103302102"]) == "128103302101"
+
+    def test_unassigned_token_is_all_zeros(self):
+        from app.core.village_token import UNASSIGNED_TOKEN
+
+        # 사양 §2.2: 전부 0 이면 미배정 — 단말이 마을 topic 을 구독하지 않는다.
+        assert set(UNASSIGNED_TOKEN) == {"0"} and 8 <= len(UNASSIGNED_TOKEN) <= 16
 
     def test_topic_shapes(self):
         mac = "58e6c5f2cc74"
         assert topics.device_cmd(mac) == "iotradio/device/58e6c5f2cc74/cmd"
-        assert topics.village_cmd(1) == "iotradio/village/00000001/cmd"
+        assert topics.village_cmd("128103302101") == "iotradio/village/128103302101/cmd"
         assert topics.all_cmd() == "iotradio/all/cmd"
         assert topics.all_config() == "iotradio/all/config"
         assert topics.device_config(mac) == "iotradio/device/58e6c5f2cc74/config"
@@ -170,24 +190,32 @@ class TestPublisher:
         # 마을 배정은 단말별 CONFIG 로 나간다 — 공통 설정에 넣으면 전원이 같은 마을이 된다.
         assert "village_id" not in payload
 
-    async def test_device_config_carries_padded_village(self):
+    async def test_device_config_carries_village_token(self):
+        """village_id 는 법정동코드(10)+연번(2) 12자리 문자열이다(레지스트리 사양 §2.4)."""
         conn = FakeConnection()
         await MqttPublisher(conn).publish_device_config(  # type: ignore[arg-type]
-            mac="58e6c5f2cc74", village_id=12, config_version=3
+            mac="58e6c5f2cc74", village_token="128103302101", config_version=3
         )
         topic, raw, qos, retain = conn.sent[0]
         assert topic == "iotradio/device/58e6c5f2cc74/config"
         assert (qos, retain) == (1, True)
-        assert json.loads(raw)["village_id"] == "00000012"
+        assert json.loads(raw) == {"config_version": 3, "village_id": "128103302101"}
 
-    async def test_unassign_clears_retain_with_empty_payload(self):
-        """빈 payload + retain=True = 브로커의 보관 메시지 삭제."""
+    async def test_unassign_publishes_all_zero_village(self):
+        """미배정은 빈 retain 이 아니라 전부 0 인 village_id 를 명시한다.
+
+        단말은 빈 payload 를 무시해서 지우려고 보내도 이전 배정이 남았다(단말 확인
+        2026-09-04, 문제점 18번). 전부 0 은 사양 §2.2 의 미배정 값이다.
+        """
         conn = FakeConnection()
         await MqttPublisher(conn).publish_device_config(  # type: ignore[arg-type]
-            mac="58e6c5f2cc74", village_id=None, config_version=0
+            mac="58e6c5f2cc74", village_token=None, config_version=7
         )
         _, raw, _, retain = conn.sent[0]
-        assert raw == b"" and retain is True
+        payload = json.loads(raw)
+        assert retain is True
+        assert payload["config_version"] == 7
+        assert set(payload["village_id"]) == {"0"} and 8 <= len(payload["village_id"]) <= 16
 
     def test_stream_url_must_be_https(self):
         """단말 운영 빌드는 http 스트림을 거절한다 (2026-08-29 실물 확인).
@@ -450,6 +478,7 @@ class TestPublisher:
             target_scope=TargetScope.VILLAGE,
             scope=VillageScope.for_super_admin(),
             village_ids=[1],
+            village_tokens={v: str(v).zfill(8) for v in [1]},
         )
         assert conn.sent[0][3] is False
 
@@ -735,15 +764,15 @@ class TestAclRender:
 
         monkeypatch.setattr(settings, "mqtt_username", "xwifi-server")
         acl = mqtt_accounts.render_acl(
-            {"58e6c5f2cc74": 5, "aabbccddeeff": 12, "001122334455": None}
+            {"58e6c5f2cc74": "128103302101", "aabbccddeeff": "00000012", "001122334455": None}
         )
         assert "village/+/cmd" not in acl
         assert "user xwifi-server\ntopic readwrite iotradio/#" in acl
         # 공통 토픽과 %u 규칙은 치환 없는/있는 pattern 으로
         assert "pattern read iotradio/all/cmd" in acl
         assert "pattern write iotradio/device/%u/status" in acl
-        # 배정된 단말은 자기 마을 한 줄만, 8자리 토큰으로
-        assert "user 58e6c5f2cc74\ntopic read iotradio/village/00000005/cmd" in acl
+        # 배정된 단말은 자기 마을 한 줄만 — 12자리 코드(주소 없는 마을은 legacy 8자리)
+        assert "user 58e6c5f2cc74\ntopic read iotradio/village/128103302101/cmd" in acl
         assert "user aabbccddeeff\ntopic read iotradio/village/00000012/cmd" in acl
         # 미배정 단말은 마을 줄이 없다(블록 자체를 만들지 않는다)
         assert "user 001122334455" not in acl
@@ -756,12 +785,12 @@ class TestAclRender:
 
         monkeypatch.setattr(settings, "mqtt_username", "xwifi-server")
         monkeypatch.setattr(settings, "mosquitto_passwd_export", str(tmp_path / "passwd.generated"))
-        assert mqtt_accounts.export_acl({"58e6c5f2cc74": 5}) is True
+        assert mqtt_accounts.export_acl({"58e6c5f2cc74": "128103302101"}) is True
         out = (tmp_path / "aclfile.generated").read_text(encoding="utf-8")
-        assert "iotradio/village/00000005/cmd" in out
+        assert "iotradio/village/128103302101/cmd" in out
         # 기능이 꺼져 있으면(개발) 아무것도 쓰지 않는다
         monkeypatch.setattr(settings, "mosquitto_passwd_export", None)
-        assert mqtt_accounts.export_acl({"58e6c5f2cc74": 5}) is False
+        assert mqtt_accounts.export_acl({"58e6c5f2cc74": "128103302101"}) is False
 
 
 # ── 파일 서빙 (X-Accel-Redirect) ─────────────────────────────────────────
@@ -1028,13 +1057,13 @@ class TestServerOnlyConfig:
         # config_version 이 올라가면 안 된다.
         assert "live_ready_timeout_sec" not in DEVICE_CONFIG_FIELDS
 
-    def test_file_wait_covers_device_own_limit(self):
+    def test_file_wait_range_follows_device_measurement(self):
         from app.constants import CONFIG_LIMITS
 
-        # 단말은 저장 완료를 120초까지 스스로 기다린다. 서버 상한이 그 아래로
-        # 잠기면 정상 저장 중인 단말을 실패로 본다. 시작·중지에 같이 쓴다(문제점 8번).
-        low, high = CONFIG_LIMITS["file_wait_sec"]
-        assert low <= 120 <= high
+        # 단말 확인(2026-09-04, 문제점 19번): FILE_RESULT 는 받고 검증 완료 시점이고
+        # 저장은 백그라운드라 크기와 무관(716KB 3.6초). 기본 30, 10~60.
+        # 시작·중지에 같이 쓴다(문제점 8번).
+        assert CONFIG_LIMITS["file_wait_sec"] == (10, 60)
         # 셋이어야 한다(단말 요청 §3.4) — 파일을 시작/중지로 쪼개면 넷이 된다.
         timing = {k for k in CONFIG_LIMITS if k.endswith("_sec") and "interval" not in k}
         assert timing == {"live_ready_timeout_sec", "live_stop_wait_sec", "file_wait_sec"}
