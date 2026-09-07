@@ -248,6 +248,9 @@ async def _to_out(
     진행률은 "지금 대상인 단말" 기준이 자연스럽다.
     """
     out = BroadcastOut.model_validate(event)
+    out.target_label = await device_service.describe_target(
+        db, target_scope=event.target_scope, target_ids=event.target_ids
+    )
 
     # 발행 시점에 명령을 보낸 대수가 있으면 그걸 쓴다 — 진행률의 분모가 방송 중에
     # 흔들리지 않아야 한다(단말이 꺼지거나 배정이 바뀌면 100%가 영영 안 된다).

@@ -33,8 +33,10 @@ async def upload_file(
     db: Db,
     user: CurrentUser,
     file: Annotated[UploadFile, FileParam()],
+    transcode: bool = False,
 ) -> FileOut:
-    return await service.upload_file(db, file, uploader=user)
+    """transcode=true 는 "규격에 맞게 변환해도 좋다"는 사용자 확인이다(문제점 31번)."""
+    return await service.upload_file(db, file, uploader=user, transcode=transcode)
 
 
 @router.get("/api/tts/voices", response_model=VoiceCatalogOut)

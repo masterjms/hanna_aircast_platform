@@ -55,6 +55,13 @@ class InvalidCredentials(Unauthorized):
     message = "아이디 또는 비밀번호가 올바르지 않습니다."
 
 
+class AccountExpired(Unauthorized):
+    """사용 기간이 끝난 계정(문제점 26번). 정리 작업이 지우기 전에도 막는다."""
+
+    code = "ACCOUNT_EXPIRED"
+    message = "사용 기간이 끝난 계정입니다. 관리자에게 기간 연장을 요청하세요."
+
+
 class Forbidden(ApiError):
     status_code = status.HTTP_403_FORBIDDEN
     code = "FORBIDDEN"

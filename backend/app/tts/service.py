@@ -38,6 +38,7 @@ from app.models.file import File
 from app.models.org import User
 from app.modules.file import service as file_service
 from app.schemas.file import FileOut
+from app.tasks.config_reconcile import load_config
 from app.tts import voices as voice_catalog
 from app.tts.engine import get_engine, normalize_mp3
 
@@ -48,9 +49,13 @@ log = logging.getLogger(__name__)
 MAX_TEXT_LENGTH = 1000
 
 
-def cache_key(text: str, language: str, voice_id: str) -> str:
-    """같은 문구·언어·보이스면 같은 키. 앞뒤 공백은 무시한다."""
-    raw = f"{text.strip()}|{language}|{voice_id}".encode()
+def cache_key(text: str, language: str, voice_id: str, bitrate_kbps: int) -> str:
+    """같은 문구·언어·보이스·비트레이트면 같은 키. 앞뒤 공백은 무시한다.
+
+    비트레이트가 키에 들어가는 이유: 설정을 24 → 16 으로 바꾼 뒤 같은 문구를
+    합성하면, 키가 같으면 예전 24kbps 파일이 그대로 나온다(문제점 30번).
+    """
+    raw = f"{text.strip()}|{language}|{voice_id}|{bitrate_kbps}".encode()
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -104,7 +109,8 @@ async def synthesize(
     if voice is None or voice.language != language:
         raise ApiError("선택한 언어에 없는 보이스입니다.", code="TTS_INVALID_VOICE")
 
-    key = cache_key(text, language, voice.id)
+    bitrate_kbps = (await load_config(db)).file_bitrate_kbps
+    key = cache_key(text, language, voice.id, bitrate_kbps)
 
     cached = await _find_cached(db, key)
     if cached is not None:
@@ -118,7 +124,7 @@ async def synthesize(
     raw = await asyncio.to_thread(engine.synthesize, text, voice)
     if not raw:
         raise ApiError("합성 결과가 비어 있습니다.", code="TTS_EMPTY_RESULT")
-    audio = await asyncio.to_thread(normalize_mp3, raw)
+    audio = await asyncio.to_thread(normalize_mp3, raw, bitrate_kbps)
 
     rel = _storage_path(key)
     dest = settings.file_root / rel

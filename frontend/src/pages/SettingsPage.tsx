@@ -1,12 +1,14 @@
 /**
  * 설정 (super_admin).
  *
- * 두 종류가 한 화면에 있다:
+ * 세 묶음이 한 화면에 있다:
  *   · 단말 공통 설정 — 저장하면 config_version 이 올라가고 서버가 MQTT CONFIG(retain)를
  *     재발행한다. 단말은 config_version 이 바뀔 때만 값을 다시 적용하고 STATUS 로 echo 한다
  *     (단말 관리 화면의 CFG 열에서 반영 여부를 볼 수 있다).
- *   · 서버 설정 — 방송 중지 후 단말 응답을 기다리는 시간. 단말로 나가지 않으므로
- *     이 값만 바꾸면 config_version 이 올라가지 않는다.
+ *   · 방송 응답 시간 — 서버가 방송의 시작·종료를 확정하기까지 기다리는 시간.
+ *   · 오디오 품질 — 라이브 opus 와 파일 mp3 의 비트레이트.
+ *
+ * 뒤의 둘은 단말로 나가지 않으므로 그 값만 바꾸면 config_version 이 올라가지 않는다.
  */
 
 import { useEffect, useState, type FormEvent } from 'react';
@@ -23,6 +25,9 @@ import type { SystemConfig } from '../api/types';
  *   timing — 방송 응답 시간. 서버가 "시작됐다·끝났다"를 언제 확정할지 정한다.
  *            단말에 CONFIG 로 나가지 않아 config_version 이 바뀌지 않는다.
  *            (라이브 준비 제한만 LIVE_START 명령 필드로 실려 나간다.)
+ *   audio  — 오디오 품질(문제점 29·30번). 표본율 16kHz·mono 는 사양 고정이라
+ *            비트레이트만 고른다. opus·mp3 모두 헤더에 비트레이트가 들어 있어
+ *            단말에 따로 알릴 필요가 없다 — 그래서 CONFIG 로 나가지 않는다.
  *
  * 문구는 시작을 먼저, 종료를 뒤에 쓴다(문제점 8·9번). 항목 순서는 파일 → 라이브
  * 준비 → 라이브 종료(문제점 12번 — 방송 흐름 순서).
@@ -38,7 +43,15 @@ const GROUPS = [
     title: '방송 응답 시간',
     hint: '서버가 방송의 시작·종료를 확정하기까지 단말 응답을 기다리는 시간입니다. 단말 CONFIG 로 나가지 않습니다. 단말이 모두 응답하면 그 자리에서 끝나므로, 넉넉히 잡아도 정상 동작에서는 비용이 없습니다.',
   },
+  {
+    key: 'audio',
+    title: '오디오 품질',
+    hint: '표본율 16kHz · mono 는 통신 사양 고정이고 비트레이트만 고릅니다. 단말 CONFIG 로 나가지 않습니다 — opus 와 mp3 모두 파일 안에 비트레이트가 들어 있어 단말이 미리 알 필요가 없습니다.',
+  },
 ] as const;
+
+//: 비트레이트 선택지. 16 은 데이터를 아끼고 24 는 음질이 낫다.
+const BITRATE_CHOICES = [16, 24] as const;
 
 const FIELDS = [
   {
@@ -95,6 +108,22 @@ const FIELDS = [
     max: 30,
     unit: '초',
   },
+  {
+    group: 'audio',
+    key: 'live_bitrate_kbps',
+    label: '라이브 스트림 속도',
+    hint: '실시간 방송의 opus 비트레이트입니다. 브라우저 마이크가 이 값으로 인코딩해 Icecast 로 보냅니다. 방송 중에 바꾸면 다음 방송부터 적용됩니다.',
+    choices: BITRATE_CHOICES,
+    unit: 'kbps',
+  },
+  {
+    group: 'audio',
+    key: 'file_bitrate_kbps',
+    label: 'MP3 파일 속도',
+    hint: '파일함에 들어가는 mp3 의 비트레이트입니다. TTS 합성과 업로드 재인코딩에 함께 쓰이고, 이 값보다 음질이 낮은 파일은 업로드를 거절합니다. 이미 등록된 파일은 다시 인코딩하지 않습니다.',
+    choices: BITRATE_CHOICES,
+    unit: 'kbps',
+  },
 ] as const;
 
 type FieldKey = (typeof FIELDS)[number]['key'];
@@ -108,6 +137,8 @@ export function SettingsPage() {
     live_ready_timeout_sec: 30,
     live_stop_wait_sec: 10,
     file_wait_sec: 30,
+    live_bitrate_kbps: 24,
+    file_bitrate_kbps: 24,
   });
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -124,6 +155,8 @@ export function SettingsPage() {
           live_ready_timeout_sec: c.live_ready_timeout_sec,
           live_stop_wait_sec: c.live_stop_wait_sec,
           file_wait_sec: c.file_wait_sec,
+          live_bitrate_kbps: c.live_bitrate_kbps,
+          file_bitrate_kbps: c.file_bitrate_kbps,
         });
       } catch (err) {
         setMessage({
@@ -148,7 +181,7 @@ export function SettingsPage() {
         tone: 'ok',
         text: republished
           ? `저장했습니다. config_version ${updated.config_version} 으로 전 단말에 재발행되었습니다.`
-          : '저장했습니다. 방송 응답 시간만 바뀌어 단말 재발행은 없습니다.',
+          : '저장했습니다. 서버 안에서만 쓰는 값이라 단말 재발행은 없습니다.',
       });
     } catch (err) {
       setMessage({
@@ -165,7 +198,7 @@ export function SettingsPage() {
       <div className="page-head">
         <h1>설정</h1>
         <p>
-          단말 공통 CONFIG 와 방송 응답 시간.
+          단말 공통 CONFIG · 방송 응답 시간 · 오디오 품질.
           {config && ` 현재 config_version ${config.config_version}`}
         </p>
       </div>
@@ -192,18 +225,33 @@ export function SettingsPage() {
                     <div className="settings-row__label">{f.label}</div>
                     <div className="settings-row__hint">{f.hint}</div>
                   </div>
-                  <input
-                    id={f.key}
-                    type="number"
-                    aria-label={f.label}
-                    min={f.min}
-                    max={f.max}
-                    value={form[f.key]}
-                    onChange={(e) => setForm({ ...form, [f.key]: Number(e.target.value) })}
-                    required
-                  />
+                  {'choices' in f ? (
+                    <select
+                      id={f.key}
+                      aria-label={f.label}
+                      value={form[f.key]}
+                      onChange={(e) => setForm({ ...form, [f.key]: Number(e.target.value) })}
+                    >
+                      {f.choices.map((c) => (
+                        <option key={c} value={c}>
+                          {c} {f.unit}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id={f.key}
+                      type="number"
+                      aria-label={f.label}
+                      min={f.min}
+                      max={f.max}
+                      value={form[f.key]}
+                      onChange={(e) => setForm({ ...form, [f.key]: Number(e.target.value) })}
+                      required
+                    />
+                  )}
                   <span className="settings-row__range">
-                    {f.min}~{f.max}
+                    {'choices' in f ? f.choices.join(' / ') : `${f.min}~${f.max}`}
                     {f.unit}
                   </span>
                 </div>
@@ -226,6 +274,11 @@ export function SettingsPage() {
           <p>
             <strong>방송 응답 시간</strong>은 서버 안에서만 쓰이는 값이라 단말에 발행되지
             않습니다. 라이브 준비 제한만 방송을 시작할 때 LIVE_START 명령에 실려 나갑니다.
+          </p>
+          <p>
+            <strong>오디오 품질</strong>도 단말에 발행되지 않습니다. 라이브는 다음 방송부터,
+            MP3 는 이후에 올리거나 합성하는 파일부터 적용됩니다. 이미 파일함에 있는 파일은
+            그대로 둡니다.
           </p>
           {config && (
             <div className="settings-aside__meta">

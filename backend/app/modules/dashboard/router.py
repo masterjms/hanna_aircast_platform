@@ -54,6 +54,8 @@ class ActiveBroadcast(BaseModel):
     event_type: str
     target_scope: str
     target_ids: list[str]
+    #: 대상의 사람이 읽는 이름. 화면은 내부 id 대신 이걸 쓴다(문제점 33번).
+    target_label: str = ""
     triggered_at: dt.datetime
 
 
@@ -62,6 +64,7 @@ class RecentEvent(BaseModel):
     event_type: str
     target_scope: str
     target_ids: list[str]
+    target_label: str = ""
     triggered_at: dt.datetime
     ended_at: dt.datetime | None
 
@@ -184,9 +187,18 @@ async def summary(db: Db, scope: Scope) -> SummaryOut:
         .order_by(BroadcastEvent.triggered_at.desc()),
         scope,
     )
+    active_rows = list((await db.scalars(active_stmt)).all())
     active = [
-        ActiveBroadcast.model_validate(e, from_attributes=True)
-        for e in (await db.scalars(active_stmt)).all()
+        ActiveBroadcast.model_validate(e, from_attributes=True).model_copy(
+            update={"target_label": label}
+        )
+        for e, label in zip(
+            active_rows,
+            await device_service.describe_targets(
+                db, [(e.target_scope, e.target_ids) for e in active_rows]
+            ),
+            strict=True,
+        )
     ]
 
     recent_stmt = _scoped_events(
@@ -195,9 +207,18 @@ async def summary(db: Db, scope: Scope) -> SummaryOut:
         .limit(_RECENT_EVENT_LIMIT),
         scope,
     )
+    recent_rows = list((await db.scalars(recent_stmt)).all())
     recent = [
-        RecentEvent.model_validate(e, from_attributes=True)
-        for e in (await db.scalars(recent_stmt)).all()
+        RecentEvent.model_validate(e, from_attributes=True).model_copy(
+            update={"target_label": label}
+        )
+        for e, label in zip(
+            recent_rows,
+            await device_service.describe_targets(
+                db, [(e.target_scope, e.target_ids) for e in recent_rows]
+            ),
+            strict=True,
+        )
     ]
 
     return SummaryOut(

@@ -157,6 +157,8 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
   "live_ready_timeout_sec": 30,
   "live_stop_wait_sec": 10,
   "file_wait_sec": 30,
+  "live_bitrate_kbps": 24,
+  "file_bitrate_kbps": 24,
   "updated_at": "2026-09-06T00:00:00+00:00"
 }
 ```
@@ -183,8 +185,12 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | `live_ready_timeout_sec` | 1~60 | 아니오; LIVE_START에 포함 |
 | `live_stop_wait_sec` | 10~30 | 아니오 |
 | `file_wait_sec` | 10~60 | 아니오 |
+| `live_bitrate_kbps` | 16 또는 24 | 아니오 |
+| `file_bitrate_kbps` | 16 또는 24 | 아니오 |
 
 단말 CONFIG 필드가 변경될 때만 `config_version`을 올리고 retained CONFIG를 재발행한다.
+
+비트레이트 두 필드는 범위가 아니라 선택지다(`constants.CONFIG_CHOICES`). 범위 밖 값은 `CONFIG_OUT_OF_RANGE`, 선택지 밖 값은 `CONFIG_INVALID_CHOICE`다. 표본율 16kHz와 mono는 통신 사양 고정이라 설정 대상이 아니다. `live_bitrate_kbps`는 브라우저 opus 인코더가, `file_bitrate_kbps`는 TTS 합성과 업로드 재인코딩이 사용한다.
 
 ## 4. 마을·구역 API
 
@@ -249,7 +255,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 |---|---|---|
 | GET | `/api/users` | 계정 목록 |
 | POST | `/api/users` | 계정 생성 |
-| PATCH | `/api/users/{id}` | 비밀번호·역할·담당 마을 수정 |
+| PATCH | `/api/users/{id}` | 비밀번호·역할·담당 마을·사용 기간 수정 |
 | DELETE | `/api/users/{id}` | 계정 삭제 |
 
 생성 body:

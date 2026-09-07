@@ -21,16 +21,18 @@ from pathlib import Path
 from typing import Protocol
 
 from app.config import settings
+from app.constants import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE
 from app.errors import ApiError
 from app.tts.voices import Voice
 
 log = logging.getLogger(__name__)
 
 #: 단말이 받는 mp3 파라미터. 업로드 파일과 맞춰 P4 디코더가 한 가지만 다루게 한다.
-#: 단말이 기대하는 mp3 파라미터 — 통신 사양의 오디오 규격(16kHz · mono · 24kbps).
+#: 표본율·채널은 통신 사양 고정이고, 비트레이트만 설정에서 고른다(문제점 30번).
 #: 이 값이 어긋나면 단말 디코더가 시작 지점에서 잡음("퍽")을 낸다.
-OUTPUT_SAMPLE_RATE = 16_000
-OUTPUT_BITRATE = "24k"
+OUTPUT_SAMPLE_RATE = AUDIO_SAMPLE_RATE
+#: 설정을 못 읽는 경로(개발용 엔진 등)에서 쓰는 기본값.
+DEFAULT_BITRATE_KBPS = 24
 
 #: 재생 시작 직후의 팝 노이즈를 없애는 짧은 페이드인(초).
 #: 파일 첫 프레임부터 최대 진폭이 나오면 앰프가 켜지는 순간과 겹쳐 "퍽" 소리가 난다.
@@ -163,18 +165,18 @@ class DevEngine:
             subprocess.run(
                 [exe, "-y", "-f", "lavfi",
                  "-i", f"sine=frequency={freq}:duration={seconds:.2f}",
-                 "-ar", str(OUTPUT_SAMPLE_RATE), "-ac", "1", "-b:a", OUTPUT_BITRATE,
-                 str(out)],
+                 "-ar", str(OUTPUT_SAMPLE_RATE), "-ac", str(AUDIO_CHANNELS),
+                 "-b:a", f"{DEFAULT_BITRATE_KBPS}k", str(out)],
                 capture_output=True, check=True, timeout=60,
             )
             return out.read_bytes()
 
 
-def normalize_mp3(raw: bytes) -> bytes:
+def normalize_mp3(raw: bytes, bitrate_kbps: int = DEFAULT_BITRATE_KBPS) -> bytes:
     """엔진 출력을 단말이 기대하는 mp3 파라미터로 맞춘다.
 
-    통신 사양의 오디오 규격(16kHz · mono · 24kbps)으로 맞춘다. 어긋난 파일을 보내면
-    단말 디코더가 재생 시작 지점에서 "퍽" 하는 잡음을 낸다.
+    16kHz · mono 는 고정이고 비트레이트는 설정값을 받는다(문제점 30번). 어긋난
+    파일을 보내면 단말 디코더가 재생 시작 지점에서 "퍽" 하는 잡음을 낸다.
 
     시작부에 짧은 페이드인도 넣는다 — 첫 프레임부터 최대 진폭이 나오면 앰프가
     켜지는 순간과 겹쳐 같은 증상이 남는다.
@@ -193,8 +195,10 @@ def normalize_mp3(raw: bytes) -> bytes:
             subprocess.run(
                 [exe, "-y", "-i", str(src),
                  "-af", f"afade=t=in:st=0:d={FADE_IN_SEC}",
-                 "-ar", str(OUTPUT_SAMPLE_RATE), "-ac", "1", "-b:a", OUTPUT_BITRATE,
-                 str(dst)],
+                 # 합성 엔진이 붙인 tag 를 남기지 않는다(문제점 31번과 같은 방침).
+                 "-map_metadata", "-1",
+                 "-ar", str(OUTPUT_SAMPLE_RATE), "-ac", str(AUDIO_CHANNELS),
+                 "-b:a", f"{bitrate_kbps}k", str(dst)],
                 capture_output=True, check=True, timeout=60,
             )
             return dst.read_bytes()

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from collections.abc import Iterable, Sequence
 
 from sqlalchemy import delete, func, select
@@ -256,6 +257,16 @@ async def list_users(db: AsyncSession) -> list[UserOut]:
     return [await _to_user_out(db, u) for u in users]
 
 
+def _expiry_from(valid_days: int | None) -> dt.datetime | None:
+    """오늘부터 N일. None 이면 무기한.
+
+    "7일" 은 7일째까지 쓸 수 있고 8일째부터 정리 대상이라는 뜻이다(문제점 26번).
+    """
+    if valid_days is None:
+        return None
+    return dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=valid_days)
+
+
 async def create_user(db: AsyncSession, payload: UserCreate) -> UserOut:
     existing = await db.scalar(select(User.id).where(User.username == payload.username))
     if existing is not None:
@@ -265,6 +276,7 @@ async def create_user(db: AsyncSession, payload: UserCreate) -> UserOut:
         username=payload.username,
         password_hash=hash_password(payload.password),
         role=payload.role.value,
+        expires_at=_expiry_from(payload.valid_days),
     )
     db.add(user)
     await db.flush()
@@ -283,6 +295,9 @@ async def update_user(db: AsyncSession, user_id: int, payload: UserUpdate) -> Us
     data = payload.model_dump(exclude_unset=True)
     if "password" in data and data["password"]:
         user.password_hash = hash_password(data["password"])
+    # 보낸 경우에만 만료일을 다시 센다. 값이 null 이면 무기한으로 바꾼다.
+    if "valid_days" in data:
+        user.expires_at = _expiry_from(data["valid_days"])
     if "role" in data and data["role"] is not None:
         user.role = Role(data["role"]).value
         if user.role == Role.SUPER_ADMIN.value:

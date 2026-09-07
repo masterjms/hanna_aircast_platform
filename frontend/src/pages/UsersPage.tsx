@@ -17,9 +17,35 @@ interface FormState {
   password: string;
   role: Role;
   village_ids: number[];
+  /** 사용 기간(일). '' 는 무기한. */
+  valid_days: number | '';
 }
 
-const EMPTY: FormState = { username: '', password: '', role: 'village_admin', village_ids: [] };
+//: 계정 사용 기간(문제점 26번). 1~30일, 기본 15일.
+const VALID_DAYS_DEFAULT = 15;
+const VALID_DAYS_MIN = 1;
+const VALID_DAYS_MAX = 30;
+
+const EMPTY: FormState = {
+  username: '',
+  password: '',
+  role: 'village_admin',
+  village_ids: [],
+  valid_days: VALID_DAYS_DEFAULT,
+};
+
+/** 만료 표시. 지난 계정은 눈에 띄게 한다 — 로그인이 이미 막혀 있다. */
+function ExpiryCell({ at }: { at: string | null }) {
+  if (at === null) return <span className="dim">무기한</span>;
+  const left = Math.ceil((new Date(at).getTime() - Date.now()) / 86_400_000);
+  const date = new Date(at).toLocaleDateString('ko-KR');
+  if (left <= 0) return <span className="badge badge--warn">만료됨 · {date}</span>;
+  return (
+    <span className={left <= 3 ? 'badge badge--warn' : 'dim'}>
+      {date} ({left}일 남음)
+    </span>
+  );
+}
 
 export function UsersPage() {
   const { user: me } = useAuth();
@@ -62,13 +88,16 @@ export function UsersPage() {
           password: form.password,
           role: form.role,
           village_ids: form.role === 'super_admin' ? [] : form.village_ids,
+          valid_days: form.valid_days === '' ? null : form.valid_days,
         });
       } else {
         // 비밀번호는 입력했을 때만 보낸다 — 빈 문자열을 보내면 초기화돼 버린다.
+        // 기간은 보낼 때마다 오늘부터 다시 센다 — 수정 화면에서 저장하면 연장이다.
         await api.users.update(editingId, {
           ...(form.password ? { password: form.password } : {}),
           role: form.role,
           ...(form.role === 'super_admin' ? {} : { village_ids: form.village_ids }),
+          valid_days: form.valid_days === '' ? null : form.valid_days,
         });
       }
       setForm(null);
@@ -148,6 +177,7 @@ export function UsersPage() {
                 <th>아이디</th>
                 <th>역할</th>
                 <th>담당 마을</th>
+                <th>사용 기간</th>
                 <th>생성</th>
                 <th />
               </tr>
@@ -173,6 +203,9 @@ export function UsersPage() {
                       villageNames(u.village_ids)
                     )}
                   </td>
+                  <td>
+                    <ExpiryCell at={u.expires_at} />
+                  </td>
                   <td className="dim">{new Date(u.created_at).toLocaleDateString('ko-KR')}</td>
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     <button
@@ -185,6 +218,7 @@ export function UsersPage() {
                           password: '',
                           role: u.role,
                           village_ids: [...u.village_ids],
+                          valid_days: u.expires_at === null ? '' : VALID_DAYS_DEFAULT,
                         });
                       }}
                     >
@@ -261,6 +295,35 @@ export function UsersPage() {
               onChange={(e) => setForm({ ...form, password: e.target.value })}
             />
             <p className="hint">8자 이상 64자 이하</p>
+          </div>
+
+          <div className="field">
+            <label htmlFor="u-days">사용 기간</label>
+            <select
+              id="u-days"
+              value={form.valid_days}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  valid_days: e.target.value === '' ? '' : Number(e.target.value),
+                })
+              }
+            >
+              {Array.from({ length: VALID_DAYS_MAX - VALID_DAYS_MIN + 1 }, (_, i) => i + VALID_DAYS_MIN).map(
+                (d) => (
+                  <option key={d} value={d}>
+                    {d}일
+                  </option>
+                ),
+              )}
+              <option value="">무기한</option>
+            </select>
+            <p className="hint">
+              {form.valid_days === ''
+                ? '기간이 끝나지 않습니다. 상시 운영 계정에만 쓰세요.'
+                : `오늘부터 ${form.valid_days}일간 쓸 수 있고, 그다음 날부터 계정이 자동으로 삭제됩니다.`}
+              {editingId !== null && ' 저장하면 오늘부터 다시 셉니다.'}
+            </p>
           </div>
 
           <div className="field">

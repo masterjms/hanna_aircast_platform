@@ -46,6 +46,9 @@ async def get_current_user(
     if user is None:
         # 토큰은 유효하지만 계정이 삭제된 경우.
         raise Unauthorized()
+    # 토큰 유효기간이 계정 만료보다 길 수 있다. 이미 발급된 토큰도 막는다.
+    if user.is_expired():
+        raise Unauthorized()
     return user
 
 

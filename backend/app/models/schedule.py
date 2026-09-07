@@ -50,7 +50,9 @@ class Schedule(Base):
     target_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
-    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

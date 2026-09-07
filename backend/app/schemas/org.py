@@ -96,12 +96,23 @@ class ZoneOut(ApiModel):
 
 
 # ── 계정 ─────────────────────────────────────────────────────────────────
+#: 계정 사용 기간(일). 문제점 26번 — 1~30일, 기본 15일.
+VALID_DAYS_MIN = 1
+VALID_DAYS_MAX = 30
+VALID_DAYS_DEFAULT = 15
+
+
 class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=50, pattern=r"^[A-Za-z0-9._-]+$")
     #: bcrypt 가 72바이트에서 자르므로 그 아래로 제한한다.
     password: str = Field(min_length=8, max_length=64)
     role: Role
     village_ids: list[int] = Field(default_factory=list)
+    #: 계정 사용 기간(일). 만료 다음 날부터 정리 작업이 계정을 지운다.
+    #: null 은 무기한 — 상시 운영 계정을 만들 때만 쓴다. 화면은 기본 15일을 채운다.
+    valid_days: int | None = Field(
+        default=VALID_DAYS_DEFAULT, ge=VALID_DAYS_MIN, le=VALID_DAYS_MAX
+    )
 
     @field_validator("village_ids")
     @classmethod
@@ -113,11 +124,16 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=64)
     role: Role | None = None
     village_ids: list[int] | None = None
+    #: 보내면 오늘부터 다시 센다(기간 연장). null 을 명시하면 무기한이 된다.
+    #: 아예 빼면 만료일을 건드리지 않는다.
+    valid_days: int | None = Field(default=None, ge=VALID_DAYS_MIN, le=VALID_DAYS_MAX)
 
 
 class UserOut(ApiModel):
     id: int
     username: str
     role: Role
+    #: 만료 시각. null 이면 무기한.
+    expires_at: dt.datetime | None = None
     created_at: dt.datetime
     village_ids: list[int] = Field(default_factory=list)

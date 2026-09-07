@@ -218,6 +218,103 @@ async def macs_for_target(
     return list((await db.scalars(stmt)).all())
 
 
+#: 이름을 몇 개까지 늘어놓을지. 넘으면 "외 N곳"으로 접는다.
+_LABEL_HEAD = 2
+
+
+def _fold(names: list[str]) -> str:
+    if len(names) <= _LABEL_HEAD + 1:
+        return ", ".join(names)
+    return f"{', '.join(names[:_LABEL_HEAD])} 외 {len(names) - _LABEL_HEAD}곳"
+
+
+async def describe_targets(
+    db: AsyncSession, targets: Sequence[tuple[str, Sequence[str]]]
+) -> list[str]:
+    """방송 대상 → 사람이 읽는 이름. 여러 건을 한 번에 만든다.
+
+    화면에 "village 5, 6"처럼 내부 id 가 보이면 방송하는 사람이 어느 마을인지
+    알 수 없다(문제점 33번). 대시보드는 최근 이력을 10건씩 그리므로 건마다
+    질의하지 않고 id 를 모아 종류별로 한 번씩만 읽는다.
+
+    지워진 마을·구역·단말은 이름을 찾을 수 없다. 그때는 id 를 그대로 남긴다 —
+    이력에서 대상이 빈칸이 되는 것보다 낫다.
+    """
+    village_ids: set[int] = set()
+    zone_ids: set[int] = set()
+    macs: set[str] = set()
+    for target_scope, target_ids in targets:
+        try:
+            if target_scope == "village":
+                village_ids.update(int(v) for v in target_ids)
+            elif target_scope == "zone":
+                zone_ids.update(int(z) for z in target_ids)
+            elif target_scope == "device":
+                macs.update(str(m) for m in target_ids)
+        except ValueError:  # 저장된 id 가 숫자가 아니면 이름 없이 그대로 보여준다
+            continue
+
+    village_names: dict[int, str] = {}
+    if village_ids:
+        village_names = {
+            vid: name
+            for vid, name in (
+                await db.execute(
+                    select(Village.id, Village.name).where(Village.id.in_(village_ids))
+                )
+            ).all()
+        }
+
+    zone_names: dict[int, str] = {}
+    if zone_ids:
+        zone_names = {
+            zid: (f"{vname} {zname}" if vname else zname)
+            for zid, zname, vname in (
+                await db.execute(
+                    select(Zone.id, Zone.name, Village.name)
+                    .outerjoin(Village, Zone.village_id == Village.id)
+                    .where(Zone.id.in_(zone_ids))
+                )
+            ).all()
+        }
+
+    device_names: dict[str, str] = {}
+    if macs:
+        device_names = {
+            mac: (label or mac)
+            for mac, label in (
+                await db.execute(select(Device.mac, Device.label).where(Device.mac.in_(macs)))
+            ).all()
+        }
+
+    out: list[str] = []
+    for target_scope, target_ids in targets:
+        if target_scope == "all":
+            out.append("모든 마을")
+        elif not target_ids:
+            out.append("")
+        elif target_scope == "village":
+            out.append(_fold([village_names.get(_as_int(v), f"마을 {v}") for v in target_ids]))
+        elif target_scope == "zone":
+            out.append(_fold([zone_names.get(_as_int(z), f"구역 {z}") for z in target_ids]))
+        else:
+            out.append(_fold([device_names.get(str(m), str(m)) for m in target_ids]))
+    return out
+
+
+def _as_int(value: str) -> int:
+    try:
+        return int(value)
+    except ValueError:
+        return -1
+
+
+async def describe_target(
+    db: AsyncSession, *, target_scope: str, target_ids: Sequence[str]
+) -> str:
+    return (await describe_targets(db, [(target_scope, target_ids)]))[0]
+
+
 def _device_accounts_enforced() -> bool:
     """단말별 계정이 유일한 접속 경로인가.
 

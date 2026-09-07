@@ -10,7 +10,7 @@ import logging
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import CONFIG_LIMITS, DEVICE_CONFIG_FIELDS
+from app.constants import CONFIG_CHOICES, CONFIG_LIMITS, DEVICE_CONFIG_FIELDS
 from app.errors import ApiError
 from app.mqtt.publisher import MqttPublisher
 from app.schemas.system import ConfigOut, ConfigUpdate, HealthOut
@@ -24,7 +24,17 @@ async def get_config(db: AsyncSession) -> ConfigOut:
     return ConfigOut.model_validate(await load_config(db))
 
 
-def _check_range(field: str, value: int) -> None:
+def _check_value(field: str, value: int) -> None:
+    """범위형은 상·하한으로, 선택지형은 목록으로 막는다."""
+    if field in CONFIG_CHOICES:
+        allowed = CONFIG_CHOICES[field]
+        if value not in allowed:
+            raise ApiError(
+                f"{field} 는 {', '.join(str(v) for v in allowed)} 중 하나여야 합니다.",
+                code="CONFIG_INVALID_CHOICE",
+                detail={"field": field, "allowed": list(allowed), "value": value},
+            )
+        return
     low, high = CONFIG_LIMITS[field]
     if not low <= value <= high:
         raise ApiError(
@@ -49,7 +59,7 @@ async def update_config(
         return ConfigOut.model_validate(config)
 
     for field, value in data.items():
-        _check_range(field, value)
+        _check_value(field, value)
         setattr(config, field, value)
 
     # 단말로 나가지 않는 설정(중지 응답 대기 시간)만 바뀌었으면 버전을 올리지 않는다.

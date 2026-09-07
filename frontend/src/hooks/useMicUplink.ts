@@ -26,7 +26,8 @@ import encoderPath from 'opus-recorder/dist/encoderWorker.min.js?url';
 
 /** 통신 사양 §채널 B 와 반드시 일치. */
 const SAMPLE_RATE = 16_000;
-const BITRATE = 24_000;
+//: 설정을 못 읽었을 때 쓰는 기본값(kbps). 설정 화면에서 16 / 24 중에 고른다.
+const DEFAULT_BITRATE_KBPS = 24;
 const FRAME_MS = 40;
 
 export type UplinkState = 'idle' | 'connecting' | 'live' | 'error';
@@ -37,7 +38,8 @@ export interface MicUplink {
   /** 마이크 입력 세기 0~1. 레벨 미터에 쓴다. */
   level: number;
   bytesSent: number;
-  start: (sessionId: number, token: string) => Promise<void>;
+  /** bitrateKbps 는 서버 설정값(16 또는 24). 생략하면 24 로 인코딩한다. */
+  start: (sessionId: number, token: string, bitrateKbps?: number) => Promise<void>;
   stop: () => void;
 }
 
@@ -150,7 +152,7 @@ export function useMicUplink(): MicUplink {
   useEffect(() => cleanup, [cleanup]);
 
   const start = useCallback(
-    async (sessionId: number, token: string) => {
+    async (sessionId: number, token: string, bitrateKbps: number = DEFAULT_BITRATE_KBPS) => {
       setError(null);
       setBytesSent(0);
       setState('connecting');
@@ -242,7 +244,7 @@ export function useMicUplink(): MicUplink {
           encoderPath,
           encoderSampleRate: SAMPLE_RATE,
           numberOfChannels: 1,
-          bitRate: BITRATE,
+          bitRate: bitrateKbps * 1000,
           encoderFrameSize: FRAME_MS,
           // Ogg 페이지에 프레임 하나만 담아 지연을 40ms 로 유지한다.
           maxFramesPerPage: 1,

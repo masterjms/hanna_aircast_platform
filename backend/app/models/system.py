@@ -63,6 +63,19 @@ class CurrentConfig(Base):
     file_wait_sec: Mapped[int] = mapped_column(
         SmallInteger, nullable=False, server_default="30"
     )
+
+    # ── 오디오 품질. 단말 CONFIG 로 나가지 않는다(opus·mp3 모두 자기 헤더에
+    #    비트레이트가 들어 있어 단말이 따로 알 필요가 없다). 서버와 브라우저의
+    #    인코딩 설정이라 config_version 을 올리지 않는다. 문제점 29·30번.
+
+    #: 브라우저 마이크 → Icecast 로 밀어 넣는 opus 비트레이트(kbps). 16 또는 24.
+    live_bitrate_kbps: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="24"
+    )
+    #: 파일함에 들어가는 mp3 비트레이트(kbps). 업로드 재인코딩과 TTS 합성에 함께 쓴다.
+    file_bitrate_kbps: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="24"
+    )
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

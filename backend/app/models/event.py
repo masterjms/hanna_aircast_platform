@@ -61,7 +61,10 @@ class BroadcastEvent(Base):
     #: 스케줄에 의한 자동 실행이면 채우고, 수동이면 NULL.
     schedule_id: Mapped[int | None] = mapped_column(ForeignKey("schedules.id"))
     #: 수동이면 채우고, 스케줄이면 NULL.
-    triggered_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    #: 이력은 불변 로그다. 계정이 지워져도 행은 남고 실행자만 비워진다(0014).
+    triggered_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
 
     triggered_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True

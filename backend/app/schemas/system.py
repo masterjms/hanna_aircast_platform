@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -21,6 +22,11 @@ class ConfigOut(ApiModel):
     live_stop_wait_sec: int
     #: 파일 시작(저장 완료 → 재생 시작)·중지 응답 대기 상한. 둘에 같이 쓴다.
     file_wait_sec: int
+    # ── 오디오 품질 ──
+    #: 라이브 opus 비트레이트(kbps). 브라우저 인코더가 이 값으로 만든다.
+    live_bitrate_kbps: int
+    #: 파일함 mp3 비트레이트(kbps). 업로드 재인코딩과 TTS 합성에 쓴다.
+    file_bitrate_kbps: int
     updated_at: dt.datetime
 
 
@@ -37,6 +43,9 @@ class ConfigUpdate(BaseModel):
     live_stop_wait_sec: int | None = Field(default=None, ge=10, le=30)
     #: 파일 시작(받고 검증 완료)·중지 응답 대기 상한. 저장은 백그라운드라 무관.
     file_wait_sec: int | None = Field(default=None, ge=10, le=60)
+    # ── 오디오 품질 (선택지는 constants.CONFIG_CHOICES 와 같다) ──
+    live_bitrate_kbps: Literal[16, 24] | None = None
+    file_bitrate_kbps: Literal[16, 24] | None = None
 
 
 class HealthOut(BaseModel):

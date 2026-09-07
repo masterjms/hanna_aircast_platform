@@ -162,14 +162,16 @@ export const api = {
      * 오디오 업로드. multipart 라 request() 를 안 거친다
      * (Content-Type 을 브라우저가 boundary 와 함께 직접 정해야 한다).
      */
-    upload: async (file: File): Promise<AudioFile> => {
+    upload: async (file: File, transcode = false): Promise<AudioFile> => {
       const form = new FormData();
       form.append('file', file);
 
       const headers = new Headers();
       if (token) headers.set('Authorization', `Bearer ${token}`);
 
-      const res = await fetch('/api/files', { method: 'POST', body: form, headers });
+      // transcode=true 는 "규격에 맞게 변환해도 좋다"는 사용자 확인이다.
+      const url = transcode ? '/api/files?transcode=true' : '/api/files';
+      const res = await fetch(url, { method: 'POST', body: form, headers });
       if (res.status === 401) {
         setToken(null);
         onUnauthorized?.();

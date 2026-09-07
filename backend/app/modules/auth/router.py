@@ -13,7 +13,7 @@ from app.constants import Role
 from app.core.deps import CurrentUser, Db, Scope
 from app.core.scope import VillageScope
 from app.core.security import create_access_token, verify_password
-from app.errors import InvalidCredentials
+from app.errors import AccountExpired, InvalidCredentials
 from app.models.device import Device
 from app.models.org import User, UserVillage, Village
 from app.schemas.auth import LoginRequest, LoginResponse, MeResponse, VillageBrief
@@ -54,6 +54,10 @@ async def login(payload: LoginRequest, db: Db) -> LoginResponse:
     # 아이디가 없을 때와 비밀번호가 틀릴 때를 같은 에러로 돌려준다(계정 존재 여부 노출 방지).
     if user is None or not verify_password(payload.password, user.password_hash):
         raise InvalidCredentials()
+
+    # 정리 작업은 주기적으로 돈다 — 그 사이에 만료된 계정으로 들어오는 것을 막는다.
+    if user.is_expired():
+        raise AccountExpired()
 
     if user.role == Role.SUPER_ADMIN.value:
         scope = VillageScope.for_super_admin()

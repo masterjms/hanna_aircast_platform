@@ -15,6 +15,8 @@ POST /api/auth/logout
 GET  /api/auth/me          -> {username, role, villages: [...]}
 ```
 
+**계정 사용 기간 (2026-09-07, 문제점 26번)**: `users.expires_at` 이 지난 계정은 로그인이 401 `ACCOUNT_EXPIRED` 로 막히고, 이미 발급된 토큰도 그 시점부터 거절된다(`get_current_user`). 정리 작업이 매시간 돌며 만료된 계정을 지운다. `expires_at` 이 NULL 이면 무기한이다. 만료된 `super_admin` 이 마지막 한 명이면 지우지 않고 로그인만 막는다 — 기간을 잘못 걸어 관리자가 사라지는 상황을 만들지 않는다.
+
 ## 2. 단말 관리
 
 ```
@@ -87,11 +89,13 @@ target_scope는 device/zone/village/all 중 하나. **target_ids는 목록이다
   device   target_ids = MAC 들       예) 한 마을에서 단말 3대만
   all      target_ids = []
 
+**target_label (2026-09-07, 문제점 33번)**: 방송 조회 응답(`/api/broadcast/*`, `/api/dashboard/summary` 의 `active_broadcasts`·`recent_events`)에 사람이 읽는 대상 이름을 같이 담는다. 화면이 내부 id 를 그대로 그려서 "village 5, 6" 처럼 보이던 것을 고친 값이다. `village`·`zone`·`device` 는 이름(구역은 「마을 구역」)으로 바꾸고, 3곳을 넘으면 "가, 나 외 2곳"으로 접는다. `all` 은 「모든 마을」이다. 지워진 마을·단말은 이름을 찾을 수 없으므로 id 를 그대로 남긴다 — 이력에서 대상이 빈칸이 되는 것보다 낫다. 대시보드는 최근 이력을 여러 건 그리므로 id 를 모아 종류별로 한 번씩만 조회한다.
+
 village_admin은 all과, **목록 중 하나라도** 담당 밖이면 403(일부만 나가는 방송은 의도한 결과가 아니므로 전체를 거절). 내부적으로 zone/village/all은 백엔드가 devices 테이블을 조회해서 MQTT는 대상 마을마다 iotradio/village/<id>/cmd 로, 또는 개별 device 토픽으로 발행한다(§통신 사양 그대로). **다중 마을이어도 job_id와 stream_url은 하나**다 — 여러 토픽에 같은 payload를 내보내 단말들이 같은 마운트로 모인다.
 
 라이브 방송의 Icecast 마운트는 `/live/<job_id>`. 마을을 경로에 넣지 않는 이유는 다중 마을 방송을 경로로 표현할 수 없어서다("어느 마을인가"는 이력의 target_ids가 답한다). 단말은 LIVE_START.stream_url 문자열을 그대로 쓰므로 경로 구조는 서버 재량이다.
 
-**무음 방송 자동 종료**: 라이브 시작 후 LIVE_UPLINK_GRACE_SEC(기본 30초) 안에 마이크 업링크(/ingest)가 한 번도 붙지 않으면 서버가 방송을 자동 종료한다. 화면에는 ON AIR로 보이는데 스피커는 조용한 상태가 프로덕션에서 가장 위험하기 때문이다. 붙었다 끊긴 경우는 재연결 여지가 있으므로 종료하지 않는다.
+**무음 방송 자동 종료**: 마지막 오디오 수신 후 LIVE_UPLINK_GRACE_SEC(기본 30초) 동안 마이크 업링크(/ingest)에서 오디오가 오지 않으면 서버가 방송을 자동 종료한다. 화면에는 ON AIR로 보이는데 스피커는 조용한 상태가 프로덕션에서 가장 위험하기 때문이다. 한 번도 붙지 않은 경우와 붙었다 끊긴 경우를 같은 기준으로 본다. 중지 응답을 기다리는 중인 세션은 대상이 아니다.
 
 ### 방송 종료 판정 (2026-09-02, 문제점 리스트 3·4·5번)
 
@@ -114,7 +118,7 @@ village_admin은 all과, **목록 중 하나라도** 담당 밖이면 403(일부
 |---|---|---|
 | 전 단말 응답 | 종료 결과(`FILE_RESULT`·`LIVE_RESULT`)를 보낸 단말 수가 `expected_count`에 도달 | 라이브·중지 대기 중·저장만 하는 파일은 즉시 종료. 재생하는 파일은 「재생 중」으로 |
 | 재생 완료 | `playing_since` + 재생 길이 + 5초 | 파일만 |
-| 중지 응답 대기 만료 | 중지 후 `live_stop_wait_sec`(10~30초, 기본 10) / `file_wait_sec`(30~180초, 기본 120) 경과 | 못 받은 대수를 로그에 남긴다 |
+| 중지 응답 대기 만료 | 중지 후 `live_stop_wait_sec`(10~30초, 기본 10) / `file_wait_sec`(10~60초, 기본 30) 경과 | 못 받은 대수를 로그에 남긴다 |
 | 파일 수신 완료 상한 | 시작 + `file_wait_sec` 경과인데 **아직 응답 안 한 단말이 있을 때만** | 전원이 수신·검증을 마쳐 재생 중인 방송은 이 경로로 끊지 않는다 |
 | 기동 시 고아 정리 | 서버 재시작 | `close_orphaned_events`, 아래 §6 |
 
@@ -145,11 +149,22 @@ LIVE_STOP 발행 → 단말별 LIVE_RESULT 대기(최대 live_stop_wait_sec) →
 ```
 GET    /api/files
 POST   /api/files              업로드(multipart), size/sha256 서버가 계산
+                               ?transcode=true = "규격에 맞게 변환해도 좋다"는 사용자 확인
 POST   /api/files/tts          {text, lang, voice} -> Polly 호출 -> 파일 생성
 DELETE /api/files/:id
 GET    /api/files/:id/audio    미리듣기/다운로드
 GET    /dl/:token              단말 전용 다운로드 — 로그인 없음, FILE_START 의 단기 토큰만. Range 지원
 ```
+
+**업로드 오디오 규격 검사 (2026-09-07, 문제점 31번)**: 업로드된 mp3 를 `ffprobe` 로 재서 방송 규격(16kHz · mono · `file_bitrate_kbps`)과 비교한다.
+
+| 파일 | 처리 | 응답 |
+|---|---|---|
+| 규격보다 낮다 (표본율 또는 비트레이트) | 거절 | 400 `AUDIO_QUALITY_TOO_LOW` |
+| 규격과 같다 | 그대로 등록 | 201 |
+| 규격보다 높다 (표본율·채널·비트레이트 중 하나라도) | 확인 후 재인코딩 | 400 `AUDIO_NEEDS_TRANSCODE` → 화면이 팝업으로 묻고 `?transcode=true` 로 재전송 |
+
+낮은 파일을 거절하는 이유: 다시 인코딩해도 없는 음질이 생기지 않고, 단말에는 규격 하나만 내려보내야 P4 디코더가 한 가지만 다룬다. 재인코딩은 `-map_metadata -1` 로 ID3 를 포함한 내부 tag 를 전부 버린다. CBR 인코더도 헤더 오버헤드로 1kbps 정도 어긋나므로 비트레이트 비교에는 ±1 여유를 둔다. `ffprobe` 가 없는 환경(개발)에서는 검사를 건너뛰고 그대로 받는다 — 길이 계산과 같은 방침이다.
 
 **다운로드 바이트는 nginx 가 보낸다(2026-09-02)**: `/dl/:token` 과 `/api/files/:id/audio` 는 백엔드가 토큰·권한만 검증하고 `X-Accel-Redirect: /_files/<storage_path>` 헤더를 돌려준다. nginx 가 같은 파일 볼륨(읽기전용)을 `internal` location 으로 sendfile 서빙하므로, 마을 단위 FILE_START 로 단말 수백 대가 동시에 받아도 파이썬 프로세스는 요청당 DB 조회 한 번뿐이다. Range(resume_offset 재개)도 nginx 가 처리한다. 개발 환경(nginx 없음)은 `FILE_ACCEL_LOCATION` 을 비워 두면 백엔드가 FileResponse 로 직접 보낸다. nginx access log 에 요청별 `$body_bytes_sent`·`$request_time` 이 남아 단말 다운로드 트래픽을 그대로 셀 수 있다.
 
@@ -178,12 +193,13 @@ GET /api/config              현재 값 (current_config 테이블)
 PUT /api/config              {status_interval_sec, live_stats_interval_sec, event_qos}
                               -> DB 갱신 + config_version 증가 + MQTT 재발행
                              {live_ready_timeout_sec, live_stop_wait_sec, file_wait_sec}
+                             {live_bitrate_kbps, file_bitrate_kbps}
                               -> DB 갱신만 (서버 전용, 재발행 없음)
 ```
 
 권한: super_admin만 (전체 단말에 영향을 주므로 마을관리자는 접근 불가).
 
-**설정은 두 묶음이다 (2026-09-02, 09-03 정리 — 문제점 7·8·9·10번, 단말 요청 §3.4)**: 화면도 두 구역으로 나뉜다.
+**설정은 세 묶음이다 (2026-09-02·03 정리, 09-06 오디오 추가 — 문제점 7·8·9·10·29·30번, 단말 요청 §3.4)**: 화면도 세 구역으로 나뉜다.
 
 - **단말 공통 CONFIG** — `status_interval_sec`·`live_stats_interval_sec`·`event_qos`. 저장하면 `config_version`이 올라가고 MQTT CONFIG가 재발행된다. 정본은 `constants.DEVICE_CONFIG_FIELDS`.
 - **방송 응답 시간** — 아래 셋. CONFIG 토픽으로 나가지 않으므로 이 값만 바뀌면 `config_version`을 올리지 않고 재발행도 하지 않는다(올리면 전 단말이 내용상 같은 CONFIG를 다시 받고 적용 확인까지 오간다). 문구는 시작을 먼저, 종료를 뒤에 쓴다.
@@ -193,6 +209,15 @@ PUT /api/config              {status_interval_sec, live_stats_interval_sec, even
 | `live_ready_timeout_sec` 라이브 준비 제한 | 30 | 1~60 (사양) | **예** — `LIVE_START.ready_timeout_sec` | 화면 준비 지연 알림 = 이 값 **+ 5** | — |
 | `live_stop_wait_sec` 라이브 종료 대기 | 10 | 10~30 | 아니오 | — | 중지 후 `LIVE_RESULT` 대기 상한. 그 뒤 스트림 닫기 |
 | `file_wait_sec` 파일방송 응답 대기 | **30** | **10~60** | 아니오 | 시작 후 `FILE_RESULT ok=true`(다 받고 무결성 검증 완료 → 재생 시작) 대기 상한 | 중지 후 종료 응답 대기 상한 |
+
+- **오디오 품질** — 아래 둘. 표본율 16kHz · mono 는 통신 사양 고정이고 비트레이트만 고른다. CONFIG 토픽으로 나가지 않는다: opus 와 mp3 모두 파일 헤더에 비트레이트가 들어 있어 단말이 미리 알 필요가 없다.
+
+| 설정 | 기본 | 선택지 | 적용 시점 |
+|---|---|---|---|
+| `live_bitrate_kbps` 라이브 스트림 속도 | 24 | 16 / 24 | 다음 방송부터. 브라우저 opus 인코더가 이 값으로 만든다 |
+| `file_bitrate_kbps` MP3 파일 속도 | 24 | 16 / 24 | 이후 올리거나 합성하는 파일부터. 업로드 규격 검사(§5)와 TTS 합성에 함께 쓴다 |
+
+값이 목록형이라 범위(`CONFIG_LIMITS`)가 아니라 `CONFIG_CHOICES` 로 막는다. 이미 파일함에 있는 파일은 다시 인코딩하지 않는다. TTS 캐시 키에는 비트레이트가 들어간다 — 안 넣으면 설정을 바꾼 뒤 같은 문구가 예전 비트레이트 파일로 나온다.
 
 파일은 **설정 하나가 시작과 종료를 같이** 맡는다(문제점 8번). 기본·범위는 두 번 바뀌었다: 0011에서 "3MB 저장 40초" 전제로 120(30~180)으로 올렸는데, 단말 확인(2026-09-04, 문제점 19번)으로 `FILE_RESULT`가 **저장이 아니라 수신·검증 완료** 시점이고 저장은 방송 중 백그라운드라 크기와 무관함이 밝혀졌다(716KB 실측 3.6초). 0012에서 30(10~60)으로 되돌리고 범위 밖 값은 30으로 맞췄다. 화면 순서는 파일 → 라이브 준비 → 라이브 종료(문제점 12번, 방송 흐름 순서).
 
@@ -206,6 +231,8 @@ POST   /api/schedules         최대 10개 제한은 여기서 체크
 PATCH  /api/schedules/:id
 DELETE /api/schedules/:id
 ```
+
+미구현이다 — `schedules` 테이블만 있고 API·실행기·화면이 없다. 계정별 스케줄(문제점 32번)은 §21 역할 사양(중간관리자·게스트, 마을 단위 파일함·이력·스케줄 분리)이 정해진 뒤에 범위를 확정한다. `schedules.created_by` 는 계정이 삭제되면 NULL 이 된다(0014).
 
 ## 10. OTA
 

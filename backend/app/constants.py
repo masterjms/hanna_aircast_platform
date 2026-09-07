@@ -104,6 +104,17 @@ CONFIG_LIMITS: dict[str, tuple[int, int]] = {
     "file_wait_sec": (10, 60),
 }
 
+#: 값을 목록에서 고르는 설정. "16 또는 24"는 범위로 표현할 수 없어 따로 둔다.
+CONFIG_CHOICES: dict[str, tuple[int, ...]] = {
+    "live_bitrate_kbps": (16, 24),
+    "file_bitrate_kbps": (16, 24),
+}
+
+#: 단말이 기대하는 오디오 규격(사양 §11). 표본율과 채널은 고정이고 비트레이트만
+#: 설정에서 고른다(문제점 29·30번). 라이브 opus 와 파일 mp3 에 같은 규격을 쓴다.
+AUDIO_SAMPLE_RATE = 16_000
+AUDIO_CHANNELS = 1
+
 #: 이 중 단말로 나가는 값들. 여기 없는 설정은 서버 안에서만 쓰이므로 바뀌어도
 #: config_version 을 올리지 않는다(올리면 전 단말이 CONFIG 를 다시 받는다).
 DEVICE_CONFIG_FIELDS = frozenset({"status_interval_sec", "live_stats_interval_sec", "event_qos"})

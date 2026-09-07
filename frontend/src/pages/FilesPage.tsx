@@ -57,7 +57,15 @@ export function FilesPage() {
     setError(null);
     try {
       for (const f of Array.from(picked)) {
-        await api.files.upload(f);
+        try {
+          await api.files.upload(f);
+        } catch (err) {
+          // 방송 규격보다 음질이 좋은 파일은 변환해서 넣을지 물어본다(문제점 31번).
+          // 규격보다 낮은 파일은 서버가 아예 거절하므로 여기로 오지 않는다.
+          if (!(err instanceof ApiError) || err.code !== 'AUDIO_NEEDS_TRANSCODE') throw err;
+          if (!window.confirm(`"${f.name}"\n\n${err.message}`)) continue;
+          await api.files.upload(f, true);
+        }
       }
       await load();
     } catch (err) {

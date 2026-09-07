@@ -48,7 +48,10 @@ class File(Base):
     tts_lang: Mapped[str | None] = mapped_column(String(10))
     tts_voice: Mapped[str | None] = mapped_column(String(50))
 
-    uploaded_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    #: 계정이 지워져도 파일은 남는다 — 누가 올렸는지만 지운다(0014).
+    uploaded_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

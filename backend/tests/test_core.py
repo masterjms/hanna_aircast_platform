@@ -1234,3 +1234,161 @@ class TestEndedJobs:
         # 가장 오래된 것부터 밀려난다. 최근 것은 남아 있어야 한다.
         assert not service.is_job_ended(0)
         assert service.is_job_ended(service._ENDED_JOBS_MAX + 9)
+
+
+# ── 오디오 규격 (문제점 29·30·31번) ─────────────────────────────────────
+class TestAudioAction:
+    """업로드 mp3 를 받을지·거절할지·변환할지."""
+
+    @staticmethod
+    def _act(rate, ch, kbps, target):
+        from app.modules.file.service import AudioSpec, audio_action
+
+        return audio_action(AudioSpec(sample_rate=rate, channels=ch, kbps=kbps), target)
+
+    def test_exact_match_passes(self):
+        assert self._act(16_000, 1, 24, 24) == "ok"
+        assert self._act(16_000, 1, 16, 16) == "ok"
+
+    def test_lower_bitrate_is_rejected(self):
+        # 다시 인코딩해도 없는 음질이 생기지는 않는다 — 아예 받지 않는다.
+        assert self._act(16_000, 1, 16, 24) == "reject"
+
+    def test_lower_sample_rate_is_rejected(self):
+        assert self._act(8_000, 1, 32, 24) == "reject"
+
+    def test_higher_quality_needs_transcode(self):
+        # 흔한 경우 — 44.1kHz 스테레오 128kbps 로 만든 안내음성.
+        assert self._act(44_100, 2, 128, 24) == "transcode"
+
+    def test_downgrade_target_also_transcodes(self):
+        # 설정을 16 으로 낮추면 기존 규격(24)도 변환 대상이 된다.
+        assert self._act(16_000, 1, 24, 16) == "transcode"
+
+    def test_stereo_at_target_bitrate_transcodes(self):
+        assert self._act(16_000, 2, 24, 24) == "transcode"
+
+    def test_cbr_rounding_is_tolerated(self):
+        # CBR 인코더도 헤더 오버헤드로 1kbps 정도 어긋난다. 그걸로 거절하면
+        # 정상 파일이 반려된다.
+        assert self._act(16_000, 1, 25, 24) == "ok"
+        assert self._act(16_000, 1, 23, 24) == "ok"
+
+    def test_describe_reads_like_the_popup(self):
+        from app.modules.file.service import AudioSpec
+
+        assert AudioSpec(16_000, 1, 24).describe() == "16kHz mono 24kbps"
+        assert AudioSpec(44_100, 2, 128).describe() == "44kHz 2ch 128kbps"
+
+
+class TestBitrateConfig:
+    """비트레이트는 서버·브라우저 설정이지 단말 CONFIG 가 아니다."""
+
+    def test_choices_are_16_and_24(self):
+        from app.constants import CONFIG_CHOICES
+
+        assert CONFIG_CHOICES["live_bitrate_kbps"] == (16, 24)
+        assert CONFIG_CHOICES["file_bitrate_kbps"] == (16, 24)
+
+    def test_bitrate_is_not_a_device_field(self):
+        from app.constants import DEVICE_CONFIG_FIELDS
+
+        # 들어가면 비트레이트만 바꿔도 전 단말이 CONFIG 를 다시 받는다.
+        # opus·mp3 모두 헤더에 비트레이트가 있어 단말이 미리 알 필요가 없다.
+        assert "live_bitrate_kbps" not in DEVICE_CONFIG_FIELDS
+        assert "file_bitrate_kbps" not in DEVICE_CONFIG_FIELDS
+
+    def test_choice_fields_are_not_ranges(self):
+        from app.constants import CONFIG_CHOICES, CONFIG_LIMITS
+
+        # 한 필드가 양쪽에 있으면 _check_value 가 어느 쪽으로 막을지 모호해진다.
+        assert not set(CONFIG_CHOICES) & set(CONFIG_LIMITS)
+
+    def test_invalid_choice_is_rejected(self):
+        from app.modules.system.service import _check_value
+
+        _check_value("live_bitrate_kbps", 16)
+        _check_value("live_bitrate_kbps", 24)
+        with pytest.raises(ApiError) as exc:
+            _check_value("live_bitrate_kbps", 20)
+        assert exc.value.code == "CONFIG_INVALID_CHOICE"
+
+    def test_sample_rate_stays_fixed(self):
+        from app.constants import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE
+
+        # 통신 사양 고정값. 설정으로 여는 것은 비트레이트뿐이다.
+        assert (AUDIO_SAMPLE_RATE, AUDIO_CHANNELS) == (16_000, 1)
+
+
+# ── 계정 사용 기간 (문제점 26번) ────────────────────────────────────────
+class TestAccountExpiry:
+    def test_null_expiry_never_expires(self):
+        from app.models.org import User
+
+        assert User(username="a", password_hash="x", role="super_admin").is_expired() is False
+
+    def test_future_expiry_is_active(self):
+        import datetime as dt
+
+        from app.models.org import User
+
+        future = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=1)
+        user = User(username="a", password_hash="x", role="village_admin", expires_at=future)
+        assert user.is_expired() is False
+
+    def test_past_expiry_is_expired(self):
+        import datetime as dt
+
+        from app.models.org import User
+
+        past = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=1)
+        user = User(username="a", password_hash="x", role="village_admin", expires_at=past)
+        assert user.is_expired() is True
+
+    def test_expiry_from_days_counts_from_now(self):
+        import datetime as dt
+
+        from app.modules.org.service import _expiry_from
+
+        at = _expiry_from(7)
+        assert at is not None
+        left = at - dt.datetime.now(dt.timezone.utc)
+        # "7일" 은 7일째까지 쓸 수 있고 8일째부터 정리 대상이다.
+        assert dt.timedelta(days=6, hours=23) < left <= dt.timedelta(days=7)
+
+    def test_expiry_from_none_is_unlimited(self):
+        from app.modules.org.service import _expiry_from
+
+        assert _expiry_from(None) is None
+
+    def test_default_is_15_days_within_1_to_30(self):
+        from app.schemas.org import VALID_DAYS_DEFAULT, VALID_DAYS_MAX, VALID_DAYS_MIN
+
+        assert (VALID_DAYS_MIN, VALID_DAYS_DEFAULT, VALID_DAYS_MAX) == (1, 15, 30)
+
+
+# ── 방송 대상 이름 (문제점 33번) ────────────────────────────────────────
+class TestTargetLabel:
+    def test_three_names_are_listed(self):
+        from app.modules.device.service import _fold
+
+        assert _fold(["금산마을", "계곡마을", "산본마을"]) == "금산마을, 계곡마을, 산본마을"
+
+    def test_more_than_three_are_folded(self):
+        from app.modules.device.service import _fold
+
+        assert _fold(["가", "나", "다", "라"]) == "가, 나 외 2곳"
+
+    @pytest.mark.asyncio
+    async def test_all_scope_needs_no_query(self):
+        from app.modules.device.service import describe_targets
+
+        # scope=all 은 id 가 없어 DB 를 보지 않는다 — 화면에 영문 "all" 대신
+        # 한글이 나가야 한다.
+        assert await describe_targets(None, [("all", [])]) == ["모든 마을"]
+
+    @pytest.mark.asyncio
+    async def test_empty_target_is_blank(self):
+        from app.modules.device.service import describe_targets
+
+        assert await describe_targets(None, [("village", [])]) == [""]

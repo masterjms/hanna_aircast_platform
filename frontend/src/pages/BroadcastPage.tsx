@@ -100,8 +100,7 @@ function ActiveCard({
           </div>
           <div className="active-card__title">
             {broadcast.file_name ?? (isLive ? '실시간 방송' : broadcast.event_type)} ·{' '}
-            {broadcast.target_scope}
-            {broadcast.target_ids.length > 0 ? ` ${broadcast.target_ids.join(', ')}` : ''}
+            {broadcast.target_label || broadcast.target_scope}
           </div>
           <div className="dim" style={{ fontSize: 12 }}>
             job_id {broadcast.job_id} · {formatTime(broadcast.triggered_at)} 시작
@@ -202,6 +201,8 @@ export function BroadcastPage() {
    * 구멍이 생긴다(단말 요청 2026-09-03 §3.1). 못 읽으면 기본 30+5.
    */
   const [readyWaitSec, setReadyWaitSec] = useState(35);
+  // 라이브 opus 비트레이트(설정값). 화면을 열 때 한 번 읽고 방송 시작에 쓴다.
+  const [liveBitrateKbps, setLiveBitrateKbps] = useState(24);
 
   const [villages, setVillages] = useState<Village[]>([]);
   const [zones, setZones] = useState<Zone[]>([]);
@@ -313,7 +314,7 @@ export function BroadcastPage() {
       //    소리 없는 방송이 켜진 채로 남으면 안 된다.
       const token = getToken();
       if (b.job_id === null || !token) throw new Error('세션 정보를 받지 못했습니다.');
-      await mic.start(b.job_id, token);
+      await mic.start(b.job_id, token, liveBitrateKbps);
     } catch (err) {
       if (err instanceof ApiError && err.code === 'BROADCAST_OVERLAP') {
         setOverlap(err.detail as unknown as BroadcastOverlapDetail);
@@ -330,7 +331,10 @@ export function BroadcastPage() {
   useEffect(() => {
     void api.config
       .get()
-      .then((c) => setReadyWaitSec(c.live_ready_timeout_sec + 5))
+      .then((c) => {
+        setReadyWaitSec(c.live_ready_timeout_sec + 5);
+        setLiveBitrateKbps(c.live_bitrate_kbps);
+      })
       .catch(() => undefined);
   }, []);
 

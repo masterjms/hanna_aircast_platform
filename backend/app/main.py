@@ -39,7 +39,7 @@ from app.mqtt.connection import MqttConnection
 from app.mqtt.handlers import dispatch
 from app.mqtt.publisher import MqttPublisher
 from app.mqtt.status_buffer import StatusBuffer
-from app.tasks import config_reconcile
+from app.tasks import account_expiry, config_reconcile
 
 # ⚠ Windows 에서 이 모듈을 `python -m uvicorn app.main:app` 로 띄우면 MQTT 가 죽는다.
 #   uvicorn 이 ProactorEventLoop 를 강제하는데 paho 가 쓰는 add_reader 가 거기 없다.
@@ -98,6 +98,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 태스크가 MQTT 연결을 자체적으로 기다리므로 바로 걸어도 안전하다.
         next_run_time=datetime.now(),
         # 서버가 잠깐 멈췄다 살아나도 밀린 실행이 한꺼번에 터지지 않게 한다.
+        coalesce=True,
+        max_instances=1,
+    )
+    # 사용 기간이 끝난 계정 정리(문제점 26번). 로그인은 만료 즉시 막히므로 주기가
+    # 길어도 위험하지 않다 — 하루 한 번이면 "8일째부터 삭제" 를 만족한다.
+    scheduler.add_job(
+        account_expiry.run,
+        "interval",
+        hours=1,
+        id="account-expiry",
+        next_run_time=datetime.now(),
         coalesce=True,
         max_instances=1,
     )

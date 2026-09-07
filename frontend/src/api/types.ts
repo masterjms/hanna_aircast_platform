@@ -176,6 +176,8 @@ export interface ActiveBroadcast {
   event_type: string;
   target_scope: string;
   target_ids: string[];
+  /** 대상의 사람이 읽는 이름 — "금산마을, 계곡마을", "모든 마을". 화면은 내부 id 대신 이걸 쓴다. */
+  target_label: string;
   triggered_at: string;
 }
 
@@ -184,6 +186,8 @@ export interface RecentEvent {
   event_type: string;
   target_scope: string;
   target_ids: string[];
+  /** 대상의 사람이 읽는 이름 — "금산마을, 계곡마을", "모든 마을". 화면은 내부 id 대신 이걸 쓴다. */
+  target_label: string;
   triggered_at: string;
   ended_at: string | null;
 }
@@ -195,6 +199,8 @@ export interface DashboardSummary {
   active_broadcasts: ActiveBroadcast[];
   recent_events: RecentEvent[];
 }
+
+export type BitrateKbps = 16 | 24;
 
 export interface SystemConfig {
   config_version: number;
@@ -208,6 +214,10 @@ export interface SystemConfig {
   live_stop_wait_sec: number;
   /** 파일 시작(저장 완료)·중지 응답 대기 상한. 둘에 같이 쓴다. */
   file_wait_sec: number;
+  /** 라이브 opus 비트레이트(kbps). 브라우저 인코더가 이 값으로 만든다. */
+  live_bitrate_kbps: BitrateKbps;
+  /** 파일함 mp3 비트레이트(kbps). 업로드 재인코딩과 TTS 합성에 쓴다. */
+  file_bitrate_kbps: BitrateKbps;
   updated_at: string;
 }
 
@@ -216,6 +226,8 @@ export interface User {
   id: number;
   username: string;
   role: Role;
+  /** 사용 기간의 끝. null 이면 무기한. 지나면 로그인이 막히고 정리 작업이 지운다. */
+  expires_at: string | null;
   created_at: string;
   village_ids: number[];
 }
@@ -225,12 +237,16 @@ export interface UserCreate {
   password: string;
   role: Role;
   village_ids: number[];
+  /** 사용 기간(일, 1~30). null 이면 무기한. */
+  valid_days: number | null;
 }
 
 export interface UserUpdate {
   password?: string;
   role?: Role;
   village_ids?: number[];
+  /** 보내면 오늘부터 다시 센다. null 은 무기한. 빼면 만료일을 건드리지 않는다. */
+  valid_days?: number | null;
 }
 
 export interface VillageInput {
@@ -380,6 +396,8 @@ export interface BroadcastDetail {
   event_type: string;
   target_scope: TargetScope;
   target_ids: string[];
+  /** 대상의 사람이 읽는 이름 — "금산마을, 계곡마을", "모든 마을". 화면은 내부 id 대신 이걸 쓴다. */
+  target_label: string;
   file_id: number | null;
   file_name: string | null;
   triggered_at: string;

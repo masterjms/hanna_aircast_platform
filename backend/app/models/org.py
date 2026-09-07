@@ -95,9 +95,17 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
+    #: 이 시각이 지나면 계정을 쓸 수 없고 정리 작업이 지운다(문제점 26번).
+    #: NULL 이면 무기한 — 운영을 책임지는 상시 계정에만 쓴다.
+    expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+    def is_expired(self, now: dt.datetime | None = None) -> bool:
+        if self.expires_at is None:
+            return False
+        return self.expires_at <= (now or dt.datetime.now(dt.timezone.utc))
 
 
 class UserVillage(Base):

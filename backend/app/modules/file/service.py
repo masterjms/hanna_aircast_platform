@@ -14,11 +14,13 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hashlib
+import json
 import logging
 import re
 import shutil
 import subprocess
 import uuid
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import quote
@@ -29,12 +31,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.constants import FileSource
+from app.constants import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, FileSource
 from app.core.ids import new_download_token
 from app.errors import ApiError, NotFound
 from app.models.file import DownloadToken, File
 from app.models.org import User
 from app.schemas.file import FileOut
+from app.tasks.config_reconcile import load_config
 
 log = logging.getLogger(__name__)
 
@@ -120,6 +123,110 @@ def probe_duration(path: Path) -> Decimal | None:
     except Exception:  # noqa: BLE001 - 길이를 못 구해도 업로드는 성공시킨다
         log.warning("ffprobe 실패: %s", path.name)
         return None
+
+
+@dataclass(frozen=True)
+class AudioSpec:
+    """업로드된 mp3 의 실제 규격."""
+
+    sample_rate: int
+    channels: int
+    kbps: int
+
+    def describe(self) -> str:
+        ch = "mono" if self.channels == 1 else f"{self.channels}ch"
+        return f"{self.sample_rate // 1000}kHz {ch} {self.kbps}kbps"
+
+
+def probe_audio(path: Path) -> AudioSpec | None:
+    """ffprobe 로 표본율·채널·비트레이트를 읽는다.
+
+    ffprobe 가 없거나 값을 못 읽으면 None 이다. 그때는 규격 검사를 건너뛰고
+    파일을 그대로 받는다 — 길이 계산과 같은 방침이다(도구가 없다고 업로드를
+    막지는 않는다).
+    """
+    exe = shutil.which("ffprobe")
+    if exe is None:
+        log.info("ffprobe 없음 — 오디오 규격 검사를 건너뛴다")
+        return None
+    try:
+        out = subprocess.run(
+            [exe, "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "stream=sample_rate,channels,bit_rate:format=bit_rate",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=20, check=True,
+        )
+        data = json.loads(out.stdout)
+        stream = (data.get("streams") or [{}])[0]
+        fmt = data.get("format") or {}
+        # VBR mp3 는 stream.bit_rate 가 없다 — 그때는 format 의 평균값을 쓴다.
+        raw_rate = stream.get("bit_rate") or fmt.get("bit_rate")
+        spec = AudioSpec(
+            sample_rate=int(stream.get("sample_rate") or 0),
+            channels=int(stream.get("channels") or 0),
+            kbps=round(int(raw_rate) / 1000) if raw_rate else 0,
+        )
+    except Exception:  # noqa: BLE001 - 못 읽으면 검사를 건너뛴다
+        log.warning("ffprobe 규격 확인 실패: %s", path.name)
+        return None
+    if spec.sample_rate == 0 or spec.channels == 0 or spec.kbps == 0:
+        return None
+    return spec
+
+
+#: 비트레이트 비교 여유(kbps). CBR 인코더도 헤더 오버헤드 때문에 1 정도 어긋난다.
+_KBPS_TOLERANCE = 1
+
+
+def audio_action(spec: AudioSpec, target_kbps: int) -> str:
+    """규격 대비 어떻게 할지 — "ok" | "reject" | "transcode" (문제점 31번).
+
+    목표보다 낮으면 거절한다. 다시 인코딩해도 없는 음질이 생기지는 않고,
+    단말에는 규격 하나만 내려보내야 디코더가 한 가지만 다룬다.
+    """
+    if spec.sample_rate < AUDIO_SAMPLE_RATE or spec.kbps < target_kbps - _KBPS_TOLERANCE:
+        return "reject"
+    if (
+        spec.sample_rate == AUDIO_SAMPLE_RATE
+        and spec.channels == AUDIO_CHANNELS
+        and abs(spec.kbps - target_kbps) <= _KBPS_TOLERANCE
+    ):
+        return "ok"
+    return "transcode"
+
+
+def transcode_in_place(path: Path, target_kbps: int) -> tuple[int, str]:
+    """파일을 방송 규격으로 다시 인코딩한다. (크기, sha256) 을 돌려준다.
+
+    `-map_metadata -1` 로 ID3 tag 를 포함한 내부 정보를 전부 버린다(문제점 31번).
+    """
+    exe = shutil.which("ffmpeg")
+    if exe is None:
+        raise ApiError(
+            "변환 도구(ffmpeg)가 없어 재인코딩할 수 없습니다.",
+            code="TRANSCODE_UNAVAILABLE",
+        )
+    tmp = path.with_suffix(".conv.mp3")
+    try:
+        subprocess.run(
+            [exe, "-y", "-i", str(path),
+             "-map_metadata", "-1",
+             "-ar", str(AUDIO_SAMPLE_RATE), "-ac", str(AUDIO_CHANNELS),
+             "-b:a", f"{target_kbps}k", str(tmp)],
+            capture_output=True, check=True, timeout=180,
+        )
+    except Exception as exc:  # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        raise ApiError("파일 변환에 실패했습니다.", code="TRANSCODE_FAILED") from exc
+    tmp.replace(path)
+
+    digest = hashlib.sha256()
+    size = 0
+    with path.open("rb") as fp:
+        while chunk := fp.read(_CHUNK):
+            size += len(chunk)
+            digest.update(chunk)
+    return size, digest.hexdigest()
 
 
 def _write_and_hash(upload: UploadFile, dest: Path) -> tuple[int, str]:
@@ -208,7 +315,15 @@ def serve_file(file: File) -> Response:
 
 
 # ── 업로드 · 삭제 ────────────────────────────────────────────────────────
-async def upload_file(db: AsyncSession, upload: UploadFile, *, uploader: User) -> FileOut:
+async def upload_file(
+    db: AsyncSession, upload: UploadFile, *, uploader: User, transcode: bool = False
+) -> FileOut:
+    """파일함 업로드.
+
+    방송 규격(16kHz mono + 설정 비트레이트)보다 음질이 낮으면 받지 않고, 높으면
+    변환할지 물어본다(문제점 31번). 화면은 `AUDIO_NEEDS_TRANSCODE` 를 받으면
+    확인 팝업을 띄우고 `transcode=true` 로 같은 파일을 다시 보낸다.
+    """
     original = upload.filename or "audio.mp3"
     suffix = Path(original).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
@@ -227,6 +342,32 @@ async def upload_file(db: AsyncSession, upload: UploadFile, *, uploader: User) -
     if size == 0:
         dest.unlink(missing_ok=True)
         raise ApiError("빈 파일은 올릴 수 없습니다.", code="EMPTY_FILE")
+
+    target_kbps = (await load_config(db)).file_bitrate_kbps
+    spec = await asyncio.to_thread(probe_audio, dest)
+    if spec is not None:
+        action = audio_action(spec, target_kbps)
+        target_text = f"{AUDIO_SAMPLE_RATE // 1000}kHz mono {target_kbps}kbps"
+        if action == "reject":
+            dest.unlink(missing_ok=True)
+            raise ApiError(
+                f"방송 규격({target_text})보다 음질이 낮은 파일입니다 "
+                f"(현재 {spec.describe()}). 다시 인코딩해도 음질은 살아나지 않으므로 "
+                f"받지 않습니다.",
+                code="AUDIO_QUALITY_TOO_LOW",
+                detail={"current": spec.describe(), "target": target_text},
+            )
+        if action == "transcode" and not transcode:
+            dest.unlink(missing_ok=True)
+            raise ApiError(
+                f"이 파일은 {spec.describe()} 입니다. 방송 규격({target_text})으로 "
+                f"변환해서 등록할까요? 변환하면 파일 안의 tag 정보는 모두 지워집니다.",
+                code="AUDIO_NEEDS_TRANSCODE",
+                detail={"current": spec.describe(), "target": target_text},
+            )
+        if action == "transcode":
+            size, sha256 = await asyncio.to_thread(transcode_in_place, dest, target_kbps)
+            log.info("업로드 재인코딩 %s → %s", spec.describe(), target_text)
 
     duration = await asyncio.to_thread(probe_duration, dest)
 

@@ -46,8 +46,7 @@ export function EventsPage() {
                 <tr key={e.id}>
                   <td className="mono">{e.event_type}</td>
                   <td className="strong">
-                    {e.target_scope}
-                    {e.target_ids.length > 0 ? ` · ${e.target_ids.join(', ')}` : ''}
+                    {e.target_label || e.target_scope}
                   </td>
                   <td className="dim">{formatTime(e.triggered_at)}</td>
                   <td className="dim">{e.ended_at ? formatTime(e.ended_at) : '진행 중'}</td>

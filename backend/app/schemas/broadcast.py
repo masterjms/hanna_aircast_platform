@@ -55,6 +55,9 @@ class BroadcastOut(ApiModel):
     event_type: str
     target_scope: TargetScope
     target_ids: list[str]
+    #: 대상의 사람이 읽는 이름 — "금산마을, 계곡마을", "모든 마을". 화면은 내부
+    #: id 대신 이걸 쓴다(문제점 33번).
+    target_label: str = ""
     file_id: int | None
     file_name: str | None = None
     triggered_at: dt.datetime

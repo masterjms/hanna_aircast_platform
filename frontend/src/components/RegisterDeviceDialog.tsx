@@ -189,6 +189,7 @@ export function RegisterDeviceDialog({
   const [c6Model, setC6Model] = useState('');
   const [c6Version, setC6Version] = useState('');
   const [scanned, setScanned] = useState(false);
+  const [scanBuf, setScanBuf] = useState('');
   const [scanWarning, setScanWarning] = useState<string | null>(null);
 
   const [registering, setRegistering] = useState(false);
@@ -259,10 +260,10 @@ export function RegisterDeviceDialog({
   );
 
   const applyScan = (raw: string) => {
+    setScanBuf('');
     const parsed = parseScan(raw);
     if (!parsed) {
       setScanWarning('MAC(12자리 hex)을 읽지 못했습니다 — 다시 스캔해 주세요.');
-      if (scanInputRef.current) scanInputRef.current.value = '';
       return;
     }
     setMac(parsed.mac);
@@ -486,26 +487,50 @@ export function RegisterDeviceDialog({
             className="mono"
             lang="en"
             autoComplete="off"
+            spellCheck={false}
             placeholder="여기에 포커스를 두고 QR/바코드를 스캔 (붙여넣기도 가능)"
+            // 편집 불가 입력칸이다. 값은 아래 onKeyDown 이 물리 키로 직접 채운다.
+            //
+            // 문제점 20번: 한글 IME 가 켜져 있으면 스캐너의 영문 키가 자모로 조합돼
+            // 깨진다. keydown 에서 preventDefault 를 해도 막히지 않는다 — IME 는
+            // 자기 조합 결과를 입력칸에 따로 밀어 넣기 때문에, 우리가 넣은 글자와
+            // 섞여서 나온다(a → "aㅁ", ab → "aㅁb뮤"). 편집 불가로 두면 IME 가
+            // 조합해 넣을 대상 자체가 없어져 입력기 상태와 무관해진다.
+            readOnly
+            value={scanBuf}
             onKeyDown={(e) => {
               // HID 스캐너는 키 입력을 흘려보내고 끝에 Enter(기본 접미사)를 보낸다.
-              //
-              // 한글 IME 가 켜져 있으면 스캐너의 영문 키가 자모로 조합돼 전부 깨진다
-              // (문제점 20번). 문자가 아니라 **물리 키(e.code)** 로 직접 조립하고
-              // 기본 동작을 막으면 IME 가 끼어들 틈이 없다 — 어느 입력기 상태든 같다.
-              const el = e.target as HTMLInputElement;
               if (e.key === 'Enter') {
                 e.preventDefault();
-                applyScan(el.value);
-                el.value = '';
+                applyScan(scanBuf);
                 return;
               }
-              if (e.ctrlKey || e.metaKey || e.altKey) return; // 붙여넣기(Ctrl+V)는 그대로
-              const ch = scanKeyToChar(e.code, e.shiftKey);
+              if (e.ctrlKey || e.metaKey || e.altKey) return; // 붙여넣기는 onPaste 가 받는다
+              let ch = scanKeyToChar(e.code, e.shiftKey);
+              // e.code 를 주지 않는 스캐너를 위한 보조 경로. IME 조합 중에는
+              // key 가 'Process'(keyCode 229)라 여기에 걸리지 않는다.
+              if (
+                ch === null &&
+                !e.nativeEvent.isComposing &&
+                e.keyCode !== 229 &&
+                e.key.length === 1 &&
+                e.key >= ' ' &&
+                e.key <= '~'
+              ) {
+                ch = e.key;
+              }
               if (ch === null) return; // 방향키 등은 브라우저에 맡긴다
               e.preventDefault();
-              if (ch === '\b') el.value = el.value.slice(0, -1);
-              else el.value += ch;
+              const add = ch;
+              setScanBuf((prev) => (add === '\b' ? prev.slice(0, -1) : prev + add));
+            }}
+            onPaste={(e) => {
+              e.preventDefault();
+              const text = e.clipboardData.getData('text');
+              // 스캐너 소프트웨어가 줄바꿈까지 붙여넣는 경우가 있다 — 첫 줄이 스캔값이다.
+              const [first, ...rest] = text.split(/\r?\n/);
+              if (rest.length > 0 && first.trim()) applyScan(scanBuf + first);
+              else setScanBuf((prev) => prev + first);
             }}
             style={{ marginTop: 8 }}
           />

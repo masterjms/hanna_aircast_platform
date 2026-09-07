@@ -7,7 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /srv
 
-# ffmpeg: TTS 후처리(-ar 22050 -ac 1 -b:a 64k)와 업로드 파일 길이 측정에 쓴다.
+# ffmpeg: TTS 후처리·업로드 재인코딩(16kHz mono + 설정 비트레이트)과 파일 길이·규격 측정에 쓴다.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg curl \
     && rm -rf /var/lib/apt/lists/*
