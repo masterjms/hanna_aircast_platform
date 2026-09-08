@@ -10,6 +10,8 @@
  */
 
 import type {
+  Organization,
+  OrganizationInput,
   AddressResult,
   ApiErrorBody,
   ApiErrorCode,
@@ -123,6 +125,23 @@ export const api = {
       }),
     logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
     me: () => request<Me>('/api/auth/me'),
+  },
+
+  organizations: {
+    list: () => request<Organization[]>('/api/organizations'),
+    create: (body: OrganizationInput) =>
+      request<Organization>('/api/organizations', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id: number, body: Partial<OrganizationInput>) =>
+      request<Organization>(`/api/organizations/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    remove: (id: number) => request<void>(`/api/organizations/${id}`, { method: 'DELETE' }),
+    /** 주소(법정동코드)로 관리 기관을 제안받는다. 제안일 뿐이라 사람이 바꿀 수 있다. */
+    suggest: (bCode: string) =>
+      request<{ organization_id: number | null }>(
+        `/api/organizations/suggest?b_code=${encodeURIComponent(bCode)}`,
+      ),
   },
 
   villages: {

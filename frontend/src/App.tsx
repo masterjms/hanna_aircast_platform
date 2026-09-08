@@ -4,12 +4,14 @@
  * 로그인 여부에 따라 라우트 자체를 갈아끼운다. 로그인 전에는 보호 라우트가
  * 존재하지 않으므로 URL 을 직접 쳐도 들어올 수 없다.
  *
- * super_admin 전용 화면은 RequireSuperAdmin 으로 한 번 더 막는다.
+ * 계층이 필요한 화면은 RequireRole 로 한 번 더 막는다(설계 2026-09-08 §9).
  * 다만 실제 방어선은 백엔드다 — 프론트 가드는 UX 를 위한 것이다.
  */
 
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
+
+import type { Role } from './api/types';
 
 import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
@@ -20,6 +22,7 @@ import { BroadcastPage } from './pages/BroadcastPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { FilesPage } from './pages/FilesPage';
 import { LoginPage } from './pages/LoginPage';
+import { OrganizationsPage } from './pages/OrganizationsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
 import { VillagesPage } from './pages/VillagesPage';
@@ -35,8 +38,9 @@ const PAGE_TITLES: Record<string, [string, string]> = {
   '/costs': ['비용', '마을별 사용량'],
   '/ota': ['OTA 관리', '펌웨어 배포'],
   '/settings': ['설정', '전 단말 공통 CONFIG'],
-  '/villages': ['마을 관리', '마을 · 구역'],
-  '/users': ['계정 관리', '관리자 계정과 담당 마을'],
+  '/organizations': ['기관 관리', '시·도청 · 시·군청 트리'],
+  '/villages': ['마을 관리', '마을 · 구역 · 관리 기관'],
+  '/users': ['계정 관리', '관리자 계정과 범위'],
 };
 
 function AppShell({ children }: { children: ReactNode }) {
@@ -54,9 +58,9 @@ function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function RequireSuperAdmin({ children }: { children: ReactNode }) {
-  const { isSuperAdmin } = useAuth();
-  return isSuperAdmin ? <>{children}</> : <Navigate to="/" replace />;
+function RequireRole({ role, children }: { role: Role; children: ReactNode }) {
+  const { atLeast } = useAuth();
+  return atLeast(role) ? <>{children}</> : <Navigate to="/" replace />;
 }
 
 /** 아직 구현하지 않은 화면. 라우트를 비워두면 404 처럼 보여서 혼선이 생긴다. */
@@ -102,33 +106,41 @@ export function App() {
         <Route
           path="/settings"
           element={
-            <RequireSuperAdmin>
+            <RequireRole role="super_admin">
               <SettingsPage />
-            </RequireSuperAdmin>
+            </RequireRole>
           }
         />
         <Route
           path="/ota"
           element={
-            <RequireSuperAdmin>
+            <RequireRole role="super_admin">
               <ComingSoon title="OTA 관리" phase="Phase 7" />
-            </RequireSuperAdmin>
+            </RequireRole>
+          }
+        />
+        <Route
+          path="/organizations"
+          element={
+            <RequireRole role="super_admin">
+              <OrganizationsPage />
+            </RequireRole>
           }
         />
         <Route
           path="/villages"
           element={
-            <RequireSuperAdmin>
+            <RequireRole role="sigungu_admin">
               <VillagesPage />
-            </RequireSuperAdmin>
+            </RequireRole>
           }
         />
         <Route
           path="/users"
           element={
-            <RequireSuperAdmin>
+            <RequireRole role="sigungu_admin">
               <UsersPage />
-            </RequireSuperAdmin>
+            </RequireRole>
           }
         />
 

@@ -26,6 +26,8 @@ class MeResponse(ApiModel):
     villages: list[VillageBrief]
     all_villages: bool
     device_count: int
+    #: 소속 기관 이름. 시·도/시·군 관리자만 있다. 상단 "담당 범위" 표시용.
+    organization_name: str | None = None
 
 
 class LoginResponse(BaseModel):

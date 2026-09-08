@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy import Select, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -217,6 +218,69 @@ async def macs_for_target(
 
     return list((await db.scalars(stmt)).all())
 
+
+
+async def events_visible_to(
+    db: AsyncSession, events: Sequence[Any], scope: VillageScope
+) -> list[bool]:
+    """방송 이벤트들이 이 범위에 보이는가 (관리자 계층 설계 §8).
+
+    대상 단말의 소속 마을 중 하나라도 범위 안이면 보인다. 예전에는 village 대상만
+    보이고 device·zone·all 은 마을을 바로 알 수 없어 감췄다 — 그래서 이장이 자기
+    단말 몇 대에 건 방송이 진행 중 목록에서 사라졌다(현행 문서 README 8번).
+
+    여러 건을 한 번에 판정한다. 대시보드가 최근 이력을 수십 건씩 넘기므로 건마다
+    질의하지 않고 구역·단말 id 를 모아 종류별로 한 번씩만 읽는다.
+    """
+    if scope.all_villages:
+        return [True] * len(events)
+    if scope.is_empty:
+        return [False] * len(events)
+
+    zone_ids: set[int] = set()
+    macs: set[str] = set()
+    for e in events:
+        try:
+            if e.target_scope == "zone":
+                zone_ids.update(int(z) for z in e.target_ids)
+            elif e.target_scope == "device":
+                macs.update(str(m) for m in e.target_ids)
+        except ValueError:
+            continue
+
+    zone_village: dict[int, int] = {}
+    if zone_ids:
+        zone_village = dict(
+            (
+                await db.execute(select(Zone.id, Zone.village_id).where(Zone.id.in_(zone_ids)))
+            ).all()
+        )
+    mac_village: dict[str, int | None] = {}
+    if macs:
+        mac_village = dict(
+            (
+                await db.execute(select(Device.mac, Device.village_id).where(Device.mac.in_(macs)))
+            ).all()
+        )
+
+    out: list[bool] = []
+    for e in events:
+        if e.target_scope == "all":
+            # 전체 방송은 내 마을에도 나갔다. 보여야 멈출 수도 있다.
+            out.append(True)
+        elif e.target_scope == "village":
+            out.append(any(_as_int(v) in scope.village_ids for v in e.target_ids))
+        elif e.target_scope == "zone":
+            out.append(
+                any(scope.allows(zone_village.get(_as_int(z))) for z in e.target_ids)
+            )
+        else:
+            out.append(any(scope.allows(mac_village.get(str(m))) for m in e.target_ids))
+    return out
+
+
+async def event_visible_to(db: AsyncSession, event: Any, scope: VillageScope) -> bool:
+    return (await events_visible_to(db, [event], scope))[0]
 
 #: 이름을 몇 개까지 늘어놓을지. 넘으면 "외 N곳"으로 접는다.
 _LABEL_HEAD = 2
@@ -451,10 +515,15 @@ async def update_device(
     publisher: MqttPublisher,
     *,
     config_version: int,
+    can_move: bool = True,
 ) -> DeviceDetail:
     """단말 수정. 마을 배정이 바뀌면 CONFIG 를 다시 내려보낸다.
 
     보낸 필드만 반영한다(exclude_unset) — null 을 명시하면 해제, 생략하면 미변경이다.
+
+    can_move=False 면 마을 이동을 거절한다. 이장은 자기 마을 안에서 별칭·위치·구역만
+    고치고, 마을 사이 이동은 시·군 이상이 한다(관리자 계층 설계 §5·§6.1). 출발 마을은
+    위의 ensure_allowed 가, 도착 마을은 _validate_assignment 가 관할을 본다.
     """
     device = await db.get(Device, mac)
     if device is None:
@@ -464,6 +533,12 @@ async def update_device(
     data = payload.model_dump(exclude_unset=True)
     new_village = data.get("village_id", device.village_id)
     new_zone = data.get("zone_id", device.zone_id)
+
+    if not can_move and new_village != device.village_id:
+        raise ApiError(
+            "단말의 마을 이동은 시·군 관리자 이상이 할 수 있습니다.",
+            code="DEVICE_MOVE_REQUIRES_ORG_ADMIN",
+        )
 
     # 마을이 바뀌는데 구역을 같이 안 보냈으면 구역은 자동 해제한다(다른 마을 구역이 남으면 안 된다).
     if "village_id" in data and new_village != device.village_id and "zone_id" not in data:

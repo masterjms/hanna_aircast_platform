@@ -39,17 +39,22 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 ### 1.3 역할과 범위
 
-| 역할 | 범위 |
-|---|---|
-| `super_admin` | 모든 마을, 전체 방송, 미배정 단말, 시스템 설정·조직·계정 관리 |
-| `village_admin` | `user_villages`에 지정된 마을의 조회·단말·방송 기능 |
+네 계층이다([관리자 계층 설계](../spec/xWIFI_관리자_계층_설계_260908.md)). 범위는 조직 트리(`organizations`)를 따르고 주소와 무관하다.
 
-권한은 두 단계다.
+| 역할 | 계층 | 범위 |
+|---|---:|---|
+| `super_admin` | 3 | 모든 마을, 전체 방송, 미배정 단말, 설정·기관·단말 등록·삭제 |
+| `sido_admin` | 2 | 소속 시·도 기관과 그 하위 시·군 기관에 속한 마을 |
+| `sigungu_admin` | 1 | 소속 시·군 기관에 속한 마을 |
+| `village_admin` | 0 | `user_villages`에 지정된 마을 |
 
-1. 전용 기능은 `super_admin` guard로 제한한다.
-2. 일반 조회·제어는 `VillageScope`로 쿼리를 필터하고 요청 대상을 검사한다.
+권한은 세 단계다.
 
-미배정 단말은 어떤 마을에도 속하지 않으므로 `super_admin`만 볼 수 있다. `all` 방송도 `super_admin`만 가능하다.
+1. `super_admin` 전용 기능은 `SuperAdmin` guard로 제한한다.
+2. 마을·구역(관할)·계정 관리는 `OrgAdmin` guard(시·군 이상)로 제한하고, 그 안에서 "출발지·도착지가 모두 내 관할", "나보다 낮은 계층만"을 service가 검사한다.
+3. 일반 조회·제어는 `VillageScope`로 쿼리를 필터하고 요청 대상을 검사한다. 역할 → 마을 집합은 `app/core/authz.resolve_scope`가 만들며 그 아래 계층은 역할을 모른다.
+
+미배정 단말은 어떤 마을에도 속하지 않으므로 `super_admin`만 볼 수 있다. `all` 방송도 `super_admin`만 가능하다. 기관이 없는 시·도/시·군 관리자와 담당 마을이 없는 마을 관리자는 빈 범위다.
 
 ### 1.4 에러 응답
 
@@ -200,13 +205,25 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 |---|---|---|---|
 | GET | `/api/villages` | 로그인·범위 적용 | 접근 가능한 마을 목록 |
 | GET | `/api/villages/{id}` | 로그인·범위 적용 | 마을 한 건 |
-| POST | `/api/villages` | `super_admin` | 마을 생성 |
-| PATCH | `/api/villages/{id}` | `super_admin` | 마을 부분 수정 |
-| DELETE | `/api/villages/{id}` | `super_admin` | 마을 삭제, 단말은 미배정으로 유지 |
+| POST | `/api/villages` | 시·군 이상, 관할 안 | 마을 생성. 시·군 관리자는 자기 기관으로 고정 |
+| PATCH | `/api/villages/{id}` | 시·군 이상, 관할 안 | 마을 부분 수정. `organization_id` 변경은 출발·도착 기관 모두 관할이어야 함 |
+| DELETE | `/api/villages/{id}` | 시·군 이상, 관할 안 | 마을 삭제, 단말은 미배정으로 유지 |
 | GET | `/api/villages/{id}/zones` | 로그인·범위 적용 | 구역 목록 |
-| POST | `/api/villages/{id}/zones` | `super_admin` | 구역 생성 |
-| PATCH | `/api/zones/{id}` | `super_admin` | 구역 수정 |
-| DELETE | `/api/zones/{id}` | `super_admin` | 구역 삭제, 단말의 zone은 NULL |
+| POST | `/api/villages/{id}/zones` | 로그인·범위 적용 | 구역 생성 (이장도 자기 마을 구역은 만든다) |
+| PATCH | `/api/zones/{id}` | 로그인·범위 적용 | 구역 수정 |
+| DELETE | `/api/zones/{id}` | 로그인·범위 적용 | 구역 삭제, 단말의 zone은 NULL |
+
+기관 API:
+
+| Method | Path | 권한 | 설명 |
+|---|---|---|---|
+| GET | `/api/organizations` | 로그인 | 내 관할 기관 목록. 마을·계정 수 포함 |
+| GET | `/api/organizations/suggest?b_code=` | 로그인 | 법정동코드로 관리 기관 제안. 제안일 뿐 권한과 무관 |
+| POST | `/api/organizations` | `super_admin` | 기관 생성 (`name`, `level: sido\|sigungu`, `parent_id`, `jurisdiction_code`) |
+| PATCH | `/api/organizations/{id}` | `super_admin` | 이름·상위·관할 코드 수정. 수준은 못 바꿈 |
+| DELETE | `/api/organizations/{id}` | `super_admin` | 소속 마을·계정·하위 기관이 있으면 `ORGANIZATION_IN_USE` |
+
+마을 body에 `organization_id`가 있다. NULL이면 `super_admin`만 보는 마을이다.
 
 ### 4.2 마을 생성·수정 body
 
@@ -249,13 +266,13 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 ## 5. 계정 API
 
-모든 계정 API는 `super_admin` 전용이다.
+시·군 관리자 이상이 쓴다. **나보다 낮은 계층의 계정만** 보이고 만들고 고칠 수 있다(`TIER_TOO_LOW`). 그 계정의 범위(기관 또는 담당 마을)가 내 관할 안이어야 한다.
 
 | Method | Path | 설명 |
 |---|---|---|
-| GET | `/api/users` | 계정 목록 |
+| GET | `/api/users` | 내가 관리할 수 있는 계정 목록 |
 | POST | `/api/users` | 계정 생성 |
-| PATCH | `/api/users/{id}` | 비밀번호·역할·담당 마을·사용 기간 수정 |
+| PATCH | `/api/users/{id}` | 비밀번호·역할·기관·담당 마을·사용 기간 수정 |
 | DELETE | `/api/users/{id}` | 계정 삭제 |
 
 생성 body:
@@ -265,14 +282,17 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
   "username": "village.operator",
   "password": "at-least-8",
   "role": "village_admin",
-  "village_ids": [1, 2]
+  "village_ids": [1, 2],
+  "organization_id": null,
+  "valid_days": 15
 }
 ```
 
 - username: 3~50자, 영문·숫자·`.`·`_`·`-`
 - password: 8~64자이며 bcrypt 72바이트 한계 내여야 함
-- `village_ids`는 중복 제거·정렬
-- `super_admin`에는 담당 마을 목록을 지정할 수 없음
+- `sido_admin`·`sigungu_admin`은 `organization_id`가 필수이고 수준이 역할과 맞아야 함(`ORG_LEVEL_MISMATCH`). 담당 마을은 지정하지 않음
+- `village_admin`은 `village_ids`로 범위를 정하고 `organization_id`는 null. 마을은 전부 내 관할 안이어야 함
+- `super_admin`에는 담당 마을·기관 모두 지정할 수 없음
 - 자기 계정 삭제와 마지막 `super_admin` 삭제는 거부
 
 PATCH에서 생략한 필드는 유지한다.
@@ -352,9 +372,11 @@ PATCH에서 생략한 필드는 유지한다.
 | Method | Path | 설명 |
 |---|---|---|
 | PATCH | `/api/devices/{mac}` | label, 마을·구역, 주소·좌표 부분 수정 |
-| DELETE | `/api/devices/{mac}` | 단말 삭제, credential·ACL·retained CONFIG 정리 |
+| DELETE | `/api/devices/{mac}` | `super_admin`. 단말 삭제, credential·ACL·retained CONFIG 정리 |
 
 PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유지, `village_id: null`이면 배정 해제다. 마을 배정이 바뀌면 CONFIG와 ACL을 다시 배포한다.
+
+마을 이동은 시·군 관리자 이상만 한다(`DEVICE_MOVE_REQUIRES_ORG_ADMIN`). 출발 마을과 도착 마을이 모두 내 범위여야 하므로 군을 넘는 이동은 시·도나 `super_admin`이 한다. 이장은 자기 마을 안에서 별칭·위치·구역만 고친다.
 
 설치 위치 필드는 `road_address`, `jibun_address`, `address_detail`, `lat`, `lng`다. 좌표가 없으면 지도 API가 zone, village 순으로 fallback한다.
 
@@ -535,7 +557,7 @@ TTS 요청:
 | GET | `/api/broadcast/active` | 접근 범위의 진행 방송 |
 | GET | `/api/broadcast/{event_id}` | 한 방송과 단말별 결과 |
 
-현재 `village_admin`의 방송 조회·중지 가시성은 `target_scope=village`이고 `target_ids`에 담당 마을이 직접 들어 있는 경우만 허용한다. 따라서 담당 마을의 `device` 또는 `zone` 대상으로 방송을 시작할 수는 있지만, 시작 후 active 목록·상세·stop에서는 해당 방송이 보이지 않는 구현 제한이 있다. 대상 MAC의 소속 마을로 판정하도록 백엔드를 보완하기 전까지 운영에서는 village 단위 방송을 사용하거나 `super_admin`이 중지를 담당해야 한다.
+가시성은 **대상 단말의 소속 마을 중 하나라도 내 범위면 보인다**로 판정한다(`device_service.events_visible_to`). `village`는 대상 마을, `zone`은 구역의 마을, `device`는 단말의 마을, `all`은 범위가 비어 있지 않으면 보인다. 보이면 중지할 수 있다 — 자기 마을 스피커에서 나가는 소리를 멈출 권한은 누구에게나 있어야 한다. 대시보드의 진행 중·최근 이력도 같은 판정을 쓴다.
 
 방송 응답 주요 구조:
 

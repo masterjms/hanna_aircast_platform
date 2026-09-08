@@ -54,12 +54,18 @@ STATUS 메시지를 백엔드가 구독하다가, devices 테이블에 없는 MA
 
 개행은 LF(`0x0A`) 고정이고 **모든 명령 줄은 개행으로 끝난다 — `@END` 앞에도 개행이 필요하다** (2026-08-31 실물 단말 로그로 확정: 파서는 줄 단위로 먼저 자른 뒤 `@KEY=VALUE`를 읽는다). `@MQTTPW=<값>@END`처럼 한 줄에 붙이면 `@END`까지 비밀번호에 들어가 브로커 인증이 조용히 실패한다 — 신규 등록 첫 실물 테스트에서 실제로 발생했던 사고다. 구현은 `frontend/src/lib/serial.ts` 한 곳에 모아 두 화면이 갈라지지 않게 했다.
 
-## 3. 마을 / 구역
+## 3. 기관 / 마을 / 구역
 
 ```
+GET    /api/organizations                내 관할 기관 (마을·계정 수 포함)
+GET    /api/organizations/suggest?b_code= 법정동코드로 관리 기관 제안 (제안일 뿐)
+POST   /api/organizations                {name, level: sido|sigungu, parent_id, jurisdiction_code}   super_admin
+PATCH  /api/organizations/:id                                                                          super_admin
+DELETE /api/organizations/:id            소속 마을·계정·하위 기관 있으면 ORGANIZATION_IN_USE            super_admin
+
 GET    /api/villages            목록 (역할 범위)
-POST   /api/villages            생성 {name, sido, sigungu, address_detail}
-PATCH  /api/villages/:id
+POST   /api/villages            생성 {name, organization_id, sido, sigungu, address_detail, …}
+PATCH  /api/villages/:id        organization_id 변경 = 관리 기관 이관(출발·도착 모두 관할이어야)
 DELETE /api/villages/:id
 
 GET    /api/villages/:id/zones
@@ -68,7 +74,7 @@ PATCH  /api/zones/:id
 DELETE /api/zones/:id
 ```
 
-권한: 마을 생성/삭제는 super_admin만. village_admin은 자기 담당 마을 내 구역 관리까지만.
+**권한 (2026-09-08, [관리자 계층 설계](xWIFI_관리자_계층_설계_260908.md))**: 관리자는 최고 > 시·도 > 시·군 > 마을 네 계층이고 범위는 조직 트리를 따른다 — 마을의 주소는 트리의 입력값이 아니다(위탁 마을). 마을 생성·수정·삭제는 시·군 이상이 관할 안에서, 구역은 이장도 자기 마을 안에서, 기관은 최고 관리자만. 계정(`/api/users`)은 시·군 이상이 **자기보다 낮은 계층**만 만들고 고친다. 단말 마을 이동은 시·군 이상, 신규 단말 등록·삭제·OTA·CONFIG 는 최고 관리자만. 진행 중 방송은 대상 단말의 소속 마을 기준으로 보이고, 보이면 중지할 수 있다.
 
 **마을 경계 (2026-09-03)**: `villages.boundary` 에 GeoJSON geometry(WGS84)를 넣으면 대시보드 지도가 마을 영역을 그린다. 값은 `PATCH /api/villages/{id}` 의 `boundary` 로 들어가고, 넣는 것은 사람이 아니라 `scripts/import_boundaries.py`(담당자 PC 에서 실행)다. 목록 응답에는 도형 대신 `has_boundary` 불리언만 실린다 — 행마다 수십 KB 가 붙으면 화면이 느려진다. 도형 자체는 `GET /api/dashboard/map` 으로만 내려간다. 데이터 출처와 이용조건은 지도 설계 §4.8.
 

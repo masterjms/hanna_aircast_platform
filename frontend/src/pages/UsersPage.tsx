@@ -1,5 +1,8 @@
 /**
- * 계정 관리 (super_admin).
+ * 계정 관리 (시·군 관리자 이상) — 관리자 계층 설계 §5·§9.
+ *
+ * 나보다 낮은 계층의 계정만 보이고 만들 수 있다. 역할 드롭다운이 그만큼만 나온다.
+ * 시·도/시·군 관리자는 기관으로, 이장은 담당 마을로 범위가 정해진다.
  *
  * village_admin 은 담당 마을을 반드시 지정해야 의미가 있다 — 비워두면
  * 로그인은 되지만 아무것도 못 보는 계정이 된다. 화면에서 경고로 알려준다.
@@ -8,15 +11,17 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
-import type { Role, User, Village } from '../api/types';
+import type { Organization, Role, User, Village } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../components/Modal';
+import { ROLE_LABEL, isOrgRole, manageableRoles } from '../lib/roles';
 
 interface FormState {
   username: string;
   password: string;
   role: Role;
   village_ids: number[];
+  organization_id: number | '';
   /** 사용 기간(일). '' 는 무기한. */
   valid_days: number | '';
 }
@@ -31,6 +36,7 @@ const EMPTY: FormState = {
   password: '',
   role: 'village_admin',
   village_ids: [],
+  organization_id: '',
   valid_days: VALID_DAYS_DEFAULT,
 };
 
@@ -51,6 +57,9 @@ export function UsersPage() {
   const { user: me } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [villages, setVillages] = useState<Village[]>([]);
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  // 내가 만들 수 있는 역할 — 나보다 낮은 계층 전부.
+  const roleOptions = me ? manageableRoles(me.role) : [];
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -63,9 +72,14 @@ export function UsersPage() {
 
   const load = useCallback(async () => {
     try {
-      const [u, v] = await Promise.all([api.users.list(), api.villages.list()]);
+      const [u, v, o] = await Promise.all([
+        api.users.list(),
+        api.villages.list(),
+        api.organizations.list(),
+      ]);
       setUsers(u);
       setVillages(v);
+      setOrgs(o);
     } catch (err) {
       fail(err, '계정 목록을 불러오지 못했습니다.');
     } finally {
@@ -87,7 +101,8 @@ export function UsersPage() {
           username: form.username.trim(),
           password: form.password,
           role: form.role,
-          village_ids: form.role === 'super_admin' ? [] : form.village_ids,
+          village_ids: form.role === 'village_admin' ? form.village_ids : [],
+          organization_id: isOrgRole(form.role) && form.organization_id !== '' ? form.organization_id : null,
           valid_days: form.valid_days === '' ? null : form.valid_days,
         });
       } else {
@@ -96,7 +111,8 @@ export function UsersPage() {
         await api.users.update(editingId, {
           ...(form.password ? { password: form.password } : {}),
           role: form.role,
-          ...(form.role === 'super_admin' ? {} : { village_ids: form.village_ids }),
+          village_ids: form.role === 'village_admin' ? form.village_ids : [],
+          organization_id: isOrgRole(form.role) && form.organization_id !== '' ? form.organization_id : null,
           valid_days: form.valid_days === '' ? null : form.valid_days,
         });
       }
@@ -140,7 +156,14 @@ export function UsersPage() {
   const canSubmit =
     form !== null &&
     (editingId !== null || (form.username.trim().length >= 3 && form.password.length >= 8)) &&
-    (form.password === '' || form.password.length >= 8);
+    (form.password === '' || form.password.length >= 8) &&
+    // 기관형 역할은 기관이 있어야 범위가 생긴다.
+    (!isOrgRole(form.role) || form.organization_id !== '');
+
+  // 역할에 맞는 수준의 기관만 고른다 — 시·도 관리자는 시·도 기관, 시·군 관리자는 시·군 기관.
+  const orgOptions = form
+    ? orgs.filter((o) => o.level === (form.role === 'sido_admin' ? 'sido' : 'sigungu'))
+    : [];
 
   return (
     <>
@@ -176,7 +199,7 @@ export function UsersPage() {
               <tr>
                 <th>아이디</th>
                 <th>역할</th>
-                <th>담당 마을</th>
+                <th>범위</th>
                 <th>사용 기간</th>
                 <th>생성</th>
                 <th />
@@ -191,12 +214,14 @@ export function UsersPage() {
                   </td>
                   <td>
                     <span className={`badge badge--${u.role === 'super_admin' ? 'ok' : 'idle'}`}>
-                      {u.role === 'super_admin' ? '최고 관리자' : '마을 관리자'}
+                      {ROLE_LABEL[u.role]}
                     </span>
                   </td>
                   <td>
                     {u.role === 'super_admin' ? (
                       <span className="dim">전체</span>
+                    ) : isOrgRole(u.role) ? (
+                      u.organization_name ?? <span className="badge badge--warn">소속 기관 없음</span>
                     ) : u.village_ids.length === 0 ? (
                       <span className="badge badge--warn">담당 마을 없음</span>
                     ) : (
@@ -218,6 +243,7 @@ export function UsersPage() {
                           password: '',
                           role: u.role,
                           village_ids: [...u.village_ids],
+                          organization_id: u.organization_id ?? '',
                           valid_days: u.expires_at === null ? '' : VALID_DAYS_DEFAULT,
                         });
                       }}
@@ -331,12 +357,53 @@ export function UsersPage() {
             <select
               id="u-role"
               value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value as Role })}
+              onChange={(e) =>
+                // 역할이 바뀌면 소속도 다시 고른다 — 시·도 기관을 시·군 관리자에게 줄 수 없다.
+                setForm({ ...form, role: e.target.value as Role, organization_id: '' })
+              }
             >
-              <option value="village_admin">마을 관리자</option>
-              <option value="super_admin">최고 관리자</option>
+              {roleOptions.map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_LABEL[r]}
+                </option>
+              ))}
             </select>
           </div>
+
+          {isOrgRole(form.role) && (
+            <div className="field">
+              <label htmlFor="u-org">소속 기관</label>
+              <select
+                id="u-org"
+                value={form.organization_id}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    organization_id: e.target.value === '' ? '' : Number(e.target.value),
+                  })
+                }
+              >
+                <option value="">선택하세요</option>
+                {orgOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                    {o.parent_name ? ` (${o.parent_name})` : ''}
+                  </option>
+                ))}
+              </select>
+              {orgOptions.length === 0 ? (
+                <p className="hint hint--warn">
+                  고를 수 있는 {form.role === 'sido_admin' ? '시·도' : '시·군'} 기관이 없습니다. 기관 관리에서 먼저 만드세요.
+                </p>
+              ) : (
+                <p className="hint">
+                  {form.role === 'sido_admin'
+                    ? '이 시·도 아래 시·군 기관들의 마을을 모두 봅니다.'
+                    : '이 기관에 소속된 마을을 모두 봅니다. 주소가 아니라 마을에 지정한 소속 기준입니다.'}
+                </p>
+              )}
+            </div>
+          )}
 
           {form.role === 'village_admin' && (
             <div className="field">

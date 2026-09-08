@@ -1,19 +1,24 @@
 /**
- * 마을 관리 (super_admin).
+ * 마을 관리 (시·군 관리자 이상) — 관리자 계층 설계 §5·§9.
  *
  * 마을을 고르면 우측에 그 마을의 구역이 나온다. 구역은 마을 안에서만 의미가 있어서
  * 별도 화면으로 두지 않고 여기 붙였다.
+ *
+ * 관리 기관은 주소와 별개다(설계 §1). 주소를 고르면 법정동코드로 기관을 제안하지만
+ * 사람이 바꿀 수 있다 — 주소상 다른 군에 있는 마을을 이 군청이 관리하는 위탁이 흔하다.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
-import type { Village, VillageInput, Zone } from '../api/types';
+import type { Organization, Village, VillageInput, Zone } from '../api/types';
+import { useAuth } from '../auth/AuthContext';
 import { AddressSearchField } from '../components/AddressSearchField';
 import { Modal } from '../components/Modal';
 
 const EMPTY_VILLAGE: VillageInput = {
   name: '',
+  organization_id: null,
   sido: '',
   sigungu: '',
   address_detail: '',
@@ -30,7 +35,11 @@ function coord(v: string): number | null {
 }
 
 export function VillagesPage() {
+  const { user: me, isSuperAdmin } = useAuth();
   const [villages, setVillages] = useState<Village[]>([]);
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  // 시·군 관리자는 기관을 고르지 않는다 — 자기 기관으로 고정된다(서버도 강제한다).
+  const orgLocked = me?.role === 'sigungu_admin';
   const [selected, setSelected] = useState<number | null>(null);
   const [zones, setZones] = useState<Zone[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -46,7 +55,8 @@ export function VillagesPage() {
 
   const loadVillages = useCallback(async () => {
     try {
-      const list = await api.villages.list();
+      const [list, orgList] = await Promise.all([api.villages.list(), api.organizations.list()]);
+      setOrgs(orgList.filter((o) => o.level === 'sigungu' || isSuperAdmin));
       setVillages(list);
       setSelected((cur) => cur ?? list[0]?.id ?? null);
     } catch (err) {
@@ -187,6 +197,7 @@ export function VillagesPage() {
                 <tr>
                   <th>마을</th>
                   <th>지역</th>
+                  <th>관리 기관</th>
                   <th className="mono">village_id</th>
                   <th className="num">단말</th>
                   <th />
@@ -202,6 +213,13 @@ export function VillagesPage() {
                   >
                     <td className="strong">{v.name}</td>
                     <td>{[v.sido, v.sigungu].filter(Boolean).join(' ') || '—'}</td>
+                    <td>
+                      {v.organization_name ?? (
+                        <span className="badge badge--warn" title="최고 관리자만 보는 마을입니다">
+                          기관 없음
+                        </span>
+                      )}
+                    </td>
                     <td className="mono">{v.village_token}</td>
                     <td className="num">{v.device_count}</td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
@@ -213,6 +231,7 @@ export function VillagesPage() {
                           setEditingId(v.id);
                           setVillageForm({
                             name: v.name,
+                            organization_id: v.organization_id,
                             sido: v.sido ?? '',
                             sigungu: v.sigungu ?? '',
                             address_detail: v.address_detail ?? '',
@@ -333,6 +352,34 @@ export function VillagesPage() {
               onChange={(e) => setVillageForm({ ...villageForm, name: e.target.value })}
             />
           </div>
+
+          {!orgLocked && (
+            <div className="field">
+              <label htmlFor="v-org">관리 기관</label>
+              <select
+                id="v-org"
+                value={villageForm.organization_id ?? ''}
+                onChange={(e) =>
+                  setVillageForm({
+                    ...villageForm,
+                    organization_id: e.target.value === '' ? null : Number(e.target.value),
+                  })
+                }
+              >
+                <option value="">{isSuperAdmin ? '(없음 — 최고 관리자만 봄)' : '선택하세요'}</option>
+                {orgs.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                    {o.parent_name ? ` (${o.parent_name})` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="hint">
+                이 마을을 누가 관리하는지입니다. 주소와 무관하게 정할 수 있습니다 — 주소를 고르면
+                법정동코드로 제안하지만 그대로 두지 않아도 됩니다.
+              </p>
+            </div>
+          )}
           <div className="field-row">
             <div className="field">
               <label htmlFor="v-sido">시/도</label>
@@ -366,16 +413,28 @@ export function VillagesPage() {
           {/* 대표 주소 — 검색 한 번으로 도로명·지번·법정동코드·좌표가 같이 채워진다.
               코드·좌표를 손으로 치게 두지 않는다(지도 설계 §3). */}
           <AddressSearchField
-            onSelect={(r) =>
-              setVillageForm({
+            onSelect={(r) => {
+              const next: VillageInput = {
                 ...villageForm,
                 road_address: r.road_address,
                 jibun_address: r.jibun_address ?? r.address_name,
                 b_code: r.b_code,
                 lat: r.lat,
                 lng: r.lng,
-              })
-            }
+              };
+              setVillageForm(next);
+              // 기관을 아직 안 골랐을 때만 주소로 제안한다. 이미 고른 값은 덮지 않는다 —
+              // 위탁 마을은 주소와 다른 기관이 맞는 값이다(설계 §1).
+              if (!orgLocked && r.b_code && next.organization_id == null) {
+                void api.organizations
+                  .suggest(r.b_code)
+                  .then(({ organization_id }) => {
+                    if (organization_id !== null)
+                      setVillageForm((f) => (f ? { ...f, organization_id } : f));
+                  })
+                  .catch(() => undefined);
+              }
+            }}
           />
           {(villageForm.jibun_address || villageForm.road_address) && (
             <p className="hint">

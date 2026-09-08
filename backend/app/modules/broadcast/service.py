@@ -366,21 +366,16 @@ async def _to_out(
 async def list_active(
     db: AsyncSession, scope: VillageScope, registry: LiveRegistry | None = None
 ) -> list[BroadcastOut]:
-    """진행 중인 방송. village_admin 에게는 자기 마을 대상만 보여준다."""
+    """진행 중인 방송. 대상 단말의 마을이 내 범위에 하나라도 걸리면 보인다(설계 §8)."""
     events = await _active_events(db)
-    visible = [e for e in events if _visible_to(e, scope)]
-    return [await _to_out(db, e, registry) for e in visible]
+    flags = await device_service.events_visible_to(db, events, scope)
+    return [await _to_out(db, e, registry) for e, ok in zip(events, flags, strict=True) if ok]
 
 
-def _visible_to(event: BroadcastEvent, scope: VillageScope) -> bool:
-    if scope.all_villages:
-        return True
-    if event.target_scope == TargetScope.VILLAGE.value and event.target_ids:
-        # 대상 마을 중 하나라도 담당이면 보인다 — 다중 마을 방송은 관련된
-        # 모든 village_admin 이 봐야 중지도 할 수 있다.
-        return any(int(v) in scope.village_ids for v in event.target_ids)
-    # device/zone/all 대상은 마을을 바로 알 수 없다. 보수적으로 감춘다.
-    return False
+async def _visible_to(db: AsyncSession, event: BroadcastEvent, scope: VillageScope) -> bool:
+    """보이면 중지할 수도 있다 — 자기 마을 스피커에서 나가는 소리를 멈출 권한은
+    누구에게나 있어야 한다(설계 §8)."""
+    return await device_service.event_visible_to(db, event, scope)
 
 
 async def get_broadcast(
@@ -389,7 +384,7 @@ async def get_broadcast(
     event = await db.get(BroadcastEvent, event_id)
     if event is None:
         raise BroadcastNotFound()
-    if not _visible_to(event, scope):
+    if not await _visible_to(db, event, scope):
         raise BroadcastNotFound()
     return await _to_out(db, event, registry)
 
@@ -759,7 +754,7 @@ async def stop_file_broadcast(
     event = await db.get(BroadcastEvent, event_id)
     if event is None:
         raise BroadcastNotFound()
-    if not _visible_to(event, scope):
+    if not await _visible_to(db, event, scope):
         raise BroadcastNotFound()
     if event.ended_at is not None:
         raise ApiError("이미 종료된 방송입니다.", code="BROADCAST_ALREADY_ENDED")
@@ -999,7 +994,7 @@ async def stop_live_broadcast(
     event = await db.get(BroadcastEvent, event_id)
     if event is None:
         raise BroadcastNotFound()
-    if not _visible_to(event, scope):
+    if not await _visible_to(db, event, scope):
         raise BroadcastNotFound()
     if event.ended_at is not None:
         raise ApiError("이미 종료된 방송입니다.", code="BROADCAST_ALREADY_ENDED")

@@ -14,7 +14,7 @@ from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel
-from sqlalchemy import Select, false, not_, or_, select
+from sqlalchemy import Select, not_, select
 from sqlalchemy.orm import aliased
 
 from app.config import settings
@@ -131,27 +131,27 @@ def _scoped_devices(stmt: Select, scope: VillageScope) -> Select:
     return stmt.where(Device.village_id.in_(scope.village_ids))
 
 
-def _scoped_events(stmt: Select, scope: VillageScope) -> Select:
-    """이력의 마을 범위 필터.
+async def _visible_events(
+    db, stmt: Select, scope: VillageScope, *, limit: int | None = None
+) -> list[BroadcastEvent]:
+    """이력을 범위로 거른다 — 대상 단말의 마을이 내 범위에 걸리는 행(설계 §8).
 
-    broadcast_events 에는 village_id 컬럼이 없고 target_scope/target_id 로만 대상이 남는다.
-    그래서 village_admin 에게는 '내 마을을 대상으로 한 행'만 보여준다.
-    전체(all) 방송은 담당 마을에도 나갔지만 대상 표기가 'all' 이라 여기서는 제외된다.
-
-    ⚠ Phase 3 에서 방송 이력이 실제로 쌓이기 시작하면, 이 필터는 device_events 조인으로
-      "내 마을 단말이 실제로 받은 방송"을 기준으로 바꾸는 게 정확하다.
+    broadcast_events 에는 village_id 컬럼이 없고 target_scope/target_ids 로만 대상이
+    남아서 SQL 로 바로 거르기 어렵다. 예전에는 village 대상만 JSONB contains 로
+    걸렀고 device·zone·all 은 빠졌다. 지금은 후보를 넉넉히 읽어 같은 판정으로 거른다.
     """
     if scope.all_villages:
-        return stmt
+        rows = list((await db.scalars(stmt.limit(limit) if limit else stmt)).all())
+        return rows
     if scope.is_empty:
-        # 담당 마을이 없으면 볼 수 있는 이력도 없다.
-        return stmt.where(false())
-    # target_ids 는 JSONB 목록이다. "내 마을 중 하나라도 대상에 들어 있는 행"을
-    # @>(contains) 를 마을별로 OR 해서 찾는다 — 이력 테이블 규모에서는 충분하다.
-    return stmt.where(
-        BroadcastEvent.target_scope == "village",
-        or_(*[BroadcastEvent.target_ids.contains([str(v)]) for v in sorted(scope.village_ids)]),
-    )
+        return []
+    # 범위 밖 행이 섞여 있으니 원하는 수의 몇 배를 읽고 거른다. 이력 화면은 최근
+    # 10건이라 50건이면 충분하고, 진행 중 방송은 애초에 몇 건 안 된다.
+    candidate = stmt.limit(limit * 5) if limit else stmt
+    rows = list((await db.scalars(candidate)).all())
+    flags = await device_service.events_visible_to(db, rows, scope)
+    visible = [e for e, ok in zip(rows, flags, strict=True) if ok]
+    return visible[:limit] if limit else visible
 
 
 @router.get("/summary", response_model=SummaryOut)
@@ -181,13 +181,13 @@ async def summary(db: Db, scope: Scope) -> SummaryOut:
         for d, vname in (await db.execute(alert_stmt)).all()
     ]
 
-    active_stmt = _scoped_events(
+    active_rows = await _visible_events(
+        db,
         select(BroadcastEvent)
         .where(BroadcastEvent.ended_at.is_(None))
         .order_by(BroadcastEvent.triggered_at.desc()),
         scope,
     )
-    active_rows = list((await db.scalars(active_stmt)).all())
     active = [
         ActiveBroadcast.model_validate(e, from_attributes=True).model_copy(
             update={"target_label": label}
@@ -201,13 +201,12 @@ async def summary(db: Db, scope: Scope) -> SummaryOut:
         )
     ]
 
-    recent_stmt = _scoped_events(
-        select(BroadcastEvent)
-        .order_by(BroadcastEvent.triggered_at.desc())
-        .limit(_RECENT_EVENT_LIMIT),
+    recent_rows = await _visible_events(
+        db,
+        select(BroadcastEvent).order_by(BroadcastEvent.triggered_at.desc()),
         scope,
+        limit=_RECENT_EVENT_LIMIT,
     )
-    recent_rows = list((await db.scalars(recent_stmt)).all())
     recent = [
         RecentEvent.model_validate(e, from_attributes=True).model_copy(
             update={"target_label": label}

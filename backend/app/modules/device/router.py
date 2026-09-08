@@ -6,8 +6,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
-from app.core import mqtt_accounts
-from app.core.deps import Db, Publisher, Scope, SuperAdmin
+from app.core import authz, mqtt_accounts
+from app.core.deps import CurrentUser, Db, Publisher, Scope, SuperAdmin
 from app.modules.device import service
 from app.modules.system import service as system_service
 from app.mqtt.topics import normalize_mac
@@ -102,12 +102,21 @@ async def update_device(
     payload: DeviceUpdate,
     db: Db,
     scope: Scope,
+    user: CurrentUser,
     publisher: Publisher,
 ) -> DeviceDetail:
-    """별칭 · 마을 · 구역 수정. 마을이 바뀌면 CONFIG 를 단말에 내려보낸다."""
+    """별칭 · 마을 · 구역 수정. 마을이 바뀌면 CONFIG 를 단말에 내려보낸다.
+
+    마을 이동은 시·군 관리자 이상만(설계 §6.1). 이장은 자기 마을 안의 값만 고친다."""
     version = await system_service.config_version(db)
     return await service.update_device(
-        db, mac, payload, scope, publisher, config_version=version
+        db,
+        mac,
+        payload,
+        scope,
+        publisher,
+        config_version=version,
+        can_move=user.role in authz.ORG_ADMIN_ROLES,
     )
 
 
@@ -116,6 +125,8 @@ async def delete_device(
     mac: MacPath,
     db: Db,
     scope: Scope,
+    _: SuperAdmin,
     publisher: Publisher,
 ) -> None:
+    """단말 삭제 — 최고 관리자만(설계 §5). MQTT 계정 삭제까지 같이 일어나는 파괴적 작업."""
     await service.delete_device(db, mac, scope, publisher)

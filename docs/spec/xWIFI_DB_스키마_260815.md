@@ -35,12 +35,27 @@ village_id를 정수 PK로 두고 MQTT로 나갈 때만 8자리 문자열로 바
 
 ## 2. 계정 / 권한
 
+**2026-09-08 관리자 4계층** — [관리자 계층 설계](xWIFI_관리자_계층_설계_260908.md). 권한은 조직 트리(`organizations`)를 따르고 마을의 주소는 트리의 입력값이 아니다.
+
 ```sql
+CREATE TABLE organizations (
+    id                 SERIAL PRIMARY KEY,
+    name               VARCHAR(100) NOT NULL,          -- 예: 금산군청, 충청남도청
+    level              VARCHAR(20) NOT NULL CHECK (level IN ('sido', 'sigungu')),
+    parent_id          INTEGER REFERENCES organizations(id) ON DELETE RESTRICT,  -- sigungu 의 상위 sido
+    jurisdiction_code  VARCHAR(5),                     -- 법정동코드 앞자리. 마을 생성 때 기관 제안용, 권한 판정엔 안 씀
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- villages.organization_id INTEGER REFERENCES organizations(id) ON DELETE RESTRICT  -- 이 마을을 관리하는 기관 (0015)
+
 CREATE TABLE users (
     id              SERIAL PRIMARY KEY,
     username        VARCHAR(50) UNIQUE NOT NULL,
     password_hash   VARCHAR(255) NOT NULL,
-    role            VARCHAR(20) NOT NULL CHECK (role IN ('super_admin', 'village_admin')),
+    role            VARCHAR(20) NOT NULL CHECK (role IN ('super_admin', 'sido_admin', 'sigungu_admin', 'village_admin')),
+    organization_id INTEGER REFERENCES organizations(id) ON DELETE RESTRICT,  -- sido_admin·sigungu_admin 만
+    expires_at      TIMESTAMPTZ,                                              -- 사용 기간 (0014). NULL = 무기한
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -51,7 +66,7 @@ CREATE TABLE user_villages (
 );
 ```
 
-super_admin은 user_villages 안 봐도 전체 접근(코드에서 role 체크로 처리). village_admin은 담당 마을이 여러 개일 수 있어서 다대다로 뒀다.
+범위 산출: super_admin 전체 / sido_admin 소속 기관과 하위 기관의 마을 / sigungu_admin 소속 기관의 마을 / village_admin `user_villages`. village_admin은 담당 마을이 여러 개일 수 있어서 다대다로 뒀다. 기관은 소속 마을·계정이 있으면 지우지 못한다.
 
 ## 3. 단말
 

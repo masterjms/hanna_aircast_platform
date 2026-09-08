@@ -9,13 +9,13 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 from sqlalchemy import func, select
 
-from app.constants import Role
+from app.core import authz
 from app.core.deps import CurrentUser, Db, Scope
 from app.core.scope import VillageScope
 from app.core.security import create_access_token, verify_password
 from app.errors import AccountExpired, InvalidCredentials
 from app.models.device import Device
-from app.models.org import User, UserVillage, Village
+from app.models.org import Organization, User, Village
 from app.schemas.auth import LoginRequest, LoginResponse, MeResponse, VillageBrief
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -37,13 +37,20 @@ async def _build_me(db: Db, user: User, scope: VillageScope) -> MeResponse:
             count_stmt.where(Device.village_id.in_(scope.village_ids))
         )
 
+    org_name = None
+    if user.organization_id is not None:
+        org_name = await db.scalar(
+            select(Organization.name).where(Organization.id == user.organization_id)
+        )
+
     return MeResponse(
         id=user.id,
         username=user.username,
-        role=Role(user.role),
+        role=user.role,
         villages=villages,
         all_villages=scope.all_villages,
         device_count=int(device_count or 0),
+        organization_name=org_name,
     )
 
 
@@ -59,13 +66,7 @@ async def login(payload: LoginRequest, db: Db) -> LoginResponse:
     if user.is_expired():
         raise AccountExpired()
 
-    if user.role == Role.SUPER_ADMIN.value:
-        scope = VillageScope.for_super_admin()
-    else:
-        rows = await db.scalars(
-            select(UserVillage.village_id).where(UserVillage.user_id == user.id)
-        )
-        scope = VillageScope.for_villages(rows.all())
+    scope = await authz.resolve_scope(db, user)
 
     token, expires_in = create_access_token(
         user_id=user.id, username=user.username, role=user.role

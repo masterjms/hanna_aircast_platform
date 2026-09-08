@@ -113,12 +113,20 @@ fi
 echo "   $FILE ($SIZE)"
 
 # ── S3 업로드 ───────────────────────────────────────────────────────
+# aws CLI 는 서버에 설치하지 않고 컨테이너로 부른다 — cost-report.sh 와 같은 방침이다.
+# 자격증명은 인스턴스 역할을 컨테이너가 그대로 쓰므로 키 파일이 필요 없다.
+#
+# 예전에는 호스트에 aws 가 깔려 있다고 보고 `command -v aws` 로 분기했는데, 이 서버는
+# 애초에 설치하지 않는 구성이라 S3_BUCKET 을 채워도 매번 조용히 건너뛰었다.
 if [ -n "$S3_BUCKET" ]; then
-    if command -v aws >/dev/null; then
-        aws s3 cp "$FILE" "$S3_BUCKET/" --only-show-errors
+    if docker run --rm -v "$BACKUP_DIR:/backup:ro" amazon/aws-cli:latest             s3 cp "/backup/$(basename "$FILE")" "$S3_BUCKET/" --only-show-errors; then
         echo "   S3 업로드 완료: $S3_BUCKET/$(basename "$FILE")"
     else
-        echo "   !! aws CLI 가 없어 S3 업로드를 건너뛴다"
+        # 로컬 사본은 만들어졌으니 백업 자체가 실패한 것은 아니다. 다만 EC2 가
+        # 사라지면 같이 사라지는 사본뿐이라 조용히 넘어가서는 안 된다.
+        echo "   !! S3 업로드 실패 — 로컬 사본만 남는다"
+        notify "🟡 *DB 백업 — S3 업로드 실패*"$'
+'"  로컬 사본만 있습니다: $(basename "$FILE")"
     fi
 else
     echo "   (S3_BUCKET 미설정 — 로컬에만 보관)"

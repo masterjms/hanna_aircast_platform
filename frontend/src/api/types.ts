@@ -5,7 +5,31 @@
  * openapi.json 에서 생성하는 쪽으로 바꾸는 게 좋다(지금은 과한 도구다).
  */
 
-export type Role = 'super_admin' | 'village_admin';
+/** 관리자 계층(설계 2026-09-08 §2). 순서·표시는 lib/roles.ts. */
+export type Role = 'super_admin' | 'sido_admin' | 'sigungu_admin' | 'village_admin';
+
+export type OrgLevel = 'sido' | 'sigungu';
+
+/** 관리 기관 — 시·도청 / 시·군청. 권한은 이 트리를 따른다(설계 §3). */
+export interface Organization {
+  id: number;
+  name: string;
+  level: OrgLevel;
+  parent_id: number | null;
+  parent_name: string | null;
+  /** 법정동코드 앞자리. 마을을 만들 때 기관을 제안하는 데만 쓴다. */
+  jurisdiction_code: string | null;
+  village_count: number;
+  user_count: number;
+  created_at: string;
+}
+
+export interface OrganizationInput {
+  name: string;
+  level: OrgLevel;
+  parent_id: number | null;
+  jurisdiction_code?: string | null;
+}
 
 export type DeviceStatusFilter = 'online' | 'offline' | 'unassigned';
 
@@ -15,6 +39,11 @@ export type ApiErrorCode =
   | 'INVALID_CREDENTIALS'
   | 'FORBIDDEN'
   | 'SUPER_ADMIN_REQUIRED'
+  | 'ORG_ADMIN_REQUIRED'
+  | 'TIER_TOO_LOW'
+  | 'ORGANIZATION_OUT_OF_SCOPE'
+  | 'ORGANIZATION_NOT_FOUND'
+  | 'ORGANIZATION_IN_USE'
   | 'VILLAGE_OUT_OF_SCOPE'
   | 'NOT_FOUND'
   | 'DEVICE_NOT_FOUND'
@@ -45,6 +74,8 @@ export interface Me {
   villages: VillageBrief[];
   all_villages: boolean;
   device_count: number;
+  /** 소속 기관 이름. 시·도/시·군 관리자만 있다. */
+  organization_name: string | null;
 }
 
 export interface LoginResponse {
@@ -68,6 +99,9 @@ export interface Village extends VillageBrief {
   /** MQTT 로 나가는 8자리 표현 */
   /** 법정동코드(10)+연번(2) 12자리. 주소가 없어 못 만든 마을은 null. */
   village_code: string | null;
+  /** 관리 기관(설계 §3). null 이면 최고 관리자만 보는 마을. 주소와 무관하다. */
+  organization_id: number | null;
+  organization_name: string | null;
   /** MQTT 로 나가는 village_id — village_code, 없으면 예전 방식 id 8자리. */
   village_token: string;
   /** 등록된 단말 수(설치 현황) */
@@ -230,6 +264,9 @@ export interface User {
   expires_at: string | null;
   created_at: string;
   village_ids: number[];
+  /** 시·도/시·군 관리자의 소속 기관. 다른 역할은 null. */
+  organization_id: number | null;
+  organization_name: string | null;
 }
 
 export interface UserCreate {
@@ -237,6 +274,7 @@ export interface UserCreate {
   password: string;
   role: Role;
   village_ids: number[];
+  organization_id: number | null;
   /** 사용 기간(일, 1~30). null 이면 무기한. */
   valid_days: number | null;
 }
@@ -245,12 +283,15 @@ export interface UserUpdate {
   password?: string;
   role?: Role;
   village_ids?: number[];
+  organization_id?: number | null;
   /** 보내면 오늘부터 다시 센다. null 은 무기한. 빼면 만료일을 건드리지 않는다. */
   valid_days?: number | null;
 }
 
 export interface VillageInput {
   name: string;
+  /** 관리 기관. 시·군 관리자는 자기 기관으로 고정된다. */
+  organization_id?: number | null;
   sido?: string | null;
   sigungu?: string | null;
   address_detail?: string | null;

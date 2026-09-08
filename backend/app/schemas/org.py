@@ -7,13 +7,44 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.constants import Role
+from app.constants import OrgLevel, Role
 from app.schemas.common import ApiModel
+
+
+# ── 기관 (관리자 계층 설계 §3) ───────────────────────────────────────────
+class OrganizationCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    level: OrgLevel
+    #: sigungu 면 상위 sido 기관(없어도 됨). sido 면 반드시 null.
+    parent_id: int | None = None
+    #: 법정동코드 앞자리 — sido 2자리, sigungu 5자리. 마을 기관 제안용.
+    jurisdiction_code: str | None = Field(default=None, pattern=r"^\d{2}(\d{3})?$")
+
+
+class OrganizationUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    parent_id: int | None = None
+    jurisdiction_code: str | None = Field(default=None, pattern=r"^\d{2}(\d{3})?$")
+
+
+class OrganizationOut(ApiModel):
+    id: int
+    name: str
+    level: OrgLevel
+    parent_id: int | None
+    parent_name: str | None = None
+    jurisdiction_code: str | None
+    #: 삭제 가능 여부를 화면이 알 수 있게 같이 센다.
+    village_count: int = 0
+    user_count: int = 0
+    created_at: dt.datetime
 
 
 # ── 마을 ─────────────────────────────────────────────────────────────────
 class VillageCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
+    #: 관리 기관. 시·군 관리자는 자기 기관으로 강제된다. 최고 관리자는 null 가능.
+    organization_id: int | None = None
     sido: str | None = Field(default=None, max_length=50)
     sigungu: str | None = Field(default=None, max_length=50)
     address_detail: str | None = Field(default=None, max_length=255)
@@ -27,6 +58,8 @@ class VillageCreate(BaseModel):
 
 
 class VillageUpdate(BaseModel):
+    #: 관리 기관 변경(설계 §6.2). 출발·도착 기관이 모두 관할이어야 한다.
+    organization_id: int | None = None
     name: str | None = Field(default=None, min_length=1, max_length=100)
     #: 경계 폴리곤(GeoJSON geometry, WGS84). scripts/import_boundaries.py 가 넣는다.
     #: 사람이 화면에서 입력하는 값이 아니라 VillageCreate 에는 두지 않는다.
@@ -60,6 +93,9 @@ class VillageOut(ApiModel):
     village_code: str | None = None
     #: MQTT 로 나가는 village_id 문자열 — village_code, 없으면 예전 방식 id 8자리.
     village_token: str = ""
+    #: 관리 기관(설계 §3). null 이면 최고 관리자만 보는 마을.
+    organization_id: int | None = None
+    organization_name: str | None = None
     #: 등록된 단말 수(설치 현황).
     device_count: int = 0
     #: 그중 지금 온라인인 수. 방송은 온라인 단말에만 나가므로 화면에서 둘을
@@ -108,6 +144,8 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=8, max_length=64)
     role: Role
     village_ids: list[int] = Field(default_factory=list)
+    #: sido_admin·sigungu_admin 의 소속 기관. 그 밖의 역할은 null 이어야 한다.
+    organization_id: int | None = None
     #: 계정 사용 기간(일). 만료 다음 날부터 정리 작업이 계정을 지운다.
     #: null 은 무기한 — 상시 운영 계정을 만들 때만 쓴다. 화면은 기본 15일을 채운다.
     valid_days: int | None = Field(
@@ -124,6 +162,7 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=64)
     role: Role | None = None
     village_ids: list[int] | None = None
+    organization_id: int | None = None
     #: 보내면 오늘부터 다시 센다(기간 연장). null 을 명시하면 무기한이 된다.
     #: 아예 빼면 만료일을 건드리지 않는다.
     valid_days: int | None = Field(default=None, ge=VALID_DAYS_MIN, le=VALID_DAYS_MAX)
@@ -137,3 +176,5 @@ class UserOut(ApiModel):
     expires_at: dt.datetime | None = None
     created_at: dt.datetime
     village_ids: list[int] = Field(default_factory=list)
+    organization_id: int | None = None
+    organization_name: str | None = None

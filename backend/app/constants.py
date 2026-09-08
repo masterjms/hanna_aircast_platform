@@ -17,8 +17,22 @@ class StrEnum(str, Enum):
 
 
 class Role(StrEnum):
+    """관리자 계층(설계 2026-09-08 §2). 위에서 아래로 최고 > 시·도 > 시·군 > 마을.
+
+    순서·판정은 app/core/authz.py 가 맡는다.
+    """
+
     SUPER_ADMIN = "super_admin"
+    SIDO_ADMIN = "sido_admin"
+    SIGUNGU_ADMIN = "sigungu_admin"
     VILLAGE_ADMIN = "village_admin"
+
+
+class OrgLevel(StrEnum):
+    """기관 수준. 두 단계뿐이라 트리를 재귀로 타지 않는다(설계 §3)."""
+
+    SIDO = "sido"
+    SIGUNGU = "sigungu"
 
 
 class TargetScope(StrEnum):

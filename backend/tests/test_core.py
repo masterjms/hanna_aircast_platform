@@ -1392,3 +1392,79 @@ class TestTargetLabel:
         from app.modules.device.service import describe_targets
 
         assert await describe_targets(None, [("village", [])]) == [""]
+
+
+# ── 관리자 계층 (설계 2026-09-08) ──────────────────────────────────────
+class TestAuthzTiers:
+    def test_order_is_super_sido_sigungu_village(self):
+        from app.core.authz import tier
+
+        assert tier("super_admin") > tier("sido_admin")
+        assert tier("sido_admin") > tier("sigungu_admin") > tier("village_admin")
+
+    def test_unknown_role_is_below_everyone(self):
+        from app.core.authz import tier
+
+        assert tier("nope") < tier("village_admin")
+
+    def test_manageable_roles_are_strictly_lower(self):
+        from app.core.authz import manageable_roles
+
+        # 자기 계층은 못 만든다 — 시·군이 시·군을 만들면 관할이 옆으로 샌다.
+        assert manageable_roles("super_admin") == {"sido_admin", "sigungu_admin", "village_admin"}
+        assert manageable_roles("sido_admin") == {"sigungu_admin", "village_admin"}
+        assert manageable_roles("sigungu_admin") == {"village_admin"}
+        assert manageable_roles("village_admin") == frozenset()
+
+    def test_org_roles_need_an_organization(self):
+        from app.core.authz import ORG_ADMIN_ROLES, ORG_ROLES
+
+        assert {"sido_admin", "sigungu_admin"} == ORG_ROLES
+        # 마을·계정을 관리하는 역할 = 시·군 이상
+        assert {"super_admin", "sido_admin", "sigungu_admin"} == ORG_ADMIN_ROLES
+
+    def test_role_enum_matches_tier_table(self):
+        from app.constants import Role
+        from app.core.authz import ROLE_TIER
+
+        # 역할을 추가하고 계층표를 빠뜨리면 그 역할은 아무것도 못 만드는 계정이 된다.
+        assert set(ROLE_TIER) == {r.value for r in Role}
+
+
+class TestEventVisibility:
+    """진행 중 방송의 가시성(설계 §8). DB 를 안 타는 경로만 여기서 본다."""
+
+    @staticmethod
+    def _event(scope, ids):
+        return dataclasses.make_dataclass("E", ["target_scope", "target_ids"])(scope, ids)
+
+    @pytest.mark.asyncio
+    async def test_super_admin_sees_everything(self):
+        from app.modules.device.service import events_visible_to
+
+        events = [self._event("device", ["aa"]), self._event("all", [])]
+        assert await events_visible_to(None, events, VillageScope.for_super_admin()) == [True, True]
+
+    @pytest.mark.asyncio
+    async def test_empty_scope_sees_nothing(self):
+        from app.modules.device.service import events_visible_to
+
+        events = [self._event("village", ["1"]), self._event("all", [])]
+        flags = await events_visible_to(None, events, VillageScope.for_villages([]))
+        assert flags == [False, False]
+
+    @pytest.mark.asyncio
+    async def test_all_broadcast_is_visible_to_any_village_admin(self):
+        from app.modules.device.service import events_visible_to
+
+        # 전체 방송은 내 마을에도 나갔다. 보여야 멈출 수도 있다.
+        events = [self._event("all", []), self._event("village", ["7"])]
+        flags = await events_visible_to(None, events, VillageScope.for_villages([1]))
+        assert flags == [True, False]
+
+    @pytest.mark.asyncio
+    async def test_multi_village_broadcast_visible_if_any_mine(self):
+        from app.modules.device.service import events_visible_to
+
+        events = [self._event("village", ["3", "1"])]
+        assert await events_visible_to(None, events, VillageScope.for_villages([1])) == [True]

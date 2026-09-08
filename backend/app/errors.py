@@ -73,6 +73,23 @@ class SuperAdminRequired(Forbidden):
     message = "최고 관리자만 사용할 수 있는 기능입니다."
 
 
+class OrgAdminRequired(Forbidden):
+    code = "ORG_ADMIN_REQUIRED"
+    message = "시·군 관리자 이상만 할 수 있습니다."
+
+
+class TierTooLow(Forbidden):
+    """자기 계층 이상의 계정을 만들거나 고치려 할 때."""
+
+    code = "TIER_TOO_LOW"
+    message = "자기보다 낮은 계층의 계정만 관리할 수 있습니다."
+
+
+class OrganizationOutOfScope(Forbidden):
+    code = "ORGANIZATION_OUT_OF_SCOPE"
+    message = "관할 밖 기관입니다."
+
+
 class VillageOutOfScope(Forbidden):
     code = "VILLAGE_OUT_OF_SCOPE"
     message = "담당 마을이 아닙니다."
@@ -100,6 +117,11 @@ class ZoneNotFound(NotFound):
     message = "존재하지 않는 구역입니다."
 
 
+class OrganizationNotFound(NotFound):
+    code = "ORGANIZATION_NOT_FOUND"
+    message = "존재하지 않는 기관입니다."
+
+
 class UserNotFound(NotFound):
     code = "USER_NOT_FOUND"
     message = "존재하지 않는 계정입니다."
@@ -110,6 +132,11 @@ class Conflict(ApiError):
     status_code = status.HTTP_409_CONFLICT
     code = "CONFLICT"
     message = "현재 상태와 충돌합니다."
+
+
+class OrganizationInUse(Conflict):
+    code = "ORGANIZATION_IN_USE"
+    message = "소속 마을이나 계정이 있는 기관은 삭제할 수 없습니다. 먼저 옮기거나 지우세요."
 
 
 class DuplicateUsername(Conflict):
