@@ -48,6 +48,16 @@ DEFAULT_BITRATE_KBPS = 24
 #:   "변환 시 내부 tag 등 정보는 전부 삭제"(문제점 31번)를 글자대로 지킨다.
 MP3_MUXER_ARGS = ["-write_xing", "0", "-id3v2_version", "0"]
 
+#: mp3 를 만드는 **방식**이 바뀔 때마다 올린다. TTS 캐시 키에 들어가므로, 올리면
+#: 예전 방식으로 만든 캐시 파일이 자동으로 무효가 되고 다음 합성 때 새로 만든다.
+#:
+#: 이게 없으면 방식을 고쳐도 이미 만들어 둔 파일이 계속 나간다 — 같은 문구·언어·
+#: 보이스·비트레이트면 키가 같기 때문이다. 2026-09-09 Xing 수정이 현장에서 안 보이던
+#: 이유가 이것이다(문제점 30번).
+#:
+#:   1 → 2  Xing 헤더 프레임과 빈 ID3v2 제거 (2026-09-09)
+MP3_FORMAT_VERSION = 2
+
 #: 재생 시작 직후의 팝 노이즈를 없애는 짧은 페이드인(초).
 #: 파일 첫 프레임부터 최대 진폭이 나오면 앰프가 켜지는 순간과 겹쳐 "퍽" 소리가 난다.
 #: 20ms 면 귀에 들리지 않으면서 그 전이를 부드럽게 만든다.
@@ -195,12 +205,16 @@ def normalize_mp3(raw: bytes, bitrate_kbps: int = DEFAULT_BITRATE_KBPS) -> bytes
     시작부에 짧은 페이드인도 넣는다 — 첫 프레임부터 최대 진폭이 나오면 앰프가
     켜지는 순간과 겹쳐 같은 증상이 남는다.
 
-    ffmpeg 이 없으면 원본을 그대로 쓴다 — 길이 계산과 같은 방침이다.
+    **실패하면 원본을 쓰지 않고 던진다.** 예전에는 ffmpeg 이 없거나 변환이 실패하면
+    합성 엔진 출력을 그대로 파일함에 넣고 로그 한 줄만 남겼다. 그러면 규격 밖 파일이
+    아무도 모르게 단말로 나간다 — 업로드는 규격 밖 파일을 거절하는데(문제점 31번)
+    TTS 만 통과시킬 이유가 없다. 만들고 나서 실제 파라미터도 다시 재서 확인한다.
     """
     exe = shutil.which("ffmpeg")
     if exe is None:
-        log.info("ffmpeg 없음 — TTS 출력을 그대로 사용한다")
-        return raw
+        raise TtsUnavailable(
+            "오디오 변환 도구(ffmpeg)가 없어 방송 규격에 맞는 음성을 만들 수 없습니다."
+        )
 
     with tempfile.TemporaryDirectory() as tmp:
         src, dst = Path(tmp) / "in.mp3", Path(tmp) / "out.mp3"
@@ -215,10 +229,42 @@ def normalize_mp3(raw: bytes, bitrate_kbps: int = DEFAULT_BITRATE_KBPS) -> bytes
                  "-b:a", f"{bitrate_kbps}k", *MP3_MUXER_ARGS, str(dst)],
                 capture_output=True, check=True, timeout=60,
             )
-            return dst.read_bytes()
-        except Exception:  # noqa: BLE001 - 정규화 실패가 합성 실패는 아니다
-            log.warning("mp3 정규화 실패 — 원본을 사용한다")
-            return raw
+        except Exception as exc:  # noqa: BLE001
+            log.exception("mp3 정규화 실패")
+            raise TtsUnavailable("음성을 방송 규격으로 변환하지 못했습니다.") from exc
+
+        out = dst.read_bytes()
+        _assert_spec(dst, bitrate_kbps)
+        return out
+
+
+def _assert_spec(path: Path, bitrate_kbps: int) -> None:
+    """만든 파일이 정말 그 규격인지 다시 잰다.
+
+    "설정은 16인데 파일은 40" 같은 신고가 다시 오면 여기서 먼저 걸린다. 인코더가
+    조용히 다른 값을 쓰거나 옵션이 무시되는 경우를 눈으로 확인하지 않고 잡는다.
+    ffprobe 가 없으면 검사를 건너뛴다 — 도구가 없다고 합성을 막지는 않는다.
+    """
+    from app.modules.file.service import probe_audio  # 순환 import 회피
+
+    spec = probe_audio(path)
+    if spec is None:
+        log.info("ffprobe 없음 — 합성 결과 규격 검사를 건너뛴다")
+        return
+    ok = (
+        spec.sample_rate == AUDIO_SAMPLE_RATE
+        and spec.channels == AUDIO_CHANNELS
+        and abs(spec.kbps - bitrate_kbps) <= 1
+    )
+    if not ok:
+        log.error(
+            "합성 결과가 규격과 다르다: 기대 %dkHz mono %dkbps, 실제 %s",
+            AUDIO_SAMPLE_RATE // 1000, bitrate_kbps, spec.describe(),
+        )
+        raise TtsUnavailable(
+            f"만들어진 음성이 방송 규격과 다릅니다 (기대 "
+            f"{AUDIO_SAMPLE_RATE // 1000}kHz mono {bitrate_kbps}kbps, 실제 {spec.describe()})."
+        )
 
 
 def get_engine() -> TtsEngine:

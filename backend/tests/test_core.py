@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import unittest.mock
 
 import pytest
 from sqlalchemy import select
@@ -873,21 +874,29 @@ class TestBroadcastByteEstimate:
         from app.modules.broadcast.service import estimate_live_bytes
 
         # 24kbps = 3000 bytes/sec. 43초 · 단말 1대.
-        assert estimate_live_bytes(43.0, 1) == 43 * 3000
+        assert estimate_live_bytes(43.0, 1, 24) == 43 * 3000
         # 단말이 늘면 그만큼 배가된다 — 각자 별도 스트림을 받는다.
-        assert estimate_live_bytes(43.0, 3) == 43 * 3000 * 3
+        assert estimate_live_bytes(43.0, 3, 24) == 43 * 3000 * 3
+
+    def test_live_bytes_follow_the_setting(self):
+        from app.modules.broadcast.service import estimate_live_bytes
+
+        # 설정을 16 으로 낮추면 추정도 따라와야 한다. 예전에는 24 로 박혀 있어
+        # 16kbps 로 방송해도 트래픽·비용 지표가 1.5배로 부풀었다.
+        assert estimate_live_bytes(43.0, 1, 16) == 43 * 2000
+        assert estimate_live_bytes(60.0, 2, 16) < estimate_live_bytes(60.0, 2, 24)
 
     def test_live_bytes_no_recipients_is_zero(self):
         from app.modules.broadcast.service import estimate_live_bytes
 
         # 아무도 못 받았으면(전부 오프라인) 시간이 있어도 트래픽은 0.
-        assert estimate_live_bytes(120.0, 0) == 0
+        assert estimate_live_bytes(120.0, 0, 24) == 0
 
     def test_live_bytes_never_negative(self):
         from app.modules.broadcast.service import estimate_live_bytes
 
         # 방어적 하한 — 시계가 역행해도(NTP 보정 등) 음수 트래픽은 말이 안 된다.
-        assert estimate_live_bytes(-5.0, 2) == 0
+        assert estimate_live_bytes(-5.0, 2, 24) == 0
 
     def test_file_bytes_is_size_times_recipients(self):
         from app.modules.broadcast.service import estimate_file_bytes
@@ -1712,3 +1721,45 @@ class TestMp3MuxerArgs:
 
         # TTS 와 업로드 재인코딩이 갈라지면 한쪽만 40kbps 로 남는다.
         assert "MP3_MUXER_ARGS" in inspect.getsource(file_service.transcode_in_place)
+
+
+# ── TTS 결과가 규격과 같은지 (문제점 30번 후속, 2026-09-09) ───────────────
+class TestTtsFormatVersion:
+    """만드는 방식을 고쳐도 캐시가 옛 파일을 계속 내보내면 아무것도 안 고쳐진다."""
+
+    def test_format_version_is_in_the_cache_key(self):
+        from app.tts.service import cache_key
+
+        with unittest.mock.patch("app.tts.service.MP3_FORMAT_VERSION", 1):
+            v1 = cache_key("안녕하세요", "ko-KR", "ko-KR-A", 16)
+        with unittest.mock.patch("app.tts.service.MP3_FORMAT_VERSION", 2):
+            v2 = cache_key("안녕하세요", "ko-KR", "ko-KR-A", 16)
+        assert v1 != v2
+
+    def test_bitrate_still_separates_the_key(self):
+        from app.tts.service import cache_key
+
+        assert cache_key("안녕", "ko-KR", "v", 16) != cache_key("안녕", "ko-KR", "v", 24)
+
+    def test_same_inputs_same_key(self):
+        from app.tts.service import cache_key
+
+        assert cache_key(" 안녕 ", "ko-KR", "v", 16) == cache_key("안녕", "ko-KR", "v", 16)
+
+    def test_version_is_at_least_two(self):
+        from app.tts.engine import MP3_FORMAT_VERSION
+
+        # Xing 제거(2026-09-09)로 1 → 2. 되돌리면 옛 캐시가 되살아난다.
+        assert MP3_FORMAT_VERSION >= 2
+
+    def test_normalize_refuses_without_ffmpeg(self):
+        from app.errors import ApiError
+        from app.tts import engine
+
+        # 예전에는 원본을 그대로 파일함에 넣고 로그 한 줄만 남겼다 — 규격 밖 파일이
+        # 아무도 모르게 단말로 나가는 경로였다.
+        with (
+            unittest.mock.patch.object(engine.shutil, "which", return_value=None),
+            pytest.raises(ApiError),
+        ):
+            engine.normalize_mp3(b"not-an-mp3", 16)

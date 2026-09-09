@@ -40,7 +40,7 @@ from app.modules.file import service as file_service
 from app.schemas.file import FileOut
 from app.tasks.config_reconcile import load_config
 from app.tts import voices as voice_catalog
-from app.tts.engine import get_engine, normalize_mp3
+from app.tts.engine import MP3_FORMAT_VERSION, get_engine, normalize_mp3
 
 log = logging.getLogger(__name__)
 
@@ -50,12 +50,17 @@ MAX_TEXT_LENGTH = 1000
 
 
 def cache_key(text: str, language: str, voice_id: str, bitrate_kbps: int) -> str:
-    """같은 문구·언어·보이스·비트레이트면 같은 키. 앞뒤 공백은 무시한다.
+    """같은 문구·언어·보이스·비트레이트·형식이면 같은 키. 앞뒤 공백은 무시한다.
 
     비트레이트가 키에 들어가는 이유: 설정을 24 → 16 으로 바꾼 뒤 같은 문구를
     합성하면, 키가 같으면 예전 24kbps 파일이 그대로 나온다(문제점 30번).
+
+    형식 버전(MP3_FORMAT_VERSION)이 들어가는 이유: 만드는 **방식**을 고쳐도 키가
+    같으면 이미 만들어 둔 파일이 계속 나간다. 2026-09-09 Xing 수정이 현장에서
+    안 보이던 이유가 이것이다 — 고친 것은 새로 만들 때뿐이고, 캐시에 있던 파일은
+    옛 방식 그대로였다.
     """
-    raw = f"{text.strip()}|{language}|{voice_id}|{bitrate_kbps}".encode()
+    raw = f"{text.strip()}|{language}|{voice_id}|{bitrate_kbps}|v{MP3_FORMAT_VERSION}".encode()
     return hashlib.sha256(raw).hexdigest()
 
 
