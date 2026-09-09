@@ -34,6 +34,20 @@ OUTPUT_SAMPLE_RATE = AUDIO_SAMPLE_RATE
 #: 설정을 못 읽는 경로(개발용 엔진 등)에서 쓰는 기본값.
 DEFAULT_BITRATE_KBPS = 24
 
+#: mp3 muxer 에 항상 붙이는 옵션.
+#:
+#: `-write_xing 0` — LAME 은 파일 맨 앞에 Xing/Info 헤더 프레임을 하나 넣는다. 16kHz
+#:   16kbps 프레임은 72바이트뿐이라 태그가 안 들어가서, **그 프레임만 40kbps 로 올려**
+#:   180바이트를 만든다. 오디오는 16kbps 가 맞는데 파일의 첫 프레임이 40kbps 라고
+#:   말하게 되고, 첫 프레임만 읽는 도구(탐색기 속성 등)는 40kbps 라고 보고한다
+#:   (2026-09-07 단말팀 보고 — 문제점 30번. 24kbps 로 뽑던 때도 첫 프레임은 40이었다).
+#:   CBR 이라 Xing 이 없어도 길이는 크기 ÷ 비트레이트로 나온다. 대신 LAME tag 가 알려주던
+#:   인코더 지연(약 0.1초 무음)이 다듬어지지 않고 그대로 남는다 — 안내방송에서는 들리지 않고
+#:   재생 길이도 0.1초만 길게 잡힌다. 첫 프레임이 거짓말하는 쪽이 더 나쁘다.
+#: `-id3v2_version 0` — `-map_metadata -1` 로도 44바이트짜리 빈 ID3v2 껍데기가 남는다.
+#:   "변환 시 내부 tag 등 정보는 전부 삭제"(문제점 31번)를 글자대로 지킨다.
+MP3_MUXER_ARGS = ["-write_xing", "0", "-id3v2_version", "0"]
+
 #: 재생 시작 직후의 팝 노이즈를 없애는 짧은 페이드인(초).
 #: 파일 첫 프레임부터 최대 진폭이 나오면 앰프가 켜지는 순간과 겹쳐 "퍽" 소리가 난다.
 #: 20ms 면 귀에 들리지 않으면서 그 전이를 부드럽게 만든다.
@@ -166,7 +180,7 @@ class DevEngine:
                 [exe, "-y", "-f", "lavfi",
                  "-i", f"sine=frequency={freq}:duration={seconds:.2f}",
                  "-ar", str(OUTPUT_SAMPLE_RATE), "-ac", str(AUDIO_CHANNELS),
-                 "-b:a", f"{DEFAULT_BITRATE_KBPS}k", str(out)],
+                 "-b:a", f"{DEFAULT_BITRATE_KBPS}k", *MP3_MUXER_ARGS, str(out)],
                 capture_output=True, check=True, timeout=60,
             )
             return out.read_bytes()
@@ -198,7 +212,7 @@ def normalize_mp3(raw: bytes, bitrate_kbps: int = DEFAULT_BITRATE_KBPS) -> bytes
                  # 합성 엔진이 붙인 tag 를 남기지 않는다(문제점 31번과 같은 방침).
                  "-map_metadata", "-1",
                  "-ar", str(OUTPUT_SAMPLE_RATE), "-ac", str(AUDIO_CHANNELS),
-                 "-b:a", f"{bitrate_kbps}k", str(dst)],
+                 "-b:a", f"{bitrate_kbps}k", *MP3_MUXER_ARGS, str(dst)],
                 capture_output=True, check=True, timeout=60,
             )
             return dst.read_bytes()

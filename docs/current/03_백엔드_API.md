@@ -195,6 +195,8 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 단말 CONFIG 필드가 변경될 때만 `config_version`을 올리고 retained CONFIG를 재발행한다.
 
+생성되는 mp3는 **모든 프레임이 설정 비트레이트**다. TTS 합성과 업로드 재인코딩 모두 `-write_xing 0 -id3v2_version 0`을 붙인다 — LAME이 Xing 태그를 담으려고 첫 프레임만 40kbps로 올리는 탓에, 첫 프레임을 읽는 도구가 파일 전체를 40kbps로 보고했다(문제점 30번).
+
 비트레이트 두 필드는 범위가 아니라 선택지다(`constants.CONFIG_CHOICES`). 범위 밖 값은 `CONFIG_OUT_OF_RANGE`, 선택지 밖 값은 `CONFIG_INVALID_CHOICE`다. 표본율 16kHz와 mono는 통신 사양 고정이라 설정 대상이 아니다. `live_bitrate_kbps`는 브라우저 opus 인코더가, `file_bitrate_kbps`는 TTS 합성과 업로드 재인코딩이 사용한다.
 
 ## 4. 마을·구역 API

@@ -40,6 +40,7 @@ from app.models.org import User
 from app.models.schedule import Schedule
 from app.schemas.file import FileOut
 from app.tasks.config_reconcile import load_config
+from app.tts.engine import MP3_MUXER_ARGS
 
 log = logging.getLogger(__name__)
 
@@ -200,7 +201,9 @@ def audio_action(spec: AudioSpec, target_kbps: int) -> str:
 def transcode_in_place(path: Path, target_kbps: int) -> tuple[int, str]:
     """파일을 방송 규격으로 다시 인코딩한다. (크기, sha256) 을 돌려준다.
 
-    `-map_metadata -1` 로 ID3 tag 를 포함한 내부 정보를 전부 버린다(문제점 31번).
+    `-map_metadata -1` 과 `-id3v2_version 0` 으로 tag 를 전부 버리고, `-write_xing 0` 으로
+    맨 앞 Xing 헤더 프레임을 없앤다 — 그 프레임만 40kbps 로 써져서 첫 프레임을 읽는
+    도구가 파일 전체를 40kbps 로 보고했다(문제점 30번, tts/engine.py 의 MP3_MUXER_ARGS).
     """
     exe = shutil.which("ffmpeg")
     if exe is None:
@@ -214,7 +217,7 @@ def transcode_in_place(path: Path, target_kbps: int) -> tuple[int, str]:
             [exe, "-y", "-i", str(path),
              "-map_metadata", "-1",
              "-ar", str(AUDIO_SAMPLE_RATE), "-ac", str(AUDIO_CHANNELS),
-             "-b:a", f"{target_kbps}k", str(tmp)],
+             "-b:a", f"{target_kbps}k", *MP3_MUXER_ARGS, str(tmp)],
             capture_output=True, check=True, timeout=180,
         )
     except Exception as exc:  # noqa: BLE001

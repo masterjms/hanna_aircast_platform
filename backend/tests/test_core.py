@@ -1682,3 +1682,33 @@ class TestRepeatLabel:
 
         # 빠진 종류가 있으면 삭제 거절 사유에 "monthly" 같은 영문이 그대로 나간다.
         assert set(REPEAT_LABEL) == {r.value for r in Repeat}
+
+
+# ── mp3 muxer 옵션 (문제점 30번, 2026-09-08) ────────────────────────────
+class TestMp3MuxerArgs:
+    """첫 프레임이 파일 전체의 비트레이트를 대신 말한다 — 거짓말을 하면 안 된다."""
+
+    def test_xing_header_is_disabled(self):
+        from app.tts.engine import MP3_MUXER_ARGS
+
+        # LAME 은 Xing 태그를 담으려고 첫 프레임만 40kbps 로 올린다. 16kHz 16kbps
+        # 프레임은 72바이트뿐이라 태그가 안 들어가서다. 그러면 첫 프레임만 읽는
+        # 도구가 파일을 40kbps 로 보고한다(단말팀 2026-09-07 실측).
+        assert "-write_xing" in MP3_MUXER_ARGS
+        assert MP3_MUXER_ARGS[MP3_MUXER_ARGS.index("-write_xing") + 1] == "0"
+
+    def test_id3v2_shell_is_disabled(self):
+        from app.tts.engine import MP3_MUXER_ARGS
+
+        # -map_metadata -1 로도 44바이트 빈 ID3v2 가 남는다.
+        # "변환 시 내부 tag 등 정보는 전부 삭제"(문제점 31번)를 글자대로 지킨다.
+        assert "-id3v2_version" in MP3_MUXER_ARGS
+        assert MP3_MUXER_ARGS[MP3_MUXER_ARGS.index("-id3v2_version") + 1] == "0"
+
+    def test_transcode_uses_the_same_args(self):
+        import inspect
+
+        from app.modules.file import service as file_service
+
+        # TTS 와 업로드 재인코딩이 갈라지면 한쪽만 40kbps 로 남는다.
+        assert "MP3_MUXER_ARGS" in inspect.getsource(file_service.transcode_in_place)

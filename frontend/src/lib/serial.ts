@@ -9,11 +9,17 @@
 const LF = '\n';
 
 /**
- * `@SERVER` + `@MQTTID` + `@MQTTPW` 를 한 프레임으로 만든다.
+ * `@SSID`·`@PASSWORD`(선택) + `@SERVER` + `@MQTTID` + `@MQTTPW` 를 한 프레임으로 만든다.
  *
  * ```text
- * @SERVER=hanna-aircast.co.kr\n@MQTTID=58e6c5f2cc74\n@MQTTPW=tA$UAcG2\n@END\n
+ * @SSID=LINE_AP\n@PASSWORD=1234\n@SERVER=hanna-aircast.co.kr\n@MQTTID=58e6c5f2cc74\n@MQTTPW=tA$UAcG2\n@END\n
  * ```
+ *
+ * **현장 Wi-Fi 는 값이 있을 때만 넣는다 (문제점 35번, 2026-09-08).** 생산 라인에서
+ * 실 테스트를 하려면 단말이 인터넷에 붙어야 하는데, 그걸 사람이 따로 넣으면 손이 간다.
+ * `@SSID`·`@PASSWORD` 는 생산 serial protocol 에 원래 있는 키라 단말 쪽 변경이 없다 —
+ * 등록 화면이 안 보내던 것을 보내는 것뿐이다. 비어 있으면 그 줄 자체를 넣지 않는다
+ * (빈 값을 보내면 단말에 저장된 기존 Wi-Fi 설정을 지운다).
  *
  * **모든 명령은 개행(LF)으로 끝난다 — `@END` 앞에도 개행이 있어야 한다.**
  * 단말 파서는 줄 단위로 먼저 자르고 그다음 `@KEY=VALUE` 를 읽는다
@@ -26,9 +32,18 @@ export function provisioningFrame(opts: {
   serverHost: string;
   mac: string;
   password: string;
+  /** 생산 라인 공유기. 둘 다 채워졌을 때만 프레임에 들어간다. */
+  ssid?: string;
+  wifiPassword?: string;
 }): string {
-  const { serverHost, mac, password } = opts;
-  return `@SERVER=${serverHost}${LF}@MQTTID=${mac}${LF}@MQTTPW=${password}${LF}@END${LF}`;
+  const { serverHost, mac, password, ssid, wifiPassword } = opts;
+  const lines: string[] = [];
+  // 네트워크 먼저, 그다음 서버·계정 — 생산 사양 §4.4 의 나열 순서다.
+  if (ssid && wifiPassword) {
+    lines.push(`@SSID=${ssid}`, `@PASSWORD=${wifiPassword}`);
+  }
+  lines.push(`@SERVER=${serverHost}`, `@MQTTID=${mac}`, `@MQTTPW=${password}`, '@END');
+  return lines.map((l) => l + LF).join('');
 }
 
 /** 저장한 값을 적용하려고 재부팅한다 (사양 §4.7). */

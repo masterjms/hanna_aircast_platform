@@ -32,6 +32,34 @@ function webSerial(): { requestPort(): Promise<SerialPortLike> } | null {
 
 const MAC_RE = /^[0-9a-fA-F]{12}$/;
 
+/**
+ * 생산 라인 공유기 정보 (문제점 35번).
+ *
+ * 라인에서 단말을 연달아 등록하므로 "지울 때까지 기억"한다. 이 PC 의 localStorage 에만
+ * 남고 서버로는 보내지 않는다 — 서버가 알 이유가 없고, 알면 지켜야 할 비밀이 하나 는다.
+ */
+const LINE_WIFI_KEY = 'xwifi.lineWifi';
+
+function readLineWifi(): { ssid: string; password: string } {
+  try {
+    const raw = localStorage.getItem(LINE_WIFI_KEY);
+    if (!raw) return { ssid: '', password: '' };
+    const v = JSON.parse(raw) as { ssid?: string; password?: string };
+    return { ssid: v.ssid ?? '', password: v.password ?? '' };
+  } catch {
+    return { ssid: '', password: '' };
+  }
+}
+
+function saveLineWifi(ssid: string, password: string): void {
+  try {
+    if (!ssid && !password) localStorage.removeItem(LINE_WIFI_KEY);
+    else localStorage.setItem(LINE_WIFI_KEY, JSON.stringify({ ssid, password }));
+  } catch {
+    // 사생활 보호 모드 등에서 저장이 막힐 수 있다. 기억만 못 할 뿐 주입은 된다.
+  }
+}
+
 /** QR 문자열 → 5필드. 앞 5개만 해석, 뒤는 무시(생산 사양 §3.2.2). */
 /**
  * 물리 키 코드 → 스캔 문자열의 한 글자. IME 상태와 무관하다.
@@ -181,6 +209,11 @@ export function RegisterDeviceDialog({
   const [password, setPassword] = useState<string | null>(null);
   //: 단말 @SERVER 에 넣을 호스트. 서버가 자기 공개 주소에서 뽑아 알려준다.
   const [serverHost, setServerHost] = useState('');
+  //: 생산 라인 공유기(문제점 35번). 라인에서 여러 대를 연달아 등록하므로 지울 때까지
+  //: 기억한다. 이 PC 안에만 남고 서버로는 가지 않는다.
+  const [lineSsid, setLineSsid] = useState(() => readLineWifi().ssid);
+  const [lineWifiPw, setLineWifiPw] = useState(() => readLineWifi().password);
+  const [showLinePw, setShowLinePw] = useState(false);
   const [pwError, setPwError] = useState<string | null>(null);
 
   const [mac, setMac] = useState('');
@@ -325,7 +358,15 @@ export function RegisterDeviceDialog({
       }
       const session = sessionRef.current;
       session.clear();
-      await session.write(provisioningFrame({ serverHost, mac: macNormalized, password }));
+      await session.write(
+        provisioningFrame({
+          serverHost,
+          mac: macNormalized,
+          password,
+          ssid: lineSsid.trim(),
+          wifiPassword: lineWifiPw,
+        }),
+      );
       const resp = await session.waitFor(/@RESULT=|@MQTTPW=/, 3000);
       if (/@RESULT=OK/.test(resp) || /@MQTTPW=SET/.test(resp)) {
         setInjected(true);
@@ -352,7 +393,13 @@ export function RegisterDeviceDialog({
       // trimEnd 를 쓰지 않는다 — 끝의 개행까지가 프레임이고, 붙여넣기로 넣을 때도
       // 그 개행이 있어야 단말이 요청을 마무리한다.
       await navigator.clipboard.writeText(
-        provisioningFrame({ serverHost, mac: macNormalized, password }),
+        provisioningFrame({
+          serverHost,
+          mac: macNormalized,
+          password,
+          ssid: lineSsid.trim(),
+          wifiPassword: lineWifiPw,
+        }),
       );
       setCopied(true);
       setInjected(true); // 수동 붙여넣기 경로 — 작업자가 터미널로 넣는다
@@ -560,6 +607,55 @@ export function RegisterDeviceDialog({
         <label>서버 주소 (@SERVER)</label>
         <input className="mono" readOnly value={serverHost || '불러오는 중…'} />
       </div>
+
+      {/* 생산 라인 공유기 — 있으면 주입 프레임에 @SSID·@PASSWORD 로 함께 나간다.
+          라인에서 여러 대를 연달아 등록하므로 값을 기억한다(문제점 35번). */}
+      <div className="field-row">
+        <div className="field">
+          <label htmlFor="line-ssid">생산 라인 Wi-Fi (@SSID)</label>
+          <input
+            id="line-ssid"
+            className="mono"
+            type="text"
+            autoComplete="off"
+            placeholder="비워 두면 보내지 않음"
+            value={lineSsid}
+            onChange={(e) => {
+              setLineSsid(e.target.value);
+              saveLineWifi(e.target.value, lineWifiPw);
+            }}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="line-wifi-pw">Wi-Fi 비밀번호 (@PASSWORD)</label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              id="line-wifi-pw"
+              className="mono"
+              type={showLinePw ? 'text' : 'password'}
+              autoComplete="off"
+              placeholder="비워 두면 보내지 않음"
+              value={lineWifiPw}
+              onChange={(e) => {
+                setLineWifiPw(e.target.value);
+                saveLineWifi(lineSsid, e.target.value);
+              }}
+            />
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={() => setShowLinePw((v) => !v)}
+            >
+              {showLinePw ? '숨기기' : '보기'}
+            </button>
+          </div>
+        </div>
+      </div>
+      <p className="hint">
+        {lineSsid.trim() && lineWifiPw
+          ? `주입할 때 @SSID·@PASSWORD 를 함께 보냅니다. 이 PC 에 기억해 두므로 다음 단말도 그대로 씁니다.`
+          : '둘 다 채우면 주입할 때 함께 보냅니다. 하나라도 비면 Wi-Fi 항목은 보내지 않고 단말의 기존 설정을 그대로 둡니다.'}
+      </p>
       <div className="field">
         <label>MQTT 비밀번호 (자동 생성)</label>
         <div style={{ display: 'flex', gap: 6 }}>
