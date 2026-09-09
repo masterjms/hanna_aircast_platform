@@ -23,7 +23,6 @@ import type {
   ScheduleInput,
   Village,
 } from '../../api/types';
-import { useAuth } from '../../auth/AuthContext';
 import { REPEAT_LABEL, WEEKDAY_LABELS, formatTime, repeatLabel } from '../../lib/schedule';
 import { Modal } from '../Modal';
 import { TtsModal } from '../TtsModal';
@@ -33,6 +32,14 @@ interface Props {
   onClose: () => void;
   onSaved: () => void;
 }
+
+/** 오른쪽 상세 패널의 제목. 목업 2 의 「매년|매주|매월|매일 몇일에 방송할까요?」. */
+const DETAIL_TITLE: Record<Repeat, string> = {
+  daily: '매일 몇 시에 방송할까요?',
+  weekly: '매주 무슨 요일에 방송할까요?',
+  monthly: '매월 며칠에 방송할까요?',
+  yearly: '매년 몇 월 며칠에 방송할까요?',
+};
 
 /** 1번 질문의 선택 — 기관(관할 전체) 또는 마을 하나. */
 type TargetPick = { kind: 'organization'; id: number } | { kind: 'village'; id: number } | null;
@@ -68,10 +75,8 @@ function TargetTree({
           checked={isOn('village', v.id)}
           onChange={() => onChange({ kind: 'village', id: v.id })}
         />
-        <span>{v.name}</span>
-        <span className="tree__kind">
-          단말 {v.device_count}대
-        </span>
+        <span className="tree__name">{v.name}</span>
+        <span className="tree__kind">단말 {v.device_count}대</span>
       </label>
     </li>
   );
@@ -85,7 +90,7 @@ function TargetTree({
           checked={isOn('organization', o.id)}
           onChange={() => onChange({ kind: 'organization', id: o.id })}
         />
-        <span className="strong">{o.name}</span>
+        <span className="tree__name strong">{o.name}</span>
         <span className="tree__kind">관할 전체</span>
       </label>
       {children}
@@ -114,7 +119,7 @@ function TargetTree({
       {orphanSigungus.map(sigunguBlock)}
       {orphanVillages.length > 0 && (
         <li>
-          <div className="dim" style={{ padding: '6px 8px' }}>기관 없음</div>
+          <div className="tree__group">기관 없음</div>
           <ul>{orphanVillages.map(villageRow)}</ul>
         </li>
       )}
@@ -383,7 +388,6 @@ function FilePicker({
 
 // ── 위자드 본체 ───────────────────────────────────────────────────────────
 export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
-  const { user } = useAuth();
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [villages, setVillages] = useState<Village[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
@@ -480,6 +484,15 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
     target !== null && (target.kind === 'organization' || allDevices || macs.length > 0);
   const canConfirm = targetComplete && repeatComplete && fileId !== '';
 
+  // 관할에 마을이 하나도 없으면 저장은 되지만 방송이 영영 안 나간다. 미리 알린다.
+  const emptyOrg =
+    target?.kind === 'organization' &&
+    !villages.some(
+      (v) =>
+        v.organization_id === target.id ||
+        orgs.some((o) => o.id === v.organization_id && o.parent_id === target.id),
+    );
+
   const targetLabel = (() => {
     if (!target) return '';
     if (target.kind === 'organization')
@@ -522,6 +535,7 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
     return (
       <Modal
         title={initial ? '스케줄 수정 확인' : '스케줄 확인'}
+        size="mid"
         onClose={onClose}
         footer={
           <>
@@ -556,6 +570,7 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
   return (
     <Modal
       title={initial ? '스케줄 수정' : '스케줄 추가하기'}
+      size="wide"
       onClose={onClose}
       footer={
         <>
@@ -575,26 +590,38 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
     >
       {error && <div className="alert" style={{ marginBottom: 12 }}>{error}</div>}
       <div className="wizard-two">
+        {/* 왼쪽 — 목업대로 1·2·3·4 가 번호 순서로 내려간다. */}
         <div>
           <div className="wizard-q">
             <div className="wizard-q__title">1. 어디에 방송할까요?</div>
-            <div className="wizard-q__body">
-              <TargetTree orgs={orgs} villages={villages} value={target} onChange={(t) => {
-                setTarget(t);
-                setAllDevices(true);
-                setMacs([]);
-              }} />
-              {user && orgs.length > 0 && (
-                <p className="hint" style={{ marginBottom: 0 }}>
-                  기관을 고르면 관할 전체입니다 — 나중에 영입한 마을도 자동으로 들어갑니다.
-                </p>
-              )}
+            <div className="wizard-q__body wizard-q__body--scroll">
+              <TargetTree
+                orgs={orgs}
+                villages={villages}
+                value={target}
+                onChange={(t) => {
+                  setTarget(t);
+                  setAllDevices(true);
+                  setMacs([]);
+                }}
+              />
             </div>
+            {orgs.length > 0 && (
+              <p className="hint" style={{ marginBottom: 0 }}>
+                기관을 고르면 관할 전체입니다. 나중에 영입한 마을도 자동으로 들어갑니다.
+              </p>
+            )}
+            {emptyOrg && (
+              <p className="hint hint--warn" style={{ marginBottom: 0 }}>
+                이 기관에 속한 마을이 없습니다. 지금 저장하면 방송이 나가지 않습니다. 마을
+                관리에서 관리 기관을 먼저 지정하세요.
+              </p>
+            )}
           </div>
 
           <div className="wizard-q">
             <div className="wizard-q__title">2. 어느 단말에 방송할까요?</div>
-            <div className="wizard-q__body">
+            <div className="wizard-q__body wizard-q__body--scroll">
               <DevicePicker
                 devices={devices}
                 all={allDevices}
@@ -609,22 +636,9 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
           </div>
 
           <div className="wizard-q">
-            <div className="wizard-q__title">4. 무엇을 방송할까요?</div>
-            <div className="wizard-q__body">
-              <FilePicker files={files} fileId={fileId} onChange={setFileId} onReload={reloadFiles} />
-              <label className="check" style={{ marginTop: 10 }}>
-                <input type="checkbox" checked={storeFlash} onChange={(e) => setStoreFlash(e.target.checked)} />
-                <span>단말 플래시에 저장 (반복 방송이면 유리)</span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <div>
-          <div className="wizard-q">
             <div className="wizard-q__title">3. 언제 방송할까요?</div>
             <div className="wizard-q__body">
-              <div className="choice-row" style={{ marginBottom: 12 }}>
+              <div className="choice-row">
                 {(['daily', 'weekly', 'monthly', 'yearly'] as Repeat[]).map((r) => (
                   <button
                     key={r}
@@ -636,17 +650,46 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
                   </button>
                 ))}
               </div>
-              {repeat && (
+            </div>
+          </div>
+
+          <div className="wizard-q">
+            <div className="wizard-q__title">4. 무엇을 방송할까요?</div>
+            <div className="wizard-q__body">
+              <FilePicker
+                files={files}
+                fileId={fileId}
+                onChange={setFileId}
+                onReload={reloadFiles}
+              />
+              <label className="check" style={{ marginTop: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={storeFlash}
+                  onChange={(e) => setStoreFlash(e.target.checked)}
+                />
+                <span>단말 플래시에 저장</span>
+              </label>
+              <p className="hint" style={{ marginBottom: 0 }}>
+                반복 방송이면 켜는 쪽이 유리합니다.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* 오른쪽 — 3번을 고르면 그 상세와 시각이 여기 펼쳐진다(목업 2). */}
+        <div>
+          <div className="wizard-q">
+            <div className="wizard-q__title">
+              {repeat ? DETAIL_TITLE[repeat] : '언제 방송할까요?'}
+            </div>
+            <div className="wizard-q__body">
+              {!repeat ? (
+                <p className="hint" style={{ marginBottom: 0 }}>
+                  왼쪽 3번에서 매일·매주·매월·매년 중 하나를 고르면 여기에 상세가 나옵니다.
+                </p>
+              ) : (
                 <>
-                  <div className="wizard-q__title" style={{ fontWeight: 600 }}>
-                    {repeat === 'yearly'
-                      ? '매년 몇 월 며칠에 방송할까요?'
-                      : repeat === 'monthly'
-                        ? '매월 며칠에 방송할까요?'
-                        : repeat === 'weekly'
-                          ? '매주 무슨 요일에 방송할까요?'
-                          : ''}
-                  </div>
                   <RepeatDetail
                     repeat={repeat}
                     weekdays={weekdays}
@@ -656,9 +699,7 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
                     onMonthDays={setMonthDays}
                     onYearDates={setYearDates}
                   />
-                  <div className="wizard-q__title" style={{ fontWeight: 600, marginTop: 14 }}>
-                    몇 시에 방송할까요?
-                  </div>
+                  <div className="wizard-q__sub">몇 시에 방송할까요?</div>
                   <TimePick
                     hour24={hour24}
                     minute={minute}

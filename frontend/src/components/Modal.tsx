@@ -13,9 +13,22 @@ interface ModalProps {
   children: ReactNode;
   /** 하단 버튼 영역. 없으면 렌더링하지 않는다. */
   footer?: ReactNode;
+  /**
+   * 폭. 기본은 460px 로 폼 한 줄짜리에 맞춘다.
+   *   mid   620px — 문장·확인처럼 조금 넓어야 읽히는 것
+   *   wide  920px — 2단 위자드
+   * 내용이 2단인데 좁은 모달에 넣으면 각 칸이 200px 밑으로 떨어져 전부 줄바꿈된다.
+   */
+  size?: 'default' | 'mid' | 'wide';
 }
 
-export function Modal({ title, onClose, children, footer }: ModalProps) {
+const SIZE_CLASS: Record<NonNullable<ModalProps['size']>, string> = {
+  default: '',
+  mid: ' modal--mid',
+  wide: ' modal--wide',
+};
+
+export function Modal({ title, onClose, children, footer, size = 'default' }: ModalProps) {
   const cardRef = useRef<HTMLDivElement>(null);
 
   // onClose 는 호출부에서 인라인 화살표로 넘어와 렌더링마다 새 함수다.
@@ -52,7 +65,13 @@ export function Modal({ title, onClose, children, footer }: ModalProps) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="modal" role="dialog" aria-modal="true" aria-label={title} ref={cardRef}>
+      <div
+        className={`modal${SIZE_CLASS[size]}`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        ref={cardRef}
+      >
         <div className="modal__head">
           <h2>{title}</h2>
           <button type="button" className="btn btn--ghost" onClick={onClose} aria-label="닫기">
