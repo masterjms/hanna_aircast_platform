@@ -232,13 +232,15 @@ PUT /api/config              {status_interval_sec, live_stats_interval_sec, even
 ## 9. 자동방송 스케줄
 
 ```
-GET    /api/schedules
-POST   /api/schedules         최대 10개 제한은 여기서 체크
-PATCH  /api/schedules/:id
+GET    /api/schedules                         내 범위와 겹치는 스케줄 (editable · next_fire_at · last_run)
+POST   /api/schedules                         전체 100개 상한
+PATCH  /api/schedules/:id                     {enabled} 만 보내면 켜기·끄기
 DELETE /api/schedules/:id
+GET    /api/schedules/occurrences?from&to     예정 회차 — 서버가 규칙에서 계산 (최대 31일)
+GET    /api/schedules/:id/runs                최근 실행 결과
 ```
 
-미구현이다 — `schedules` 테이블만 있고 API·실행기·화면이 없다. 계정별 스케줄(문제점 32번)은 §21 역할 사양(중간관리자·게스트, 마을 단위 파일함·이력·스케줄 분리)이 정해진 뒤에 범위를 확정한다. `schedules.created_by` 는 계정이 삭제되면 NULL 이 된다(0014).
+**2026-09-09 구현** — [스케줄 설계](xWIFI_스케줄_설계_260909.md). 규칙 하나만 저장하고 실행 날짜는 계산한다(cron 과 같다). 반복은 매일·매주·매월·매년 중 하나, 시각은 하나(KST). 대상은 `village`·`device`·`organization`(관할 전체 — 실행 시점에 마을로 펼침). 실행기가 매분 규칙을 평가해 기존 `start_file_broadcast` 로 `FILE_START` 를 건다 — 단말 프로토콜은 그대로. 중복 실행 방지는 `schedule_runs UNIQUE(schedule_id, fire_at)`, 유예 120초를 넘긴 회차는 건너뛰고 기록만 남긴다(재시도 없음). 권한: 보기는 범위가 겹치면, 수정·삭제는 대상 전체가 범위 안일 때만. `schedules.created_by` 는 계정이 삭제되면 NULL 이 된다(0014).
 
 ## 10. OTA
 

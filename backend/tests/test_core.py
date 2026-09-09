@@ -1468,3 +1468,163 @@ class TestEventVisibility:
 
         events = [self._event("village", ["3", "1"])]
         assert await events_visible_to(None, events, VillageScope.for_villages([1])) == [True]
+
+
+# ── 자동방송 규칙 (스케줄 설계 2026-09-09) ────────────────────────────────
+def _kst(y, m, d, hh=0, mm=0):
+    import datetime as dt
+
+    from app.modules.schedule.rules import KST
+
+    return dt.datetime(y, m, d, hh, mm, tzinfo=KST)
+
+
+class TestScheduleRules:
+    """규칙 하나만 저장하고 실행 시각은 계산한다 — cron 과 같다."""
+
+    @staticmethod
+    def _rule(**kw):
+        import datetime as dt
+
+        from app.modules.schedule.rules import Rule
+
+        kw.setdefault("fire_time", dt.time(9, 0))
+        return Rule(**kw)
+
+    def test_daily_fires_every_day_at_time(self):
+        from app.modules.schedule.rules import occurrences
+
+        got = occurrences(self._rule(repeat="daily"), _kst(2026, 9, 9), _kst(2026, 9, 12))
+        assert got == [_kst(2026, 9, 9, 9), _kst(2026, 9, 10, 9), _kst(2026, 9, 11, 9)]
+
+    def test_weekly_uses_korean_weekday_numbering(self):
+        from app.modules.schedule.rules import korean_weekday, occurrences
+
+        # 2026-09-09 는 수요일. 0=일 이므로 수=3.
+        assert korean_weekday(_kst(2026, 9, 9).date()) == 3
+        rule = self._rule(repeat="weekly", weekdays=frozenset({3}))
+        got = occurrences(rule, _kst(2026, 9, 7), _kst(2026, 9, 21))
+        assert got == [_kst(2026, 9, 9, 9), _kst(2026, 9, 16, 9)]
+
+    def test_monthly_skips_months_without_that_day(self):
+        from app.modules.schedule.rules import occurrences
+
+        # 31일은 9월·11월에 없다. cron 과 같이 건너뛴다.
+        rule = self._rule(repeat="monthly", month_days=frozenset({31}))
+        got = occurrences(rule, _kst(2026, 8, 1), _kst(2026, 12, 31))
+        assert [g.date().isoformat() for g in got] == ["2026-08-31", "2026-10-31"]
+
+    def test_monthly_second_day_is_one_row_many_fires(self):
+        from app.modules.schedule.rules import occurrences
+
+        # "매월 2일" — DB 에 열두 줄이 아니라 규칙 하나. 1년치를 계산하면 12번.
+        rule = self._rule(repeat="monthly", month_days=frozenset({2}))
+        got = occurrences(rule, _kst(2026, 1, 1), _kst(2027, 1, 1))
+        assert len(got) == 12
+        assert all(g.day == 2 and g.hour == 9 for g in got)
+
+    def test_yearly_feb_29_only_in_leap_years(self):
+        from app.modules.schedule.rules import occurrences
+
+        rule = self._rule(repeat="yearly", year_dates=frozenset({(2, 29)}))
+        got = occurrences(rule, _kst(2026, 1, 1), _kst(2030, 1, 1))
+        assert [g.year for g in got] == [2028]
+
+    def test_window_is_half_open(self):
+        from app.modules.schedule.rules import occurrences
+
+        rule = self._rule(repeat="daily")
+        # end 정각은 포함하지 않는다 — 실행기 창이 [분, 분+1) 이라 겹치지 않게.
+        assert occurrences(rule, _kst(2026, 9, 9, 9, 0), _kst(2026, 9, 9, 9, 0)) == []
+        assert occurrences(rule, _kst(2026, 9, 9, 9, 0), _kst(2026, 9, 9, 9, 1)) == [
+            _kst(2026, 9, 9, 9, 0)
+        ]
+        assert occurrences(rule, _kst(2026, 9, 9, 8, 0), _kst(2026, 9, 9, 9, 0)) == []
+
+    def test_utc_input_is_interpreted_in_kst(self):
+        import datetime as dt
+
+        from app.modules.schedule.rules import occurrences
+
+        # UTC 로 넘겨도 한국 시각으로 본다. KST 09:00 = UTC 00:00.
+        rule = self._rule(repeat="daily")
+        start = dt.datetime(2026, 9, 8, 23, 0, tzinfo=dt.timezone.utc)
+        end = dt.datetime(2026, 9, 9, 1, 0, tzinfo=dt.timezone.utc)
+        got = occurrences(rule, start, end)
+        assert got == [_kst(2026, 9, 9, 9, 0)]
+
+    def test_naive_datetime_is_rejected(self):
+        import datetime as dt
+
+        from app.modules.schedule.rules import occurrences
+
+        with pytest.raises(ValueError):
+            occurrences(
+                self._rule(repeat="daily"), dt.datetime(2026, 9, 9), dt.datetime(2026, 9, 10)
+            )
+
+    def test_next_occurrence_and_empty_rule(self):
+        from app.modules.schedule.rules import next_occurrence
+
+        weekly = self._rule(repeat="weekly", weekdays=frozenset({0}))  # 일요일
+        assert next_occurrence(weekly, _kst(2026, 9, 9, 10)) == _kst(2026, 9, 13, 9)
+        # 요일이 비면 영영 안 나간다 — None.
+        assert next_occurrence(self._rule(repeat="weekly"), _kst(2026, 9, 9)) is None
+
+
+class TestScheduleRunnerWindow:
+    def test_window_looks_back_by_grace_and_forward_one_minute(self):
+        import datetime as dt
+
+        from app.constants import SCHEDULE_GRACE_SEC
+        from app.tasks.schedule_runner import tick_window
+
+        now = dt.datetime(2026, 9, 9, 0, 0, 30, tzinfo=dt.timezone.utc)
+        start, end = tick_window(now)
+        assert end == dt.datetime(2026, 9, 9, 0, 1, tzinfo=dt.timezone.utc)
+        assert start == end - dt.timedelta(minutes=1, seconds=SCHEDULE_GRACE_SEC)
+
+
+class TestScheduleSchema:
+    def test_weekly_without_weekdays_is_rejected(self):
+        import datetime as dt
+
+        from app.schemas.schedule import ScheduleCreate
+
+        with pytest.raises(ValueError):
+            ScheduleCreate(
+                repeat="weekly", fire_time=dt.time(9), file_id=1,
+                target_scope="village", target_ids=["1"],
+            )
+
+    def test_unrelated_fields_are_cleared(self):
+        import datetime as dt
+
+        from app.schemas.schedule import ScheduleCreate
+
+        # 매일로 저장하는데 요일이 남아 있으면 나중에 종류를 바꿨을 때 옛 값이 튀어나온다.
+        s = ScheduleCreate(
+            repeat="daily", weekdays=[1, 2], month_days=[3], fire_time=dt.time(9, 30, 15),
+            file_id=1, target_scope="village", target_ids=["1"],
+        )
+        assert s.weekdays is None and s.month_days is None and s.year_dates is None
+        assert s.fire_time == dt.time(9, 30)  # 초는 버린다
+
+    def test_weekdays_are_deduped_and_sorted(self):
+        import datetime as dt
+
+        from app.schemas.schedule import ScheduleCreate
+
+        s = ScheduleCreate(
+            repeat="weekly", weekdays=[6, 1, 1], fire_time=dt.time(9), file_id=1,
+            target_scope="device", target_ids=["aabbccddeeff"],
+        )
+        assert s.weekdays == [1, 6]
+
+    def test_target_required(self):
+        import datetime as dt
+
+        from app.schemas.schedule import ScheduleCreate
+
+        with pytest.raises(ValueError):
+            ScheduleCreate(repeat="daily", fire_time=dt.time(9), file_id=1, target_scope="village")

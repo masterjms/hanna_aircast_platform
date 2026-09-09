@@ -23,6 +23,7 @@ import { DevicesPage } from './pages/DevicesPage';
 import { FilesPage } from './pages/FilesPage';
 import { LoginPage } from './pages/LoginPage';
 import { OrganizationsPage } from './pages/OrganizationsPage';
+import { SchedulesPage } from './pages/SchedulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
 import { VillagesPage } from './pages/VillagesPage';
@@ -34,7 +35,7 @@ const PAGE_TITLES: Record<string, [string, string]> = {
   '/broadcast': ['방송 제어', '실시간 · 파일 송출'],
   '/files': ['파일함', '업로드 · TTS'],
   '/events': ['이력', '방송 명령과 단말 응답'],
-  '/schedules': ['스케줄', '자동방송 규칙'],
+  '/schedules': ['스케줄', '자동방송 규칙 · 예정표'],
   '/costs': ['비용', '마을별 사용량'],
   '/ota': ['OTA 관리', '펌웨어 배포'],
   '/settings': ['설정', '전 단말 공통 CONFIG'],
@@ -100,7 +101,7 @@ export function App() {
         <Route path="/broadcast" element={<BroadcastPage />} />
         <Route path="/files" element={<FilesPage />} />
         <Route path="/events" element={<EventsPage />} />
-        <Route path="/schedules" element={<ComingSoon title="스케줄" phase="Phase 6" />} />
+        <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/costs" element={<ComingSoon title="비용" phase="Phase 8" />} />
 
         <Route

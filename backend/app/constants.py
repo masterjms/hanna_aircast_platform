@@ -44,6 +44,36 @@ class TargetScope(StrEnum):
     ALL = "all"
 
 
+class ScheduleTarget(StrEnum):
+    """스케줄 대상. 방송 TargetScope 와 달리 zone·all 이 없고 organization 이 있다.
+
+    organization(관할 전체)은 실행 시점에 마을로 펼치므로 broadcast_events 에는
+    village 로 남는다 — 이력과 겹침 검사는 지금 그대로다.
+    """
+
+    VILLAGE = "village"
+    DEVICE = "device"
+    ORGANIZATION = "organization"
+
+
+class Repeat(StrEnum):
+    """스케줄 반복. 하나만 고른다."""
+
+    DAILY = "daily"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
+
+
+#: 등록 가능한 스케줄 수. 원안 10개는 단일 고객 전제였고, 도청 관할이면 부족하다.
+#: 1분 tick 이 100개를 평가하는 것은 부담이 아니다.
+SCHEDULE_MAX = 100
+
+#: 놓친 회차를 이 시간 안에서만 실행한다. 넘기면 skipped(늦음). 마을 방송은 시각이
+#: 의미라 뒤늦게 내보내는 것은 사고다 — 재시작 뒤 밀린 회차가 한꺼번에 터지지 않게.
+SCHEDULE_GRACE_SEC = 120
+
+
 class FileSource(StrEnum):
     UPLOAD = "upload"
     TTS = "tts"

@@ -6,7 +6,7 @@
 
 관련 문서: [아키텍처](01_시스템_아키텍처.md) · [단말 연동](02_단말_연동_사양.md) · [데이터 모델](04_데이터_모델.md)
 
-이 문서는 현재 코드에 실제로 등록된 REST·WebSocket API를 기준으로 한다. 스케줄, OTA, 비용, 전체 이력 검색 API는 아직 없으며 별도 절에서 명확히 구분한다.
+이 문서는 현재 코드에 실제로 등록된 REST·WebSocket API를 기준으로 한다. OTA, 비용, 전체 이력 검색 API는 아직 없으며 별도 절에서 명확히 구분한다.
 
 ## 1. 공통 규칙
 
@@ -635,6 +635,39 @@ wss://<host>/ingest?session=<broadcast_events.id>
 
 업링크가 끊겨도 세션은 즉시 종료되지 않고 화면에 `uplink_connected=false`가 표시된다. 마지막 오디오 수신 후 `LIVE_UPLINK_GRACE_SEC` 기본 30초 동안 오디오가 없으면 grace watchdog이 방송을 종료한다. 한 번도 연결되지 않은 경우도 같은 기준이다.
 
+## 10a. 스케줄 API
+
+[스케줄 설계](../spec/xWIFI_스케줄_설계_260909.md). 규칙 하나만 저장하고 실행 날짜는 서버가 계산한다.
+
+| Method | Path | 권한 | 설명 |
+|---|---|---|---|
+| GET | `/api/schedules` | 로그인·범위 적용 | 내 범위와 겹치는 스케줄. `editable`, `next_fire_at`, `last_run` 포함 |
+| POST | `/api/schedules` | 로그인 | 생성. 대상은 내 범위 안, `organization`은 내 관할 기관. 전체 100개 상한 |
+| PATCH | `/api/schedules/{id}` | 대상 전체가 내 범위 | 부분 수정. `{"enabled": false}`만 보내면 끄기 |
+| DELETE | `/api/schedules/{id}` | 대상 전체가 내 범위 | 삭제. 지난 실행 기록은 남음 |
+| GET | `/api/schedules/occurrences?from&to` | 로그인·범위 적용 | `[from, to)`의 예정 회차. ISO 시각에 timezone 필수. 최대 31일 |
+| GET | `/api/schedules/{id}/runs` | 로그인·범위 적용 | 최근 실행 결과 30건 |
+
+생성 body:
+
+```json
+{
+  "repeat": "weekly",
+  "weekdays": [1, 3],
+  "fire_time": "09:00:00",
+  "file_id": 12,
+  "target_scope": "village",
+  "target_ids": ["3"],
+  "store_flash": false,
+  "enabled": true
+}
+```
+
+- `repeat`: `daily` | `weekly`(`weekdays` 0=일~6=토) | `monthly`(`month_days` 1~31) | `yearly`(`year_dates` `[{"month","day"}]`). 종류에 맞는 값이 비면 422
+- `fire_time`은 KST, 초는 버림
+- `target_scope`: `village`(마을 id 하나) | `device`(MAC 목록) | `organization`(기관 id, 실행 시 마을로 펼침)
+- 실행 결과 `status`: `pending` → `started`(`event_id`) | `skipped`(`reason`: 겹침·온라인 없음·파일·늦음) | `failed`
+
 ## 11. 현재 없는 API
 
 다음 path를 클라이언트에서 호출하면 안 된다.
@@ -642,7 +675,6 @@ wss://<host>/ingest?session=<broadcast_events.id>
 | 영역 | 현재 상태 | 구현 시 필요한 최소 범위 |
 |---|---|---|
 | 전체 이력 | 전용 router 없음 | 검색·기간·종류·대상·성공 필터, 페이지네이션, 단말 결과 상세 |
-| 스케줄 | DB 모델만 있음 | CRUD, 활성화, 실행 결과, 중복 방지 |
 | OTA | protocol 상수와 저장 디렉터리만 있음 | package·서명 관리, 작업 시작·조회, 재부팅 후 버전 판정 |
 | 비용 | DB 모델과 외부 Slack script만 있음 | 일별 집계, Cost Explorer 결합, 조회 API |
 

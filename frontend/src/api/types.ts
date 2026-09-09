@@ -475,3 +475,67 @@ export interface LiveBroadcastRequest {
 export interface BroadcastOverlapDetail {
   conflicts: { id: number; job_id: number | null; event_type: string; macs: string[] }[];
 }
+
+// ── 자동방송 스케줄 (스케줄 설계 2026-09-09) ────────────────────────────
+export type Repeat = 'daily' | 'weekly' | 'monthly' | 'yearly';
+/** 방송 TargetScope 와 달리 zone·all 이 없고 organization(관할 전체)이 있다. */
+export type ScheduleTarget = 'village' | 'device' | 'organization';
+
+export interface YearDate {
+  month: number;
+  day: number;
+}
+
+export interface ScheduleRun {
+  fire_at: string;
+  status: 'started' | 'skipped' | 'failed' | 'pending';
+  reason: string | null;
+  event_id: number | null;
+  created_at: string;
+}
+
+export interface Schedule {
+  id: number;
+  repeat: Repeat;
+  weekdays: number[] | null;
+  month_days: number[] | null;
+  year_dates: YearDate[] | null;
+  /** "09:00:00" KST */
+  fire_time: string;
+  file_id: number;
+  file_name: string | null;
+  target_scope: ScheduleTarget;
+  target_ids: string[];
+  target_label: string;
+  store_flash: boolean;
+  enabled: boolean;
+  created_by: number | null;
+  created_at: string;
+  /** 다음 실행 시각. 꺼져 있거나 규칙이 비면 null. */
+  next_fire_at: string | null;
+  last_run: ScheduleRun | null;
+  /** 대상 전체가 내 범위 안이라 고치고 지울 수 있는가. */
+  editable: boolean;
+}
+
+export interface ScheduleInput {
+  repeat: Repeat;
+  weekdays?: number[] | null;
+  month_days?: number[] | null;
+  year_dates?: YearDate[] | null;
+  fire_time: string;
+  file_id: number;
+  target_scope: ScheduleTarget;
+  target_ids: string[];
+  store_flash?: boolean;
+  enabled?: boolean;
+}
+
+/** 예정표·오늘 일정의 한 칸. 서버가 규칙에서 계산해 준다. */
+export interface Occurrence {
+  schedule_id: number;
+  fire_at: string;
+  repeat: Repeat;
+  target_label: string;
+  file_name: string | null;
+}

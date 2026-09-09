@@ -657,8 +657,11 @@ async def start_file_broadcast(
     scope: VillageScope,
     publisher: MqttPublisher,
     *,
-    user_id: int,
+    user_id: int | None,
+    schedule_id: int | None = None,
 ) -> BroadcastOut:
+    """파일 방송 시작. 사람이 누르면 user_id, 스케줄이 걸면 schedule_id 가 채워진다
+    (DB 스키마 §6 — 둘 중 하나만). 스케줄 실행기는 super_admin 범위로 부른다."""
     audio = await file_service.get_file(db, payload.file_id)
     _validate_file_for_broadcast(
         audio.size_bytes, float(audio.duration_sec) if audio.duration_sec is not None else None
@@ -704,6 +707,7 @@ async def start_file_broadcast(
         target_ids=payload.target_ids,
         file_id=audio.id,
         triggered_by=user_id,
+        schedule_id=schedule_id,
         # 종료 판정의 분모. 지금 명령을 보낸 대수를 그대로 박아둔다.
         expected_count=len(macs),
         # 저장만 하는 방송(autoplay=False)은 FILE_RESULT 가 곧 끝이고, 재생하는

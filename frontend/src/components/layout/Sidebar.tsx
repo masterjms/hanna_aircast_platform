@@ -29,7 +29,7 @@ const OPERATION: MenuItem[] = [
   { to: '/broadcast', label: '방송 제어' },
   { to: '/files', label: '파일함' },
   { to: '/events', label: '이력' },
-  { to: '/schedules', label: '스케줄', pending: true },
+  { to: '/schedules', label: '스케줄' },
 ];
 
 const ADMIN: MenuItem[] = [

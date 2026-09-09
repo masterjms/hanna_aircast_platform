@@ -34,12 +34,13 @@ from app.modules.device.router import router as device_router
 from app.modules.file.router import router as file_router
 from app.modules.geo.router import router as geo_router
 from app.modules.org.router import router as org_router
+from app.modules.schedule.router import router as schedule_router
 from app.modules.system.router import router as system_router
 from app.mqtt.connection import MqttConnection
 from app.mqtt.handlers import dispatch
 from app.mqtt.publisher import MqttPublisher
 from app.mqtt.status_buffer import StatusBuffer
-from app.tasks import account_expiry, config_reconcile
+from app.tasks import account_expiry, config_reconcile, schedule_runner
 
 # ⚠ Windows 에서 이 모듈을 `python -m uvicorn app.main:app` 로 띄우면 MQTT 가 죽는다.
 #   uvicorn 이 ProactorEventLoop 를 강제하는데 paho 가 쓰는 add_reader 가 거기 없다.
@@ -108,6 +109,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         "interval",
         hours=1,
         id="account-expiry",
+        next_run_time=datetime.now(),
+        coalesce=True,
+        max_instances=1,
+    )
+    # 자동방송 실행기. 매분 규칙을 평가한다. 중복 실행은 schedule_runs 유니크가 막으므로
+    # coalesce·max_instances 는 한 프로세스 안의 예의일 뿐이다.
+    scheduler.add_job(
+        schedule_runner.run,
+        "interval",
+        seconds=60,
+        args=[publisher],
+        id="schedule-runner",
         next_run_time=datetime.now(),
         coalesce=True,
         max_instances=1,
@@ -202,6 +215,7 @@ if settings.cors_origins:
 app.include_router(system_router)
 app.include_router(auth_router)
 app.include_router(org_router)
+app.include_router(schedule_router)
 app.include_router(device_router)
 app.include_router(dashboard_router)
 app.include_router(file_router)

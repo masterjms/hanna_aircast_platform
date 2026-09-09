@@ -10,8 +10,12 @@
  */
 
 import type {
+  Occurrence,
   Organization,
   OrganizationInput,
+  Schedule,
+  ScheduleInput,
+  ScheduleRun,
   AddressResult,
   ApiErrorBody,
   ApiErrorCode,
@@ -171,6 +175,21 @@ export const api = {
     update: (id: number, body: UserUpdate) =>
       request<User>(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: number) => request<void>(`/api/users/${id}`, { method: 'DELETE' }),
+  },
+
+  schedules: {
+    list: () => request<Schedule[]>('/api/schedules'),
+    create: (body: ScheduleInput) =>
+      request<Schedule>('/api/schedules', { method: 'POST', body: JSON.stringify(body) }),
+    update: (id: number, body: Partial<ScheduleInput>) =>
+      request<Schedule>(`/api/schedules/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+    remove: (id: number) => request<void>(`/api/schedules/${id}`, { method: 'DELETE' }),
+    /** [from, to) 의 예정 회차. ISO 문자열에 timezone 이 있어야 한다. */
+    occurrences: (from: Date, to: Date) =>
+      request<Occurrence[]>(
+        `/api/schedules/occurrences?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
+      ),
+    runs: (id: number) => request<ScheduleRun[]>(`/api/schedules/${id}/runs`),
   },
 
   files: {

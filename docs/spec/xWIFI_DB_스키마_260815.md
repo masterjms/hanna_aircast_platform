@@ -103,22 +103,39 @@ CREATE TABLE files (
 
 ## 5. 자동방송 스케줄
 
+**2026-09-09 교체 (0016)** — [스케줄 설계](xWIFI_스케줄_설계_260909.md). 옛 `months[] + weekdays[] + times[]` 는 매월 15일·매년 3월 1일을 표현할 수 없어 갈아엎었다.
+
 ```sql
 CREATE TABLE schedules (
     id            SERIAL PRIMARY KEY,
-    months        INTEGER[] NOT NULL,     -- 예: {1,2,3}
-    weekdays      INTEGER[] NOT NULL,     -- 0=일 ~ 6=토
-    times         TIME[] NOT NULL,        -- 예: {10:00, 16:00}
+    repeat        VARCHAR(10) NOT NULL CHECK (repeat IN ('daily','weekly','monthly','yearly')),
+    weekdays      INTEGER[],              -- weekly: 0=일 ~ 6=토
+    month_days    INTEGER[],              -- monthly: 1~31. 그 날이 없는 달은 건너뛴다
+    year_dates    JSONB,                  -- yearly: [{"month":3,"day":1}]
+    fire_time     TIME NOT NULL,          -- 시각 하나, KST
     file_id       INTEGER NOT NULL REFERENCES files(id),
-    target_scope  VARCHAR(20) NOT NULL CHECK (target_scope IN ('device','zone','village','all')),
-    target_ids    JSONB NOT NULL DEFAULT '[]',  -- scope에 맞는 id 목록(마을 여러 곳 가능), all이면 []
+    target_scope  VARCHAR(20) NOT NULL CHECK (target_scope IN ('village','device','organization')),
+    target_ids    JSONB NOT NULL DEFAULT '[]',   -- village: 마을 id / device: MAC 목록 / organization: 기관 id
+    store_flash   BOOLEAN NOT NULL DEFAULT false,
     enabled       BOOLEAN NOT NULL DEFAULT true,
-    created_by    INTEGER REFERENCES users(id),
+    created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 걸린 회차의 기록. 미래는 저장하지 않고 계산한다. 유니크가 중복 실행 방지의 실체.
+CREATE TABLE schedule_runs (
+    id            BIGSERIAL PRIMARY KEY,
+    schedule_id   INTEGER NOT NULL REFERENCES schedules(id) ON DELETE CASCADE,
+    fire_at       TIMESTAMPTZ NOT NULL,
+    status        VARCHAR(20) NOT NULL,   -- pending | started | skipped | failed
+    reason        VARCHAR(200),
+    event_id      BIGINT REFERENCES broadcast_events(id) ON DELETE SET NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (schedule_id, fire_at)
 );
 ```
 
-최대 10개 제한은 DB 제약이 아니라 API 레벨에서 체크(단순하게).
+상한(전체 100개)은 DB 제약이 아니라 API 레벨에서 본다.
 
 ## 6. 방송/이벤트 이력
 
