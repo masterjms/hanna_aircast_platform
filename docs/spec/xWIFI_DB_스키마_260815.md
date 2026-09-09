@@ -146,7 +146,8 @@ CREATE TABLE broadcast_events (
     job_id        BIGINT,                 -- MQTT job_id 그대로 저장 (2026-08-20 session_id/cmd_id/job_id 통일 완료, §통신 사양 참고)
     target_scope  VARCHAR(20) NOT NULL CHECK (target_scope IN ('device','zone','village','all')),
     target_ids    JSONB NOT NULL DEFAULT '[]',
-    file_id       INTEGER REFERENCES files(id),
+    file_id       INTEGER REFERENCES files(id) ON DELETE SET NULL,  -- 0017: 방송한 파일도 지울 수 있어야 한다
+    file_name     VARCHAR(255),           -- 0017: 시작 시점 파일명 스냅샷. 파일을 지워도 이력에 남는다
     schedule_id   INTEGER REFERENCES schedules(id),   -- 스케줄에 의한 자동 실행이면 채움, 수동이면 NULL
     triggered_by  INTEGER REFERENCES users(id),         -- 수동이면 채움, 스케줄이면 NULL
     triggered_at  TIMESTAMPTZ NOT NULL DEFAULT now()

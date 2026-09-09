@@ -24,6 +24,9 @@ class FileOut(ApiModel):
     uploaded_by: int | None
     #: 목록에서 "누가 올렸는지"를 보여주려고 조인해 채운다.
     uploaded_by_name: str | None = None
+    #: 이 파일을 쓰는 스케줄들("매주 09:00"). 비어 있지 않으면 삭제가 막힌다.
+    #: 방송 이력은 여기 세지 않는다 — 이력은 삭제를 막지 않는다(0017).
+    schedule_labels: list[str] = []
     created_at: dt.datetime
 
     @field_serializer("duration_sec")

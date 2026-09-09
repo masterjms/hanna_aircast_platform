@@ -1,8 +1,11 @@
 /**
  * 파일함.
  *
- * 파일은 전체 공용이다 — 마을 범위로 나누지 않는다. 삭제는 이력이 참조하지
- * 않는 파일만 가능하고, 참조 중이면 백엔드가 FILE_IN_USE 로 막는다.
+ * 파일은 전체 공용이다 — 마을 범위로 나누지 않는다.
+ *
+ * 삭제를 막는 것은 **스케줄뿐**이다(0017). 방송 이력은 파일명을 자기 행에 갖고 있어
+ * 파일이 지워져도 「무엇을」이 남는다. 어느 스케줄이 막는지는 목록에서 미리 보여준다 —
+ * 눌러 보고 나서야 알게 하면 "스케줄에 넣은 적 없는데 왜 안 지워지지"가 된다.
  *
  * 업로드와 TTS 생성 두 경로로 파일이 들어온다. 둘 다 방송은 하지 않는다 —
  * 방송 제어 화면에서 골라 송출한다.
@@ -77,7 +80,9 @@ export function FilesPage() {
   };
 
   const remove = async (f: AudioFile) => {
-    if (!window.confirm(`"${f.filename}" 을(를) 삭제할까요?`)) return;
+    if (f.schedule_labels.length > 0) return; // 버튼이 이미 비활성이다
+    if (!window.confirm(`"${f.filename}" 을(를) 삭제할까요?\n방송 이력에는 이름이 그대로 남습니다.`))
+      return;
     setError(null);
     try {
       await api.files.remove(f.id);
@@ -198,6 +203,12 @@ export function FilesPage() {
                       type="button"
                       className="btn btn--ghost btn--danger"
                       onClick={() => void remove(f)}
+                      disabled={f.schedule_labels.length > 0}
+                      title={
+                        f.schedule_labels.length > 0
+                          ? `스케줄 ${f.schedule_labels.length}건이 쓰고 있습니다: ${f.schedule_labels.join(', ')}`
+                          : undefined
+                      }
                     >
                       삭제
                     </button>

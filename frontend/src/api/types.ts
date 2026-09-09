@@ -376,6 +376,8 @@ export interface AudioFile {
   tts_voice: string | null;
   uploaded_by: number | null;
   uploaded_by_name: string | null;
+  /** 이 파일을 쓰는 스케줄들("매주 09:00"). 비어 있지 않으면 삭제할 수 없다. */
+  schedule_labels: string[];
   created_at: string;
 }
 

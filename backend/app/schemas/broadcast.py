@@ -59,6 +59,7 @@ class BroadcastOut(ApiModel):
     #: id 대신 이걸 쓴다(문제점 33번).
     target_label: str = ""
     file_id: int | None
+    #: 방송 시작 시점의 파일명. 파일을 지워도 이력에 남는다(0017).
     file_name: str | None = None
     triggered_at: dt.datetime
     ended_at: dt.datetime | None

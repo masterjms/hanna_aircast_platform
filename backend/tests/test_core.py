@@ -1628,3 +1628,57 @@ class TestScheduleSchema:
 
         with pytest.raises(ValueError):
             ScheduleCreate(repeat="daily", fire_time=dt.time(9), file_id=1, target_scope="village")
+
+
+# ── 방송한 파일 삭제 (0017) ──────────────────────────────────────────────
+class TestFileDeleteConstraints:
+    """이력은 삭제를 막지 않고, 스케줄만 막는다."""
+
+    def test_history_no_longer_blocks_deletion(self):
+        from app.models.event import BroadcastEvent
+
+        # ON DELETE SET NULL 이라야 방송한 파일을 지울 수 있다. 제약이 없으면
+        # (NO ACTION) 한 번 방송한 파일이 영영 안 지워진다.
+        fk = next(iter(BroadcastEvent.__table__.c.file_id.foreign_keys))
+        assert fk.ondelete == "SET NULL"
+
+    def test_schedule_still_blocks_deletion(self):
+        from app.models.schedule import Schedule
+
+        # 파일이 사라진 스케줄은 걸릴 때마다 조용히 실패한다. 막는 쪽이 맞다.
+        fk = next(iter(Schedule.__table__.c.file_id.foreign_keys))
+        assert fk.ondelete is None
+
+    def test_download_token_cascades(self):
+        from app.models.file import DownloadToken
+
+        # 단기 토큰은 파일과 함께 사라져야 한다.
+        fk = next(iter(DownloadToken.__table__.c.file_id.foreign_keys))
+        assert fk.ondelete == "CASCADE"
+
+    def test_history_keeps_its_own_file_name(self):
+        from app.models.event import BroadcastEvent
+
+        # 파일을 지운 뒤에도 이력의 「무엇을」이 남아야 한다. 조회 때 files 를
+        # 찾아가면 빈칸이 되므로 시작 시점 이름을 이력에 박아둔다.
+        assert "file_name" in BroadcastEvent.__table__.c
+        assert BroadcastEvent.__table__.c.file_name.nullable
+
+    def test_every_user_facing_fk_is_non_blocking(self):
+        """이력은 불변 로그다 — 참조당하는 쪽의 삭제를 막지 않는다(0006·0014·0017)."""
+        from app.models.event import BroadcastEvent
+        from app.models.file import File
+
+        for col in (BroadcastEvent.__table__.c.file_id, BroadcastEvent.__table__.c.triggered_by):
+            fk = next(iter(col.foreign_keys))
+            assert fk.ondelete == "SET NULL", col.name
+        fk = next(iter(File.__table__.c.uploaded_by.foreign_keys))
+        assert fk.ondelete == "SET NULL"
+
+
+class TestRepeatLabel:
+    def test_covers_every_repeat(self):
+        from app.constants import REPEAT_LABEL, Repeat
+
+        # 빠진 종류가 있으면 삭제 거절 사유에 "monthly" 같은 영문이 그대로 나간다.
+        assert set(REPEAT_LABEL) == {r.value for r in Repeat}

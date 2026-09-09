@@ -279,8 +279,6 @@ async def _to_out(
             }
         )
 
-    if event.file_id is not None:
-        out.file_name = await db.scalar(select(File.filename).where(File.id == event.file_id))
 
     rows = (
         await db.execute(
@@ -706,6 +704,8 @@ async def start_file_broadcast(
         target_scope=payload.target_scope.value,
         target_ids=payload.target_ids,
         file_id=audio.id,
+        # 파일이 나중에 지워져도 이력에 이름이 남아야 한다(0017).
+        file_name=audio.filename,
         triggered_by=user_id,
         schedule_id=schedule_id,
         # 종료 판정의 분모. 지금 명령을 보낸 대수를 그대로 박아둔다.

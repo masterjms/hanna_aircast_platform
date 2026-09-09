@@ -57,7 +57,13 @@ class BroadcastEvent(Base):
     #: 다중 대상을 값 하나(String)로는 표현할 수 없다.
     target_ids: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
 
-    file_id: Mapped[int | None] = mapped_column(ForeignKey("files.id"))
+    #: 파일이 지워져도 이력은 남는다 — 행은 그대로 두고 링크만 끊는다(0017).
+    file_id: Mapped[int | None] = mapped_column(
+        ForeignKey("files.id", ondelete="SET NULL")
+    )
+    #: 방송 시작 시점의 파일명 스냅샷. 파일을 지운 뒤에도 이력의 「무엇을」이 남아야
+    #: 하므로 조회 때 files 에서 찾지 않고 여기에 박아둔다(0017).
+    file_name: Mapped[str | None] = mapped_column(String(255))
     #: 스케줄에 의한 자동 실행이면 채우고, 수동이면 NULL.
     schedule_id: Mapped[int | None] = mapped_column(ForeignKey("schedules.id"))
     #: 수동이면 채우고, 스케줄이면 NULL.

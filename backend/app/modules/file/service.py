@@ -20,6 +20,7 @@ import re
 import shutil
 import subprocess
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -31,11 +32,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.constants import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, FileSource
+from app.constants import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, REPEAT_LABEL, FileSource
 from app.core.ids import new_download_token
 from app.errors import ApiError, NotFound
 from app.models.file import DownloadToken, File
 from app.models.org import User
+from app.models.schedule import Schedule
 from app.schemas.file import FileOut
 from app.tasks.config_reconcile import load_config
 
@@ -263,10 +265,12 @@ async def list_files(db: AsyncSession) -> list[FileOut]:
         )
     ).all()
 
+    used = await schedules_using(db, [f.id for f, _ in rows])
     result = []
     for file, uploader in rows:
         out = FileOut.model_validate(file)
         out.uploaded_by_name = uploader
+        out.schedule_labels = used.get(file.id, [])
         result.append(out)
     return result
 
@@ -390,23 +394,58 @@ async def upload_file(
     return out
 
 
+async def schedules_using(db: AsyncSession, file_ids: Sequence[int]) -> dict[int, list[str]]:
+    """파일별로 그 파일을 쓰는 스케줄의 설명. 목록·삭제 양쪽이 쓴다.
+
+    이력(broadcast_events)은 세지 않는다 — 0017 부터 이력은 삭제를 막지 않는다.
+    """
+    if not file_ids:
+        return {}
+    rows = (
+        await db.execute(
+            select(Schedule.file_id, Schedule.repeat, Schedule.fire_time)
+            .where(Schedule.file_id.in_(set(file_ids)))
+            .order_by(Schedule.file_id, Schedule.fire_time)
+        )
+    ).all()
+    out: dict[int, list[str]] = {}
+    for fid, repeat, fire_time in rows:
+        out.setdefault(fid, []).append(f"{REPEAT_LABEL.get(repeat, repeat)} {fire_time:%H:%M}")
+    return out
+
+
 async def delete_file(db: AsyncSession, file_id: int) -> None:
     """파일 삭제.
 
     DB 행을 먼저 지우고 디스크를 지운다. 순서를 뒤집으면 디스크는 비었는데
     목록에는 남는 상태가 생긴다(그쪽이 더 나쁘다 — 방송을 걸면 404 가 난다).
 
-    스케줄·이력이 참조 중이면 DB 가 FK 로 막는다.
+    방송 이력은 삭제를 막지 않는다(0017) — 행은 남고 file_id 만 NULL 이 되며,
+    「무엇을」은 이력에 박아 둔 file_name 이 계속 보여준다.
+
+    스케줄은 막는다. 파일이 사라진 스케줄은 걸릴 때마다 조용히 실패하기 때문이다.
+    어느 스케줄인지 이름을 대 준다 — 예전에는 「스케줄이나 이력」이라고만 해서
+    스케줄에 넣은 적 없는 사람이 이유를 알 수 없었다.
     """
     file = await get_file(db, file_id)
     path = absolute_path(file)
 
+    used = (await schedules_using(db, [file_id])).get(file_id, [])
+    if used:
+        raise ApiError(
+            f"이 파일을 쓰는 스케줄이 {len(used)}건 있습니다 ({', '.join(used[:3])}"
+            f"{' 외' if len(used) > 3 else ''}). "
+            "스케줄을 먼저 지우거나 다른 파일로 바꿔 주세요.",
+            code="FILE_IN_USE",
+            detail={"schedules": used},
+        )
+
     await db.delete(file)
     try:
         await db.flush()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 - 위에서 못 거른 참조가 남아 있을 때
         raise ApiError(
-            "스케줄이나 이력에서 사용 중인 파일은 삭제할 수 없습니다.",
+            "다른 곳에서 사용 중인 파일은 삭제할 수 없습니다.",
             code="FILE_IN_USE",
         ) from exc
 

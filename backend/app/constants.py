@@ -65,6 +65,14 @@ class Repeat(StrEnum):
     YEARLY = "yearly"
 
 
+#: 반복 종류의 한국어 표기. 서버가 문구를 만들 때 쓴다(파일 삭제 거절 사유 등).
+REPEAT_LABEL: dict[str, str] = {
+    Repeat.DAILY.value: "매일",
+    Repeat.WEEKLY.value: "매주",
+    Repeat.MONTHLY.value: "매월",
+    Repeat.YEARLY.value: "매년",
+}
+
 #: 등록 가능한 스케줄 수. 원안 10개는 단일 고객 전제였고, 도청 관할이면 부족하다.
 #: 1분 tick 이 100개를 평가하는 것은 부담이 아니다.
 SCHEDULE_MAX = 100

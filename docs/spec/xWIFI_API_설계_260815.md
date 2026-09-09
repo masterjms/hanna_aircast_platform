@@ -162,6 +162,8 @@ GET    /api/files/:id/audio    미리듣기/다운로드
 GET    /dl/:token              단말 전용 다운로드 — 로그인 없음, FILE_START 의 단기 토큰만. Range 지원
 ```
 
+**파일 삭제를 막는 것은 스케줄뿐이다 (2026-09-09, 0017)**: 예전에는 한 번이라도 방송한 파일이 영영 지워지지 않았다 — `broadcast_events.file_id` 가 제약 없는 FK 라 DB 가 삭제를 거부했고, 화면에는 「스케줄이나 이력에서 사용 중」이라고만 떠서 스케줄에 넣은 적 없는 사람은 이유를 알 수 없었다. 같은 부류의 세 번째다(0006 `device_events.mac`, 0014 `users` 참조 셋). 원칙은 같다 — **이력은 남되 참조당하는 쪽의 삭제를 막지 않는다.** 방송 시작 시점의 파일명을 `broadcast_events.file_name` 에 박아 두고(`expected_count`·`bytes_estimated` 와 같은 방식) `file_id` 를 `ON DELETE SET NULL` 로 바꿨다. 파일을 지워도 이력의 「무엇을」은 남고 링크만 끊긴다. 스케줄은 계속 막는다 — 파일이 사라진 스케줄은 걸릴 때마다 조용히 실패하므로, 대신 어느 스케줄인지 이름을 대 주고 파일함 목록에서도 미리 보여준다(`FileOut.schedule_labels`).
+
 **업로드 오디오 규격 검사 (2026-09-07, 문제점 31번)**: 업로드된 mp3 를 `ffprobe` 로 재서 방송 규격(16kHz · mono · `file_bitrate_kbps`)과 비교한다.
 
 | 파일 | 처리 | 응답 |

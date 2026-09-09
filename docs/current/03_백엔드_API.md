@@ -460,7 +460,7 @@ PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유�
 |---|---|---|---|
 | GET | `/api/files` | 로그인 | 파일 목록 |
 | POST | `/api/files` | 로그인 | multipart MP3 업로드 |
-| DELETE | `/api/files/{id}` | 로그인 | 미사용 파일 삭제 |
+| DELETE | `/api/files/{id}` | 로그인 | 파일 삭제. 스케줄이 쓰고 있으면 `FILE_IN_USE`, 방송 이력은 막지 않는다 |
 | GET | `/api/files/{id}/audio` | 로그인 또는 query token | 관리자 미리듣기 |
 | GET | `/api/tts/voices` | 로그인 | 언어·voice 목록 |
 | POST | `/api/files/tts` | 로그인 | 합성 후 파일함 등록 |
