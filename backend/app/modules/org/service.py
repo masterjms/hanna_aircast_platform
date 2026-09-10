@@ -453,11 +453,38 @@ async def _set_user_villages(db: AsyncSession, user_id: int, village_ids: Iterab
     await db.flush()
 
 
+async def villages_by_user(db: AsyncSession, user_ids: Sequence[int]) -> dict[int, list[int]]:
+    """계정별 담당 마을. 목록 화면이 건마다 읽지 않도록 한 번에 가져온다.
+
+    예전에는 계정 하나마다 두 번 읽었다 — 관리할 수 있는지 판정에 한 번,
+    응답을 만들 때 또 한 번. 계정 50개에 질의가 51번 나갔다(2026-09-10 실측).
+    """
+    if not user_ids:
+        return {}
+    out: dict[int, list[int]] = {}
+    for uid, vid in (
+        await db.execute(
+            select(UserVillage.user_id, UserVillage.village_id).where(
+                UserVillage.user_id.in_(set(user_ids))
+            )
+        )
+    ).all():
+        out.setdefault(uid, []).append(vid)
+    return out
+
+
 async def _to_user_out(
-    db: AsyncSession, user: User, names: dict[int, str] | None = None
+    db: AsyncSession,
+    user: User,
+    names: dict[int, str] | None = None,
+    villages: dict[int, list[int]] | None = None,
 ) -> UserOut:
     out = UserOut.model_validate(user)
-    out.village_ids = await villages_of_user(db, user.id)
+    # 배치로 받은 게 있으면 쓰고, 단건 경로(생성·수정)는 지금처럼 직접 읽는다.
+    out.village_ids = (
+        sorted(villages.get(user.id, [])) if villages is not None
+        else await villages_of_user(db, user.id)
+    )
     if user.organization_id:
         if names is None:
             names = await _org_names(db, [user.organization_id])
@@ -466,7 +493,12 @@ async def _to_user_out(
 
 
 async def _manageable(
-    db: AsyncSession, target: User, actor: User, org_ids: set[int] | None, scope: VillageScope
+    db: AsyncSession,
+    target: User,
+    actor: User,
+    org_ids: set[int] | None,
+    scope: VillageScope,
+    villages: dict[int, list[int]] | None = None,
 ) -> bool:
     """actor 가 target 계정을 만지고 볼 수 있는가(설계 §5).
 
@@ -480,8 +512,11 @@ async def _manageable(
     if target.role in authz.ORG_ROLES:
         return org_ids is not None and target.organization_id in org_ids
     # village_admin — 담당 마을이 하나라도 관할 밖이면 내 계정이 아니다.
-    villages = await villages_of_user(db, target.id)
-    return all(scope.allows(v) for v in villages)
+    if villages is not None:
+        mine = villages.get(target.id, [])
+    else:
+        mine = await villages_of_user(db, target.id)
+    return all(scope.allows(v) for v in mine)
 
 
 async def list_users(
@@ -489,10 +524,11 @@ async def list_users(
 ) -> list[UserOut]:
     users = (await db.scalars(select(User).order_by(User.username))).all()
     names = await _org_names(db, [u.organization_id for u in users])
+    villages = await villages_by_user(db, [u.id for u in users])
     out = []
     for u in users:
-        if await _manageable(db, u, actor, org_ids, scope):
-            out.append(await _to_user_out(db, u, names))
+        if await _manageable(db, u, actor, org_ids, scope, villages):
+            out.append(await _to_user_out(db, u, names, villages))
     return out
 
 

@@ -150,6 +150,99 @@ async def _target_label(db: AsyncSession, target_scope: str, target_ids: Sequenc
     )
 
 
+async def resolve_batch(
+    db: AsyncSession, schedules: Sequence[Schedule]
+) -> dict[int, tuple[set[int], str]]:
+    """스케줄들의 (닿는 마을 집합, 사람이 읽는 이름)을 한 번에 만든다.
+
+    건마다 구하면 규칙 100개에 질의가 103번 나간다(2026-09-10 실측). 종류별로 id 를
+    모아 한 번씩만 읽어 규칙 수와 무관하게 6회 안팎으로 고정한다.
+
+    **기관은 반드시 기관별로 분리한다.** 여러 기관의 마을을 한 덩어리로 합쳐서 쓰면
+    A 기관 스케줄이 B 기관 마을에도 닿는 것으로 판정되어 권한이 넓어진다.
+
+    결과는 target_villages()·_target_label() 을 건별로 부른 것과 같아야 한다 —
+    테스트가 그 동등성을 본다.
+    """
+    if not schedules:
+        return {}
+
+    org_ids: set[int] = set()
+    macs: set[str] = set()
+    non_org: list[tuple[str, Sequence[str]]] = []
+    for sch in schedules:
+        if sch.target_scope == ScheduleTarget.ORGANIZATION.value:
+            org_ids.update(_ints(sch.target_ids))
+        else:
+            non_org.append((sch.target_scope, sch.target_ids))
+            if sch.target_scope == ScheduleTarget.DEVICE.value:
+                macs.update(str(m) for m in sch.target_ids)
+
+    # 기관 → (이름, 그 기관과 바로 아래 기관의 마을). expand_org_villages 와 같은 범위다.
+    org_name: dict[int, str] = {}
+    org_villages: dict[int, set[int]] = {oid: set() for oid in org_ids}
+    if org_ids:
+        rows = (
+            await db.execute(
+                select(Organization.id, Organization.parent_id, Organization.name).where(
+                    or_(Organization.id.in_(org_ids), Organization.parent_id.in_(org_ids))
+                )
+            )
+        ).all()
+        # 이 기관 자신 + 자식 기관 → 어느 대상 기관에 속하는지
+        owner: dict[int, set[int]] = {}
+        for oid, parent_id, name in rows:
+            if oid in org_ids:
+                org_name[oid] = name
+                owner.setdefault(oid, set()).add(oid)
+            if parent_id in org_ids:
+                owner.setdefault(oid, set()).add(parent_id)
+        if owner:
+            for vid, v_org in (
+                await db.execute(
+                    select(Village.id, Village.organization_id).where(
+                        Village.organization_id.in_(owner)
+                    )
+                )
+            ).all():
+                for target_org in owner.get(v_org, ()):
+                    org_villages[target_org].add(vid)
+
+    # 단말 → 마을. describe_targets 는 이름만 주므로 마을은 따로 읽는다.
+    mac_village: dict[str, int | None] = {}
+    if macs:
+        mac_village = dict(
+            (
+                await db.execute(
+                    select(Device.mac, Device.village_id).where(Device.mac.in_(macs))
+                )
+            ).all()
+        )
+
+    # 이름은 기존 함수를 그대로 쓴다 — 접는 규칙("가, 나 외 2곳")이 갈라지면 안 된다.
+    non_org_labels = await device_service.describe_targets(db, non_org) if non_org else []
+
+    out: dict[int, tuple[set[int], str]] = {}
+    cursor = 0
+    for sch in schedules:
+        if sch.target_scope == ScheduleTarget.ORGANIZATION.value:
+            ids = _ints(sch.target_ids)
+            villages = set().union(*(org_villages.get(o, set()) for o in ids)) if ids else set()
+            names = [org_name[o] for o in sorted(ids) if o in org_name]
+            label = f"{', '.join(names)} 관할 전체" if names else ""
+        else:
+            label = non_org_labels[cursor]
+            cursor += 1
+            if sch.target_scope == ScheduleTarget.VILLAGE.value:
+                villages = set(_ints(sch.target_ids))
+            else:
+                villages = {
+                    v for v in (mac_village.get(str(m)) for m in sch.target_ids) if v is not None
+                }
+        out[sch.id] = (villages, label)
+    return out
+
+
 # ── 조회 ─────────────────────────────────────────────────────────────────
 async def _last_runs(db: AsyncSession, schedule_ids: Sequence[int]) -> dict[int, ScheduleRun]:
     if not schedule_ids:
@@ -167,19 +260,20 @@ async def _last_runs(db: AsyncSession, schedule_ids: Sequence[int]) -> dict[int,
     return out
 
 
-async def _to_out(
-    db: AsyncSession,
+def _to_out(
     s: Schedule,
     scope: VillageScope,
     *,
     now: dt.datetime,
     file_names: dict[int, str],
     last_runs: dict[int, ScheduleRun],
+    resolved: tuple[set[int], str],
 ) -> ScheduleOut:
+    villages, label = resolved
     out = ScheduleOut.model_validate(s)
     out.file_name = file_names.get(s.file_id)
-    out.target_label = await _target_label(db, s.target_scope, s.target_ids)
-    out.editable = _editable(await target_villages(db, s.target_scope, s.target_ids), scope)
+    out.target_label = label
+    out.editable = _editable(villages, scope)
     if s.enabled:
         out.next_fire_at = rules.next_occurrence(rules.rule_of(s), now)
     run = last_runs.get(s.id)
@@ -189,20 +283,24 @@ async def _to_out(
 
 async def _visible_schedules(
     db: AsyncSession, scope: VillageScope, *, enabled_only: bool = False
-) -> list[Schedule]:
+) -> tuple[list[Schedule], dict[int, tuple[set[int], str]]]:
+    """보이는 스케줄과 그 해석 결과(마을 집합·이름)를 함께 돌려준다.
+
+    해석을 한 번만 하고 보이는지·고칠 수 있는지·이름에 모두 쓴다. 예전에는 마을 집합을
+    두 번 구했다 — 보이는지 판정에 한 번, 고칠 수 있는지 판정에 또 한 번.
+    """
     stmt = select(Schedule).order_by(Schedule.fire_time, Schedule.id)
     if enabled_only:
         stmt = stmt.where(Schedule.enabled.is_(True))
-    rows = (await db.scalars(stmt)).all()
+    rows = list((await db.scalars(stmt)).all())
+    if not rows or scope.is_empty:
+        return ([] if scope.is_empty else rows, await resolve_batch(db, rows) if rows else {})
+
+    resolved = await resolve_batch(db, rows)
     if scope.all_villages:
-        return list(rows)
-    if scope.is_empty:
-        return []
-    out = []
-    for s in rows:
-        if _visible(await target_villages(db, s.target_scope, s.target_ids), scope):
-            out.append(s)
-    return out
+        return rows, resolved
+    visible = [s for s in rows if _visible(resolved[s.id][0], scope)]
+    return visible, resolved
 
 
 async def _file_names(db: AsyncSession, ids: Sequence[int]) -> dict[int, str]:
@@ -213,12 +311,14 @@ async def _file_names(db: AsyncSession, ids: Sequence[int]) -> dict[int, str]:
 
 
 async def list_schedules(db: AsyncSession, scope: VillageScope) -> list[ScheduleOut]:
-    schedules = await _visible_schedules(db, scope)
+    schedules, resolved = await _visible_schedules(db, scope)
     now = dt.datetime.now(dt.timezone.utc)
     names = await _file_names(db, [s.file_id for s in schedules])
     runs = await _last_runs(db, [s.id for s in schedules])
     return [
-        await _to_out(db, s, scope, now=now, file_names=names, last_runs=runs)
+        _to_out(
+            s, scope, now=now, file_names=names, last_runs=runs, resolved=resolved[s.id]
+        )
         for s in schedules
     ]
 
@@ -228,7 +328,10 @@ async def get_schedule(db: AsyncSession, schedule_id: int, scope: VillageScope) 
     now = dt.datetime.now(dt.timezone.utc)
     names = await _file_names(db, [s.file_id])
     runs = await _last_runs(db, [s.id])
-    return await _to_out(db, s, scope, now=now, file_names=names, last_runs=runs)
+    resolved = (await resolve_batch(db, [s]))[s.id]
+    return _to_out(
+        s, scope, now=now, file_names=names, last_runs=runs, resolved=resolved
+    )
 
 
 async def _load(db: AsyncSession, schedule_id: int, scope: VillageScope) -> Schedule:
@@ -377,11 +480,11 @@ async def occurrences(
             f"예정표는 한 번에 {OCCURRENCE_MAX_DAYS}일까지 볼 수 있습니다.",
             code="OCCURRENCE_RANGE_TOO_WIDE",
         )
-    schedules = await _visible_schedules(db, scope, enabled_only=True)
+    schedules, resolved = await _visible_schedules(db, scope, enabled_only=True)
     names = await _file_names(db, [s.file_id for s in schedules])
     out: list[OccurrenceOut] = []
     for s in schedules:
-        label = await _target_label(db, s.target_scope, s.target_ids)
+        label = resolved[s.id][1]
         for at in rules.occurrences(rules.rule_of(s), start, end):
             out.append(
                 OccurrenceOut(

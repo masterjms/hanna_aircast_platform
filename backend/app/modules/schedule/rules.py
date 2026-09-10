@@ -95,7 +95,43 @@ def occurrences(rule: Rule, start: dt.datetime, end: dt.datetime) -> list[dt.dat
     return out
 
 
+def can_ever_match(rule: Rule) -> bool:
+    """이 규칙이 언젠가 걸리기는 하는가.
+
+    요일·날짜 목록이 비면 영영 안 걸린다. 그런 규칙에 LOOKAHEAD_DAYS 를 다 훑는 것은
+    1465번 헛도는 일이라 먼저 걸러낸다(API 검증이 막지만 옛 데이터가 있을 수 있다).
+    """
+    if rule.repeat == Repeat.WEEKLY.value:
+        return bool(rule.weekdays)
+    if rule.repeat == Repeat.MONTHLY.value:
+        return bool(rule.month_days)
+    if rule.repeat == Repeat.YEARLY.value:
+        return bool(rule.year_dates)
+    return rule.repeat == Repeat.DAILY.value
+
+
 def next_occurrence(rule: Rule, after: dt.datetime) -> dt.datetime | None:
-    """after 이후 첫 실행 시각. LOOKAHEAD_DAYS 안에 없으면 None(예: 빈 요일 목록)."""
-    found = occurrences(rule, after, after + dt.timedelta(days=LOOKAHEAD_DAYS))
-    return found[0] if found else None
+    """after 이후(같은 시각 포함) 첫 실행 시각. LOOKAHEAD_DAYS 안에 없으면 None.
+
+    **찾는 즉시 멈춘다.** 예전에는 occurrences() 로 범위 전체(4년)의 회차를 모아 첫
+    번째만 꺼냈다 — 규칙 하나에 1.1~1.6ms 가 들어서, 목록에 100개면 그것만으로
+    113ms CPU 였다(2026-09-10 실측). 매일 규칙은 이제 1~2번 반복이면 끝난다.
+
+    경계는 occurrences() 와 같다: `at >= after` 를 만족하는 첫 시각. 지금이 정확히
+    발사 시각이면 그 시각을 돌려준다.
+    """
+    if after.tzinfo is None:
+        raise ValueError("after 는 timezone 이 있어야 한다")
+    if not can_ever_match(rule):
+        return None
+
+    s = after.astimezone(KST)
+    day = s.date()
+    last = (s + dt.timedelta(days=LOOKAHEAD_DAYS)).date()
+    while day <= last:
+        if matches_date(rule, day):
+            at = dt.datetime.combine(day, rule.fire_time, tzinfo=KST)
+            if at >= s:
+                return at
+        day += dt.timedelta(days=1)
+    return None

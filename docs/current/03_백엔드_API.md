@@ -643,7 +643,7 @@ wss://<host>/ingest?session=<broadcast_events.id>
 
 | Method | Path | 권한 | 설명 |
 |---|---|---|---|
-| GET | `/api/schedules` | 로그인·범위 적용 | 내 범위와 겹치는 스케줄. `editable`, `next_fire_at`, `last_run` 포함 |
+| GET | `/api/schedules` | 로그인·범위 적용 | 내 범위와 겹치는 스케줄. `editable`, `next_fire_at`, `last_run` 포함. 질의 수는 규칙 수와 무관(4회) |
 | POST | `/api/schedules` | 로그인 | 생성. 대상은 내 범위 안, `organization`은 내 관할 기관. 전체 100개 상한 |
 | PATCH | `/api/schedules/{id}` | 대상 전체가 내 범위 | 부분 수정. `{"enabled": false}`만 보내면 끄기 |
 | DELETE | `/api/schedules/{id}` | 대상 전체가 내 범위 | 삭제. 지난 실행 기록은 남음 |

@@ -1763,3 +1763,174 @@ class TestTtsFormatVersion:
             pytest.raises(ApiError),
         ):
             engine.normalize_mp3(b"not-an-mp3", 16)
+
+
+# ── 목록 조회 성능 (2026-09-10) ─────────────────────────────────────────
+class TestNextOccurrenceEarlyExit:
+    """찾는 즉시 멈춘다. 답은 예전과 같아야 한다."""
+
+    @staticmethod
+    def _rule(**kw):
+        import datetime as dt
+
+        from app.modules.schedule.rules import Rule
+
+        kw.setdefault("fire_time", dt.time(9, 0))
+        return Rule(**kw)
+
+    def _slow(self, rule, after):
+        """예전 구현 — 범위 전체를 모아 첫 번째를 꺼낸다."""
+        import datetime as dt
+
+        from app.modules.schedule.rules import LOOKAHEAD_DAYS, occurrences
+
+        found = occurrences(rule, after, after + dt.timedelta(days=LOOKAHEAD_DAYS))
+        return found[0] if found else None
+
+    def test_matches_the_old_implementation(self):
+
+        from app.modules.schedule.rules import next_occurrence
+
+        rules_to_check = [
+            self._rule(repeat="daily"),
+            self._rule(repeat="weekly", weekdays=frozenset({0, 3})),
+            self._rule(repeat="monthly", month_days=frozenset({1, 31})),
+            self._rule(repeat="yearly", year_dates=frozenset({(2, 29), (12, 25)})),
+        ]
+        # 하루 안의 여러 시각에서 확인한다 — 경계(발사 시각 직전·정각·직후)가 중요하다.
+        for rule in rules_to_check:
+            for hour in (0, 8, 9, 10, 23):
+                after = _kst(2026, 9, 10, hour, 0)
+                assert next_occurrence(rule, after) == self._slow(rule, after), (rule, hour)
+
+    def test_exact_fire_time_returns_itself(self):
+        from app.modules.schedule.rules import next_occurrence
+
+        # 지금이 정확히 발사 시각이면 그 시각을 돌려준다(예전 경계와 같다).
+        rule = self._rule(repeat="daily")
+        assert next_occurrence(rule, _kst(2026, 9, 10, 9, 0)) == _kst(2026, 9, 10, 9, 0)
+
+    def test_rule_that_can_never_match_is_none(self):
+        from app.modules.schedule.rules import can_ever_match, next_occurrence
+
+        empty = self._rule(repeat="weekly")
+        assert can_ever_match(empty) is False
+        assert next_occurrence(empty, _kst(2026, 9, 10)) is None
+
+    def test_naive_datetime_is_rejected(self):
+        import datetime as dt
+
+        from app.modules.schedule.rules import next_occurrence
+
+        with pytest.raises(ValueError):
+            next_occurrence(self._rule(repeat="daily"), dt.datetime(2026, 9, 10))
+
+    def test_daily_is_fast(self):
+        import time
+
+        from app.modules.schedule.rules import next_occurrence
+
+        rule = self._rule(repeat="daily")
+        after = _kst(2026, 9, 10, 10, 0)
+        t = time.perf_counter()
+        for _ in range(200):
+            next_occurrence(rule, after)
+        per_call_ms = (time.perf_counter() - t) / 200 * 1000
+        # 예전에는 1.1ms 였다. 범위 전체를 훑는 구현으로 되돌아가면 여기서 걸린다.
+        assert per_call_ms < 0.1, per_call_ms
+
+
+class TestScheduleResolveBatch:
+    """배치 해석이 건별 해석과 **같은 답**을 내야 한다.
+
+    다르면 권한이 넓어지거나 좁아진다 — 기관별 마을을 한 덩어리로 합치는 실수가
+    가장 위험하다(A 기관 스케줄이 B 기관 마을에도 닿게 된다).
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_input_makes_no_query(self):
+        from app.modules.schedule.service import resolve_batch
+
+        assert await resolve_batch(None, []) == {}
+
+    @staticmethod
+    def _counting_db():
+        class Rows:
+            def all(self):
+                return []
+
+            def __iter__(self):
+                return iter(())
+
+        class Stub:
+            def __init__(self):
+                self.count = 0
+
+            async def execute(self, stmt):
+                self.count += 1
+                return Rows()
+
+            async def scalars(self, stmt):
+                self.count += 1
+                return Rows()
+
+        return Stub()
+
+    @pytest.mark.asyncio
+    async def test_queries_do_not_grow_with_schedule_count(self):
+        import types
+
+        from app.modules.schedule.service import resolve_batch
+
+        def scheds(n):
+            return [
+                types.SimpleNamespace(id=i + 1, target_scope="village", target_ids=[str(i + 1)])
+                for i in range(n)
+            ]
+
+        db10 = self._counting_db()
+        await resolve_batch(db10, scheds(10))
+        db100 = self._counting_db()
+        await resolve_batch(db100, scheds(100))
+        # 규칙이 10배가 돼도 질의 수는 같아야 한다 — 이게 안 지켜지면 N+1 로 되돌아간 것.
+        assert db10.count == db100.count, (db10.count, db100.count)
+        assert db100.count <= 6, db100.count
+
+    @pytest.mark.asyncio
+    async def test_village_ids_are_the_villages(self):
+        import types
+
+        from app.modules.schedule.service import resolve_batch
+
+        sched = types.SimpleNamespace(id=1, target_scope="village", target_ids=["3", "7"])
+        got = await resolve_batch(self._counting_db(), [sched])
+        assert got[1][0] == {3, 7}
+
+    def test_org_villages_are_kept_per_organization(self):
+        """기관별 분리 — 합치면 권한이 넓어진다."""
+        import inspect
+
+        from app.modules.schedule import service
+
+        src = inspect.getsource(service.resolve_batch)
+        # 대상 기관마다 자기 마을 집합을 따로 담는 구조여야 한다.
+        assert "org_villages[target_org].add(vid)" in src
+        assert "org_villages: dict[int, set[int]]" in src
+
+
+class TestUserListBatch:
+    def test_villages_by_user_groups_rows(self):
+        import inspect
+
+        from app.modules.org import service
+
+        # 목록은 배치로, 단건(생성·수정)은 예전처럼 직접 읽는 두 경로가 있어야 한다.
+        src = inspect.getsource(service._to_user_out)
+        assert "villages.get(user.id" in src
+        assert "await villages_of_user(db, user.id)" in src
+
+    @pytest.mark.asyncio
+    async def test_empty_input_makes_no_query(self):
+        from app.modules.org.service import villages_by_user
+
+        assert await villages_by_user(None, []) == {}
