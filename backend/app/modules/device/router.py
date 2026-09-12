@@ -107,7 +107,7 @@ async def update_device(
 ) -> DeviceDetail:
     """별칭 · 마을 · 구역 수정. 마을이 바뀌면 CONFIG 를 단말에 내려보낸다.
 
-    마을 이동은 시·군 관리자 이상만(설계 §6.1). 이장은 자기 마을 안의 값만 고친다."""
+    마을 이동은 기관 관리자 이상만(설계 §6.1). 이장은 자기 마을 안의 값만 고친다."""
     version = await system_service.config_version(db)
     return await service.update_device(
         db,

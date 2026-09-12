@@ -7,43 +7,40 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.constants import OrgLevel, Role
+from app.constants import Role
 from app.schemas.common import ApiModel
 
 
-# ── 기관 (관리자 계층 설계 §3) ───────────────────────────────────────────
+# ── 기관 (관리자 계층 설계 §3 · v2 깊이 무제한) ─────────────────────────
 class OrganizationCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    level: OrgLevel
-    #: sigungu 면 상위 sido 기관(없어도 됨). sido 면 반드시 null.
+    #: 붙일 자리. null 이면 뿌리(최고 관리자만). 기관 관리자는 자기 관할 안의 마디여야 한다.
     parent_id: int | None = None
-    #: 법정동코드 앞자리 — sido 2자리, sigungu 5자리. 마을 기관 제안용.
-    jurisdiction_code: str | None = Field(default=None, pattern=r"^\d{2}(\d{3})?$")
 
 
 class OrganizationUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
+    #: 옮기기. 자기 자신·자기 아래로는 못 옮긴다(ORG_CYCLE). 출발·도착 모두 관할이어야 한다.
     parent_id: int | None = None
-    jurisdiction_code: str | None = Field(default=None, pattern=r"^\d{2}(\d{3})?$")
 
 
 class OrganizationOut(ApiModel):
     id: int
     name: str
-    level: OrgLevel
     parent_id: int | None
     parent_name: str | None = None
-    jurisdiction_code: str | None
-    #: 삭제 가능 여부를 화면이 알 수 있게 같이 센다.
+    #: 바로 아래 것들의 수. 삭제 가능 여부(셋 다 0)를 화면이 안다. 부분 트리 합계는
+    #: 화면이 목록으로 계산한다 — 여기서 재귀 합계를 내면 마디마다 질의가 는다.
     village_count: int = 0
     user_count: int = 0
+    child_count: int = 0
     created_at: dt.datetime
 
 
 # ── 마을 ─────────────────────────────────────────────────────────────────
 class VillageCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    #: 관리 기관. 시·군 관리자는 자기 기관으로 강제된다. 최고 관리자는 null 가능.
+    #: 관리 기관(트리의 마디). 기관 관리자가 비우면 자기 기관이 된다. null 은 최고 관리자만.
     organization_id: int | None = None
     sido: str | None = Field(default=None, max_length=50)
     sigungu: str | None = Field(default=None, max_length=50)
@@ -144,7 +141,7 @@ class UserCreate(BaseModel):
     password: str = Field(min_length=8, max_length=64)
     role: Role
     village_ids: list[int] = Field(default_factory=list)
-    #: sido_admin·sigungu_admin 의 소속 기관. 그 밖의 역할은 null 이어야 한다.
+    #: org_admin 의 소속 기관. 그 밖의 역할은 null 이어야 한다.
     organization_id: int | None = None
     #: 계정 사용 기간(일). 만료 다음 날부터 정리 작업이 계정을 지운다.
     #: null 은 무기한 — 상시 운영 계정을 만들 때만 쓴다. 화면은 기본 15일을 채운다.

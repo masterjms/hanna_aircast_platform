@@ -141,11 +141,6 @@ export const api = {
         body: JSON.stringify(body),
       }),
     remove: (id: number) => request<void>(`/api/organizations/${id}`, { method: 'DELETE' }),
-    /** 주소(법정동코드)로 관리 기관을 제안받는다. 제안일 뿐이라 사람이 바꿀 수 있다. */
-    suggest: (bCode: string) =>
-      request<{ organization_id: number | null }>(
-        `/api/organizations/suggest?b_code=${encodeURIComponent(bCode)}`,
-      ),
   },
 
   villages: {

@@ -16,10 +16,11 @@ import datetime as dt
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import SCHEDULE_MAX, ScheduleTarget
+from app.core.orgtree import load_tree
 from app.core.scope import VillageScope
 from app.errors import (
     ApiError,
@@ -53,18 +54,17 @@ class ScheduleNotFound(NotFound):
 
 # ── 대상 해석 ────────────────────────────────────────────────────────────
 async def expand_org_villages(db: AsyncSession, org_ids: Sequence[int]) -> list[int]:
-    """기관(자기 + 바로 아래 기관) 소속 마을 id.
+    """기관(자기 + 아래 전부, 깊이 무관) 소속 마을 id.
 
-    실행 시점에 부르므로 새로 영입한 마을도 자동으로 들어간다.
+    실행 시점에 부르므로 새로 영입한 마을·새로 붙인 하위 기관도 자동으로 들어간다.
     """
     if not org_ids:
         return []
-    children = select(Organization.id).where(Organization.parent_id.in_(org_ids))
-    rows = await db.scalars(
-        select(Village.id).where(
-            or_(Village.organization_id.in_(org_ids), Village.organization_id.in_(children))
-        )
-    )
+    tree = await load_tree(db)
+    nodes = tree.subtree_of(org_ids)
+    if not nodes:
+        return []
+    rows = await db.scalars(select(Village.id).where(Village.organization_id.in_(nodes)))
     return sorted(set(rows.all()))
 
 
@@ -178,25 +178,19 @@ async def resolve_batch(
             if sch.target_scope == ScheduleTarget.DEVICE.value:
                 macs.update(str(m) for m in sch.target_ids)
 
-    # 기관 → (이름, 그 기관과 바로 아래 기관의 마을). expand_org_villages 와 같은 범위다.
+    # 기관 → (이름, 그 기관 아래 전부의 마을). expand_org_villages 와 같은 범위다.
     org_name: dict[int, str] = {}
     org_villages: dict[int, set[int]] = {oid: set() for oid in org_ids}
     if org_ids:
-        rows = (
-            await db.execute(
-                select(Organization.id, Organization.parent_id, Organization.name).where(
-                    or_(Organization.id.in_(org_ids), Organization.parent_id.in_(org_ids))
-                )
-            )
-        ).all()
-        # 이 기관 자신 + 자식 기관 → 어느 대상 기관에 속하는지
+        tree = await load_tree(db)
+        # 마디 → 그 마디를 부분 트리에 담는 대상 기관들. 대상 기관끼리 위아래면 한 마디가
+        # 여러 대상에 들어간다 — 그래도 각 대상의 집합은 따로 유지한다.
         owner: dict[int, set[int]] = {}
-        for oid, parent_id, name in rows:
-            if oid in org_ids:
-                org_name[oid] = name
-                owner.setdefault(oid, set()).add(oid)
-            if parent_id in org_ids:
-                owner.setdefault(oid, set()).add(parent_id)
+        for target_org in org_ids:
+            if target_org in tree:
+                org_name[target_org] = tree.name[target_org]
+            for node in tree.subtree(target_org):
+                owner.setdefault(node, set()).add(target_org)
         if owner:
             for vid, v_org in (
                 await db.execute(

@@ -26,7 +26,8 @@ class MeResponse(ApiModel):
     villages: list[VillageBrief]
     all_villages: bool
     device_count: int
-    #: 소속 기관 이름. 시·도/시·군 관리자만 있다. 상단 "담당 범위" 표시용.
+    #: 소속 기관. 기관 관리자만 있다. 상단 "담당 범위" 표시와 지역 관리 트리의 뿌리 판정용.
+    organization_id: int | None = None
     organization_name: str | None = None
 
 

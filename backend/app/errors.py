@@ -75,7 +75,7 @@ class SuperAdminRequired(Forbidden):
 
 class OrgAdminRequired(Forbidden):
     code = "ORG_ADMIN_REQUIRED"
-    message = "시·군 관리자 이상만 할 수 있습니다."
+    message = "기관 관리자 이상만 할 수 있습니다."
 
 
 class TierTooLow(Forbidden):

@@ -27,7 +27,7 @@ interface AuthState {
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   isSuperAdmin: boolean;
-  /** 시·군 관리자 이상 — 마을·계정 관리 메뉴를 본다. */
+  /** 기관 관리자 이상 — 지역·계정 관리 메뉴를 본다. */
   isOrgAdmin: boolean;
   /** 이 계층 이상인가. 메뉴·라우트 가드가 쓴다. 실제 방어선은 백엔드다. */
   atLeast: (role: Role) => boolean;
@@ -90,7 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       logout,
       refresh,
       isSuperAdmin: user?.role === 'super_admin',
-      isOrgAdmin: user !== null && ROLE_TIER[user.role] >= ROLE_TIER.sigungu_admin,
+      isOrgAdmin: user !== null && ROLE_TIER[user.role] >= ROLE_TIER.org_admin,
       atLeast: (role: Role) => user !== null && ROLE_TIER[user.role] >= ROLE_TIER[role],
     }),
     [user, loading, login, logout, refresh],

@@ -1,18 +1,18 @@
 """기관 · 마을 · 구역 · 계정 라우터.
 
-권한 요약(관리자 계층 설계 2026-09-08 §5):
+권한 요약(관리자 계층 설계 2026-09-08, 2026-09-12 v2 §5):
   조회  기관/마을/구역 → 로그인 계정 전체. 범위(Scope)로 걸러진다.
-  변경  기관          → 최고 관리자만
-  변경  마을          → 시·군 이상, 관할 안에서
+  변경  기관          → 기관 관리자 이상, 관할(부분 트리) 안에서. 뿌리는 최고 관리자만
+  변경  마을          → 기관 관리자 이상, 관할 안에서
   변경  구역          → 누구나, 자기 범위 안에서 (이장도 자기 마을 구역은 만든다)
-  계정                → 시·군 이상, 자기보다 낮은 계층만
+  계정                → 기관 관리자 이상, 자기보다 아래 마디만
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, status
 
-from app.core.deps import CurrentUser, Db, OrgAdmin, OrgIds, Publisher, Scope, SuperAdmin
+from app.core.deps import CurrentUser, Db, OrgAdmin, OrgIds, Publisher, Scope
 from app.modules.device import service as device_service
 from app.modules.org import service
 from app.schemas.org import (
@@ -36,7 +36,7 @@ router = APIRouter(tags=["org"])
 # ── 기관 ─────────────────────────────────────────────────────────────────
 @router.get("/api/organizations", response_model=list[OrganizationOut])
 async def list_organizations(db: Db, _: CurrentUser, org_ids: OrgIds) -> list[OrganizationOut]:
-    """내 관할 기관. 마을·계정 화면의 드롭다운이 쓴다."""
+    """내 관할 기관(평평한 목록). 지역 관리 트리·계정 화면의 드롭다운·스케줄 위자드가 쓴다."""
     return await service.list_organizations(db, org_ids)
 
 
@@ -44,27 +44,21 @@ async def list_organizations(db: Db, _: CurrentUser, org_ids: OrgIds) -> list[Or
     "/api/organizations", response_model=OrganizationOut, status_code=status.HTTP_201_CREATED
 )
 async def create_organization(
-    payload: OrganizationCreate, db: Db, _: SuperAdmin
+    payload: OrganizationCreate, db: Db, _: OrgAdmin, org_ids: OrgIds
 ) -> OrganizationOut:
-    return await service.create_organization(db, payload)
+    return await service.create_organization(db, payload, org_ids=org_ids)
 
 
 @router.patch("/api/organizations/{org_id}", response_model=OrganizationOut)
 async def update_organization(
-    org_id: int, payload: OrganizationUpdate, db: Db, _: SuperAdmin
+    org_id: int, payload: OrganizationUpdate, db: Db, _: OrgAdmin, org_ids: OrgIds
 ) -> OrganizationOut:
-    return await service.update_organization(db, org_id, payload)
+    return await service.update_organization(db, org_id, payload, org_ids=org_ids)
 
 
 @router.delete("/api/organizations/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_organization(org_id: int, db: Db, _: SuperAdmin) -> None:
-    await service.delete_organization(db, org_id)
-
-
-@router.get("/api/organizations/suggest")
-async def suggest_organization(b_code: str, db: Db, _: CurrentUser) -> dict[str, int | None]:
-    """주소(법정동코드)로 관리 기관을 제안한다. 제안일 뿐 권한과 무관하다(설계 §1)."""
-    return {"organization_id": await service.suggest_organization(db, b_code)}
+async def delete_organization(org_id: int, db: Db, _: OrgAdmin, org_ids: OrgIds) -> None:
+    await service.delete_organization(db, org_id, org_ids=org_ids)
 
 
 # ── 마을 ─────────────────────────────────────────────────────────────────

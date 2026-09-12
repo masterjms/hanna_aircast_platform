@@ -23,6 +23,7 @@ import type {
   ScheduleInput,
   Village,
 } from '../../api/types';
+import { buildForest, subtreeStats, type OrgNode } from '../../lib/orgtree';
 import { REPEAT_LABEL, WEEKDAY_LABELS, formatTime, repeatLabel } from '../../lib/schedule';
 import { Modal } from '../Modal';
 import { TtsModal } from '../TtsModal';
@@ -56,12 +57,8 @@ function TargetTree({
   value: TargetPick;
   onChange: (v: TargetPick) => void;
 }) {
-  const sidos = orgs.filter((o) => o.level === 'sido');
-  const sigungus = orgs.filter((o) => o.level === 'sigungu');
-  const orphanSigungus = sigungus.filter((o) => !sidos.some((s) => s.id === o.parent_id));
-  const orphanVillages = villages.filter(
-    (v) => v.organization_id === null || !orgs.some((o) => o.id === v.organization_id),
-  );
+  // 깊이 제한 없는 트리(설계 v2). 지역 관리 화면과 같은 순서로 세운다.
+  const forest = buildForest(orgs, villages);
 
   const isOn = (kind: 'organization' | 'village', id: number) =>
     value !== null && value.kind === kind && value.id === id;
@@ -81,24 +78,29 @@ function TargetTree({
     </li>
   );
 
-  const orgRow = (o: Organization, children: React.ReactNode) => (
-    <li key={`o${o.id}`}>
-      <label className={isOn('organization', o.id) ? 'is-on' : undefined}>
-        <input
-          type="radio"
-          name="sched-target"
-          checked={isOn('organization', o.id)}
-          onChange={() => onChange({ kind: 'organization', id: o.id })}
-        />
-        <span className="tree__name strong">{o.name}</span>
-        <span className="tree__kind">관할 전체</span>
-      </label>
-      {children}
-    </li>
-  );
-
-  const sigunguBlock = (o: Organization) =>
-    orgRow(o, <ul>{villages.filter((v) => v.organization_id === o.id).map(villageRow)}</ul>);
+  const orgBlock = (node: OrgNode): React.ReactNode => {
+    const o = node.org;
+    return (
+      <li key={`o${o.id}`}>
+        <label className={isOn('organization', o.id) ? 'is-on' : undefined}>
+          <input
+            type="radio"
+            name="sched-target"
+            checked={isOn('organization', o.id)}
+            onChange={() => onChange({ kind: 'organization', id: o.id })}
+          />
+          <span className="tree__name strong">{o.name}</span>
+          <span className="tree__kind">관할 전체</span>
+        </label>
+        {(node.children.length > 0 || node.villages.length > 0) && (
+          <ul>
+            {node.children.map(orgBlock)}
+            {node.villages.map(villageRow)}
+          </ul>
+        )}
+      </li>
+    );
+  };
 
   if (orgs.length === 0) {
     // 이장 — 기관이 없고 담당 마을만 있다.
@@ -107,20 +109,11 @@ function TargetTree({
 
   return (
     <ul className="tree">
-      {sidos.map((s) =>
-        orgRow(
-          s,
-          <ul>
-            {sigungus.filter((o) => o.parent_id === s.id).map(sigunguBlock)}
-            {villages.filter((v) => v.organization_id === s.id).map(villageRow)}
-          </ul>,
-        ),
-      )}
-      {orphanSigungus.map(sigunguBlock)}
-      {orphanVillages.length > 0 && (
+      {forest.roots.map(orgBlock)}
+      {forest.orphans.length > 0 && (
         <li>
           <div className="tree__group">기관 없음</div>
-          <ul>{orphanVillages.map(villageRow)}</ul>
+          <ul>{forest.orphans.map(villageRow)}</ul>
         </li>
       )}
     </ul>
@@ -484,14 +477,12 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
     target !== null && (target.kind === 'organization' || allDevices || macs.length > 0);
   const canConfirm = targetComplete && repeatComplete && fileId !== '';
 
-  // 관할에 마을이 하나도 없으면 저장은 되지만 방송이 영영 안 나간다. 미리 알린다.
-  const emptyOrg =
-    target?.kind === 'organization' &&
-    !villages.some(
-      (v) =>
-        v.organization_id === target.id ||
-        orgs.some((o) => o.id === v.organization_id && o.parent_id === target.id),
-    );
+  // 관할(아래 전부)에 마을이 하나도 없으면 저장은 되지만 방송이 영영 안 나간다. 미리 알린다.
+  const emptyOrg = (() => {
+    if (target?.kind !== 'organization') return false;
+    const node = buildForest(orgs, villages).byId.get(target.id);
+    return node !== undefined && subtreeStats(node).villages === 0;
+  })();
 
   const targetLabel = (() => {
     if (!target) return '';

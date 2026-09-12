@@ -57,11 +57,11 @@ STATUS 메시지를 백엔드가 구독하다가, devices 테이블에 없는 MA
 ## 3. 기관 / 마을 / 구역
 
 ```
-GET    /api/organizations                내 관할 기관 (마을·계정 수 포함)
-GET    /api/organizations/suggest?b_code= 법정동코드로 관리 기관 제안 (제안일 뿐)
-POST   /api/organizations                {name, level: sido|sigungu, parent_id, jurisdiction_code}   super_admin
-PATCH  /api/organizations/:id                                                                          super_admin
-DELETE /api/organizations/:id            소속 마을·계정·하위 기관 있으면 ORGANIZATION_IN_USE            super_admin
+GET    /api/organizations                내 관할 기관(부분 트리, 평평한 목록 — parent_id 로 화면이 트리를 세움).
+                                          바로 아래 마을·계정·기관 수 포함
+POST   /api/organizations                {name, parent_id}   기관 관리자 이상. parent 는 내 관할 안. null(뿌리)은 super_admin 만
+PATCH  /api/organizations/:id            {name?, parent_id?}  옮기기는 출발·도착 모두 관할. 자기/후손 아래로는 ORG_CYCLE
+DELETE /api/organizations/:id            하위 기관·마을·계정 있으면 ORGANIZATION_IN_USE
 
 GET    /api/villages            목록 (역할 범위)
 POST   /api/villages            생성 {name, organization_id, sido, sigungu, address_detail, …}
@@ -74,7 +74,7 @@ PATCH  /api/zones/:id
 DELETE /api/zones/:id
 ```
 
-**권한 (2026-09-08, [관리자 계층 설계](xWIFI_관리자_계층_설계_260908.md))**: 관리자는 최고 > 시·도 > 시·군 > 마을 네 계층이고 범위는 조직 트리를 따른다 — 마을의 주소는 트리의 입력값이 아니다(위탁 마을). 마을 생성·수정·삭제는 시·군 이상이 관할 안에서, 구역은 이장도 자기 마을 안에서, 기관은 최고 관리자만. 계정(`/api/users`)은 시·군 이상이 **자기보다 낮은 계층**만 만들고 고친다. 단말 마을 이동은 시·군 이상, 신규 단말 등록·삭제·OTA·CONFIG 는 최고 관리자만. 진행 중 방송은 대상 단말의 소속 마을 기준으로 보이고, 보이면 중지할 수 있다.
+**권한 (2026-09-08, v2 09-12 — [관리자 계층 설계](xWIFI_관리자_계층_설계_260908.md))**: 관리자는 최고 > 기관 > 마을 세 역할이고 범위는 조직 트리(깊이 무제한)의 **부분 트리**를 따른다 — 마을의 주소는 트리의 입력값이 아니다(위탁 마을). 기관·마을 생성·수정·삭제·옮기기는 기관 관리자 이상이 관할 안에서(뿌리 기관은 최고 관리자만), 구역은 이장도 자기 마을 안에서. 계정(`/api/users`)은 기관 관리자 이상이 **자기보다 아래 마디**만 만들고 고친다 — 같은 마디의 기관 관리자는 동료라 `TIER_TOO_LOW`. 단말 마을 이동은 기관 관리자 이상, 신규 단말 등록·삭제·OTA·CONFIG 는 최고 관리자만. 진행 중 방송은 대상 단말의 소속 마을 기준으로 보이고, 보이면 중지할 수 있다. 응답 `organization_id`·`organization_name` 은 `org_admin` 에만 있다.
 
 **마을 경계 (2026-09-03)**: `villages.boundary` 에 GeoJSON geometry(WGS84)를 넣으면 대시보드 지도가 마을 영역을 그린다. 값은 `PATCH /api/villages/{id}` 의 `boundary` 로 들어가고, 넣는 것은 사람이 아니라 `scripts/import_boundaries.py`(담당자 PC 에서 실행)다. 목록 응답에는 도형 대신 `has_boundary` 불리언만 실린다 — 행마다 수십 KB 가 붙으면 화면이 느려진다. 도형 자체는 `GET /api/dashboard/map` 으로만 내려간다. 데이터 출처와 이용조건은 지도 설계 §4.8.
 

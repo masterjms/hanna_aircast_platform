@@ -3,12 +3,12 @@
 이 모듈이 organizations / villages / zones / users / user_villages 테이블을 소유한다.
 다른 모듈은 여기 함수를 통해서만 접근한다.
 
-권한 규칙은 관리자 계층 설계(2026-09-08) §5·§6 을 따른다. 요약:
+권한 규칙은 관리자 계층 설계(2026-09-08, 2026-09-12 v2) §5·§6 을 따른다. 요약:
   운영은 관할 전체에, 구조 변경은 출발지·도착지가 모두 내 관할일 때만, 계정은 나보다
-  낮은 계층만. "관할"은 조직 트리(organizations)이지 주소가 아니다.
+  아래 마디만. "관할"은 조직 트리(organizations)의 부분 트리이지 주소가 아니다.
 
 함수들이 받는 `org_ids` 는 app/core/authz.org_ids_under 의 결과다 — 이 계정이 다스리는
-기관 id 집합. None 은 최고 관리자(전체)다.
+기관 id 집합(소속 기관 + 그 아래 전부). None 은 최고 관리자(전체)다.
 """
 
 from __future__ import annotations
@@ -19,8 +19,9 @@ from collections.abc import Iterable, Sequence
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import OrgLevel, Role
+from app.constants import Role
 from app.core import authz
+from app.core.orgtree import load_tree
 from app.core.presence import online_clause, online_cutoff
 from app.core.scope import VillageScope
 from app.core.security import hash_password
@@ -54,7 +55,7 @@ from app.schemas.org import (
 )
 
 
-# ── 기관 (관리자 계층 설계 §3) ───────────────────────────────────────────
+# ── 기관 (관리자 계층 설계 §3 · v2 깊이 무제한) ─────────────────────────
 async def _org_names(db: AsyncSession, ids: Iterable[int | None]) -> dict[int, str]:
     wanted = {i for i in ids if i is not None}
     if not wanted:
@@ -73,6 +74,14 @@ def _ensure_org_allowed(org_id: int | None, org_ids: set[int] | None) -> None:
         raise OrganizationOutOfScope(detail={"organization_id": org_id})
 
 
+def _ensure_parent_allowed(parent_id: int | None, org_ids: set[int] | None) -> None:
+    """마디를 붙일(옮길) 자리가 내 관할인가. 뿌리(None)에 붙이는 것은 최고 관리자만."""
+    if org_ids is None:
+        return
+    if parent_id is None or parent_id not in org_ids:
+        raise OrganizationOutOfScope(detail={"parent_id": parent_id})
+
+
 async def _load_org(db: AsyncSession, org_id: int) -> Organization:
     org = await db.get(Organization, org_id)
     if org is None:
@@ -80,23 +89,13 @@ async def _load_org(db: AsyncSession, org_id: int) -> Organization:
     return org
 
 
-async def _check_parent(db: AsyncSession, level: str, parent_id: int | None) -> None:
-    """sido 는 부모가 없고, sigungu 의 부모는 sido 여야 한다(설계 §3)."""
-    if level == OrgLevel.SIDO.value:
-        if parent_id is not None:
-            raise ApiError("시·도 기관에는 상위 기관을 둘 수 없습니다.", code="ORG_SIDO_HAS_PARENT")
-        return
-    if parent_id is not None:
-        parent = await _load_org(db, parent_id)
-        if parent.level != OrgLevel.SIDO.value:
-            raise ApiError(
-                "시·군 기관의 상위는 시·도 기관이어야 합니다.", code="ORG_PARENT_NOT_SIDO"
-            )
-
-
 async def list_organizations(db: AsyncSession, org_ids: set[int] | None) -> list[OrganizationOut]:
-    """기관 목록 — 내 관할만. 마을·계정 수를 같이 세서 삭제 가능 여부를 화면이 안다."""
-    stmt = select(Organization).order_by(Organization.level, Organization.name)
+    """기관 목록 — 내 관할(부분 트리)만. 평평한 목록이고 트리는 화면이 parent_id 로 만든다.
+
+    바로 아래 마을·계정·기관 수를 같이 세서 삭제 가능 여부를 화면이 안다. 질의는 기관
+    수와 무관하게 5번이다.
+    """
+    stmt = select(Organization).order_by(Organization.name)
     if org_ids is not None:
         stmt = stmt.where(Organization.id.in_(org_ids))
     orgs = (await db.scalars(stmt)).all()
@@ -122,6 +121,15 @@ async def list_organizations(db: AsyncSession, org_ids: set[int] | None) -> list
             )
         ).all()
     )
+    child_counts = dict(
+        (
+            await db.execute(
+                select(Organization.parent_id, func.count())
+                .where(Organization.parent_id.in_(ids))
+                .group_by(Organization.parent_id)
+            )
+        ).all()
+    )
     names = await _org_names(db, [o.parent_id for o in orgs])
 
     out = []
@@ -130,44 +138,58 @@ async def list_organizations(db: AsyncSession, org_ids: set[int] | None) -> list
         item.parent_name = names.get(o.parent_id) if o.parent_id else None
         item.village_count = village_counts.get(o.id, 0)
         item.user_count = user_counts.get(o.id, 0)
+        item.child_count = child_counts.get(o.id, 0)
         out.append(item)
     return out
 
 
-async def create_organization(db: AsyncSession, payload: OrganizationCreate) -> OrganizationOut:
-    await _check_parent(db, payload.level.value, payload.parent_id)
-    org = Organization(
-        name=payload.name,
-        level=payload.level.value,
-        parent_id=payload.parent_id,
-        jurisdiction_code=payload.jurisdiction_code,
-    )
+async def create_organization(
+    db: AsyncSession, payload: OrganizationCreate, *, org_ids: set[int] | None
+) -> OrganizationOut:
+    """마디 추가. 기관 관리자는 자기 관할 안의 마디 아래에만 붙인다(자기 마디 포함)."""
+    _ensure_parent_allowed(payload.parent_id, org_ids)
+    if payload.parent_id is not None:
+        await _load_org(db, payload.parent_id)
+    org = Organization(name=payload.name, parent_id=payload.parent_id)
     db.add(org)
     await db.flush()
-    out = OrganizationOut.model_validate(org)
-    if org.parent_id:
-        out.parent_name = (await _org_names(db, [org.parent_id])).get(org.parent_id)
-    return out
+    return (await list_organizations(db, {org.id}))[0]
 
 
 async def update_organization(
-    db: AsyncSession, org_id: int, payload: OrganizationUpdate
+    db: AsyncSession, org_id: int, payload: OrganizationUpdate, *, org_ids: set[int] | None
 ) -> OrganizationOut:
+    """이름 바꾸기·옮기기.
+
+    옮기기는 출발(지금 자리)·도착(새 부모)이 모두 관할이어야 한다(§6). 기관 관리자는
+    결과적으로 자기 마디를 못 옮긴다 — 관할 안의 도착지는 전부 자기 아래라 순환이다.
+    """
     org = await _load_org(db, org_id)
+    _ensure_org_allowed(org_id, org_ids)
     data = payload.model_dump(exclude_unset=True)
-    if "parent_id" in data:
-        if data["parent_id"] == org_id:
-            raise ApiError("자기 자신을 상위 기관으로 둘 수 없습니다.", code="ORG_SELF_PARENT")
-        await _check_parent(db, org.level, data["parent_id"])
+    if "parent_id" in data and data["parent_id"] != org.parent_id:
+        tree = await load_tree(db)
+        if tree.would_cycle(org_id, data["parent_id"]):
+            raise ApiError(
+                "자기 자신이나 자기 아래 기관을 상위로 둘 수 없습니다.", code="ORG_CYCLE"
+            )
+        _ensure_parent_allowed(data["parent_id"], org_ids)
+        if data["parent_id"] is not None:
+            await _load_org(db, data["parent_id"])
     for key, value in data.items():
         setattr(org, key, value)
     await db.flush()
     return (await list_organizations(db, {org_id}))[0]
 
 
-async def delete_organization(db: AsyncSession, org_id: int) -> None:
-    """소속 마을·계정·하위 기관이 하나라도 있으면 지우지 않는다(설계 §3)."""
+async def delete_organization(db: AsyncSession, org_id: int, *, org_ids: set[int] | None) -> None:
+    """소속 마을·계정·하위 기관이 하나라도 있으면 지우지 않는다(설계 §3).
+
+    빈 폴더만 지운다 — 안에 든 것이 있으면 사람이 먼저 옮기거나 지운다. 마을에는
+    단말·이력·스케줄이 매달려 있어 연쇄 삭제는 두지 않는다.
+    """
     org = await _load_org(db, org_id)
+    _ensure_org_allowed(org_id, org_ids)
     in_use = await db.scalar(
         select(func.count()).select_from(Village).where(Village.organization_id == org_id)
     ) or await db.scalar(
@@ -179,25 +201,6 @@ async def delete_organization(db: AsyncSession, org_id: int) -> None:
         raise OrganizationInUse(detail={"organization_id": org_id})
     await db.delete(org)
     await db.flush()
-
-
-async def suggest_organization(db: AsyncSession, b_code: str | None) -> int | None:
-    """주소로 관리 기관을 **제안**한다 — 법정동코드와 가장 길게 일치하는 관할 코드.
-
-    제안일 뿐이다(설계 §1). 사람이 바꿀 수 있고, 권한 판정에는 쓰지 않는다.
-    """
-    if not b_code:
-        return None
-    rows = await db.execute(
-        select(Organization.id, Organization.jurisdiction_code).where(
-            Organization.jurisdiction_code.is_not(None)
-        )
-    )
-    best: tuple[int, int] | None = None
-    for org_id, code in rows.all():
-        if code and b_code.startswith(code) and (best is None or len(code) > best[1]):
-            best = (org_id, len(code))
-    return best[0] if best else None
 
 
 # ── 마을 ─────────────────────────────────────────────────────────────────
@@ -280,15 +283,13 @@ async def _assign_village_code(db: AsyncSession, village: Village) -> bool:
 async def create_village(
     db: AsyncSession, payload: VillageCreate, *, actor: User, org_ids: set[int] | None
 ) -> VillageOut:
-    """마을 추가. 관리 기관은 내 관할 안이어야 한다(설계 §5).
+    """마을 추가. 붙일 마디는 내 관할 안이어야 한다(설계 §5).
 
-    시·군 관리자는 자기 기관으로 고정된다 — 다른 값을 보내면 거절. 최고 관리자만
-    기관 없는 마을(NULL)을 만들 수 있다.
+    기관 관리자가 마디를 비우면 자기 기관에 붙는다. 기관 없는 마을(NULL)은 최고
+    관리자만 만들 수 있다.
     """
     data = payload.model_dump()
-    if actor.role == Role.SIGUNGU_ADMIN.value:
-        if data["organization_id"] not in (None, actor.organization_id):
-            raise OrganizationOutOfScope(detail={"organization_id": data["organization_id"]})
+    if actor.role == Role.ORG_ADMIN.value and data["organization_id"] is None:
         data["organization_id"] = actor.organization_id
     _ensure_org_allowed(data["organization_id"], org_ids)
     if data["organization_id"] is not None:
@@ -320,8 +321,8 @@ async def update_village(
         raise VillageNotFound()
     data = payload.model_dump(exclude_unset=True)
 
-    # 관리 기관 변경(설계 §6.2): 출발·도착 기관이 모두 관할이어야 한다. 시·군 관리자는
-    # 관할 기관이 하나뿐이라 결과적으로 바꿀 수 없다.
+    # 관리 기관 변경(설계 §6.2): 출발·도착 기관이 모두 관할이어야 한다. 관할 밖으로
+    # 내보내거나 밖에서 데려오는 것은 두 관할을 다 가진 위 계층이 한다.
     if "organization_id" in data and data["organization_id"] != village.organization_id:
         _ensure_org_allowed(village.organization_id, org_ids)
         _ensure_org_allowed(data["organization_id"], org_ids)
@@ -502,15 +503,20 @@ async def _manageable(
 ) -> bool:
     """actor 가 target 계정을 만지고 볼 수 있는가(설계 §5).
 
-    나보다 낮은 계층이어야 하고, 그 계정의 범위가 내 관할 안이어야 한다 —
-    시·도/시·군 계정은 기관으로, 이장 계정은 담당 마을 전부로 본다.
+    나보다 아래여야 하고, 그 계정의 범위가 내 관할 안이어야 한다 — 기관 계정은
+    기관으로, 이장 계정은 담당 마을 전부로 본다. 기관 관리자끼리는 트리 위치가 위아래를
+    정한다: 내 **아래** 마디의 기관 관리자만 내 것이고, 같은 마디는 동료라 서로 못 만진다.
     """
     if actor.role == Role.SUPER_ADMIN.value:
         return True
-    if authz.tier(target.role) >= authz.tier(actor.role):
+    if target.role == Role.SUPER_ADMIN.value:
         return False
     if target.role in authz.ORG_ROLES:
-        return org_ids is not None and target.organization_id in org_ids
+        return (
+            org_ids is not None
+            and target.organization_id in org_ids
+            and target.organization_id != actor.organization_id
+        )
     # village_admin — 담당 마을이 하나라도 관할 밖이면 내 계정이 아니다.
     if villages is not None:
         mine = villages.get(target.id, [])
@@ -558,23 +564,15 @@ async def _check_role_shape(
 
     if role in authz.ORG_ROLES:
         if organization_id is None:
-            raise ApiError(
-                "시·도/시·군 관리자에게는 소속 기관이 필요합니다.", code="ORG_REQUIRED"
-            )
-        org = await _load_org(db, organization_id)
-        expected = OrgLevel.SIDO.value if role == Role.SIDO_ADMIN.value else OrgLevel.SIGUNGU.value
-        if org.level != expected:
-            raise ApiError(
-                "역할과 기관 수준이 맞지 않습니다"
-                "(시·도 관리자는 시·도 기관, 시·군 관리자는 시·군 기관).",
-                code="ORG_LEVEL_MISMATCH",
-                detail={"role": role, "level": org.level},
-            )
+            raise ApiError("기관 관리자에게는 소속 기관이 필요합니다.", code="ORG_REQUIRED")
+        await _load_org(db, organization_id)
         _ensure_org_allowed(organization_id, org_ids)
+        # 같은 마디의 기관 관리자는 동료다 — 만들면 내 관할이 옆으로 샌다. 아래 마디만.
+        if actor.role == Role.ORG_ADMIN.value and organization_id == actor.organization_id:
+            raise TierTooLow(detail={"organization_id": organization_id})
         if village_ids:
             raise ApiError(
-                "시·도/시·군 관리자에게는 담당 마을을 지정하지 않습니다. "
-                "기관으로 범위가 정해집니다.",
+                "기관 관리자에게는 담당 마을을 지정하지 않습니다. 기관으로 범위가 정해집니다.",
                 code="ORG_ADMIN_HAS_NO_VILLAGES",
             )
         return

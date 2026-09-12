@@ -22,11 +22,10 @@ import { BroadcastPage } from './pages/BroadcastPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { FilesPage } from './pages/FilesPage';
 import { LoginPage } from './pages/LoginPage';
-import { OrganizationsPage } from './pages/OrganizationsPage';
+import { RegionsPage } from './pages/RegionsPage';
 import { SchedulesPage } from './pages/SchedulesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
-import { VillagesPage } from './pages/VillagesPage';
 
 /** 상단바에 띄울 화면 이름. 경로가 유일한 출처라 페이지가 따로 알릴 필요가 없다. */
 const PAGE_TITLES: Record<string, [string, string]> = {
@@ -39,8 +38,7 @@ const PAGE_TITLES: Record<string, [string, string]> = {
   '/costs': ['비용', '마을별 사용량'],
   '/ota': ['OTA 관리', '펌웨어 배포'],
   '/settings': ['설정', '전 단말 공통 CONFIG'],
-  '/organizations': ['기관 관리', '시·도청 · 시·군청 트리'],
-  '/villages': ['마을 관리', '마을 · 구역 · 관리 기관'],
+  '/regions': ['지역 관리', '기관 트리 · 마을 · 구역 · 단말'],
   '/users': ['계정 관리', '관리자 계정과 범위'],
 };
 
@@ -121,25 +119,20 @@ export function App() {
           }
         />
         <Route
-          path="/organizations"
+          path="/regions"
           element={
-            <RequireRole role="super_admin">
-              <OrganizationsPage />
+            <RequireRole role="org_admin">
+              <RegionsPage />
             </RequireRole>
           }
         />
-        <Route
-          path="/villages"
-          element={
-            <RequireRole role="sigungu_admin">
-              <VillagesPage />
-            </RequireRole>
-          }
-        />
+        {/* 옛 경로 — 북마크가 남아 있을 수 있다. 두 화면이 지역 관리 하나로 합쳐졌다. */}
+        <Route path="/organizations" element={<Navigate to="/regions" replace />} />
+        <Route path="/villages" element={<Navigate to="/regions" replace />} />
         <Route
           path="/users"
           element={
-            <RequireRole role="sigungu_admin">
+            <RequireRole role="org_admin">
               <UsersPage />
             </RequireRole>
           }

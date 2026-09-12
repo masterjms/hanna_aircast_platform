@@ -5,7 +5,7 @@
     CurrentUser      로그인한 계정 (없으면 401)
     Scope            담당 마을 범위 (조회 필터 · 대상 검사)
     OrgIds           이 계정이 다스리는 기관 id 집합 (최고 관리자는 None=전체)
-    OrgAdmin         시·군 관리자 이상 가드 (마을·계정 관리)
+    OrgAdmin         기관 관리자 이상 가드 (기관·마을·계정 관리)
     SuperAdmin       super_admin 전용 라우트 가드
 
 범위 산출 규칙은 app/core/authz.py — 관리자 계층 설계(2026-09-08) §4.
@@ -90,7 +90,7 @@ SuperAdmin = Annotated[User, Depends(require_super_admin)]
 
 
 async def require_org_admin(user: CurrentUser) -> User:
-    """시·군 관리자 이상. 마을·구역(관할)·계정 관리 라우트가 쓴다."""
+    """기관 관리자 이상. 기관·마을·계정 관리 라우트가 쓴다."""
     if user.role not in authz.ORG_ADMIN_ROLES:
         raise OrgAdminRequired()
     return user

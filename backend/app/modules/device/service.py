@@ -522,7 +522,7 @@ async def update_device(
     보낸 필드만 반영한다(exclude_unset) — null 을 명시하면 해제, 생략하면 미변경이다.
 
     can_move=False 면 마을 이동을 거절한다. 이장은 자기 마을 안에서 별칭·위치·구역만
-    고치고, 마을 사이 이동은 시·군 이상이 한다(관리자 계층 설계 §5·§6.1). 출발 마을은
+    고치고, 마을 사이 이동은 기관 관리자 이상이 한다(관리자 계층 설계 §5·§6.1). 출발 마을은
     위의 ensure_allowed 가, 도착 마을은 _validate_assignment 가 관할을 본다.
     """
     device = await db.get(Device, mac)
@@ -536,7 +536,7 @@ async def update_device(
 
     if not can_move and new_village != device.village_id:
         raise ApiError(
-            "단말의 마을 이동은 시·군 관리자 이상이 할 수 있습니다.",
+            "단말의 마을 이동은 기관 관리자 이상이 할 수 있습니다.",
             code="DEVICE_MOVE_REQUIRES_ORG_ADMIN",
         )
 

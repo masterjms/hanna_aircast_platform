@@ -1,8 +1,9 @@
 /**
- * 계정 관리 (시·군 관리자 이상) — 관리자 계층 설계 §5·§9.
+ * 계정 관리 (기관 관리자 이상) — 관리자 계층 설계 §5·§9 (v2 2026-09-12).
  *
- * 나보다 낮은 계층의 계정만 보이고 만들 수 있다. 역할 드롭다운이 그만큼만 나온다.
- * 시·도/시·군 관리자는 기관으로, 이장은 담당 마을로 범위가 정해진다.
+ * 나보다 아래의 계정만 보이고 만들 수 있다. 기관 관리자는 기관(과 그 아래 전부)으로,
+ * 이장은 담당 마을로 범위가 정해진다. 기관 관리자끼리는 트리 위치가 위아래다 — 같은
+ * 마디의 관리자는 동료라서 소속 기관 드롭다운에 내 기관은 나오지 않는다.
  *
  * village_admin 은 담당 마을을 반드시 지정해야 의미가 있다 — 비워두면
  * 로그인은 되지만 아무것도 못 보는 계정이 된다. 화면에서 경고로 알려준다.
@@ -14,6 +15,7 @@ import { ApiError, api } from '../api/client';
 import type { Organization, Role, User, Village } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../components/Modal';
+import { buildForest, flattenForest, pathLabel } from '../lib/orgtree';
 import { ROLE_LABEL, isOrgRole, manageableRoles } from '../lib/roles';
 
 interface FormState {
@@ -54,7 +56,7 @@ function ExpiryCell({ at }: { at: string | null }) {
 }
 
 export function UsersPage() {
-  const { user: me } = useAuth();
+  const { user: me, isSuperAdmin } = useAuth();
   const [users, setUsers] = useState<User[]>([]);
   const [villages, setVillages] = useState<Village[]>([]);
   const [orgs, setOrgs] = useState<Organization[]>([]);
@@ -160,10 +162,11 @@ export function UsersPage() {
     // 기관형 역할은 기관이 있어야 범위가 생긴다.
     (!isOrgRole(form.role) || form.organization_id !== '');
 
-  // 역할에 맞는 수준의 기관만 고른다 — 시·도 관리자는 시·도 기관, 시·군 관리자는 시·군 기관.
-  const orgOptions = form
-    ? orgs.filter((o) => o.level === (form.role === 'sido_admin' ? 'sido' : 'sigungu'))
-    : [];
+  // 기관 드롭다운은 트리 순서(들여쓰기)로. 기관 관리자에게 자기 마디는 빼 준다 — 같은
+  // 마디의 관리자를 만들면 관할이 옆으로 새서 백엔드가 거절한다(TIER_TOO_LOW).
+  const orgOptions = flattenForest(buildForest(orgs, villages)).filter(
+    (n) => isSuperAdmin || n.org.id !== me?.organization_id,
+  );
 
   return (
     <>
@@ -357,10 +360,7 @@ export function UsersPage() {
             <select
               id="u-role"
               value={form.role}
-              onChange={(e) =>
-                // 역할이 바뀌면 소속도 다시 고른다 — 시·도 기관을 시·군 관리자에게 줄 수 없다.
-                setForm({ ...form, role: e.target.value as Role, organization_id: '' })
-              }
+              onChange={(e) => setForm({ ...form, role: e.target.value as Role, organization_id: '' })}
             >
               {roleOptions.map((r) => (
                 <option key={r} value={r}>
@@ -384,22 +384,22 @@ export function UsersPage() {
                 }
               >
                 <option value="">선택하세요</option>
-                {orgOptions.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name}
-                    {o.parent_name ? ` (${o.parent_name})` : ''}
+                {orgOptions.map((n) => (
+                  <option key={n.org.id} value={n.org.id} title={pathLabel(n)}>
+                    {'\u00a0\u00a0'.repeat(n.depth)}
+                    {n.depth > 0 ? '└ ' : ''}
+                    {n.org.name}
                   </option>
                 ))}
               </select>
               {orgOptions.length === 0 ? (
                 <p className="hint hint--warn">
-                  고를 수 있는 {form.role === 'sido_admin' ? '시·도' : '시·군'} 기관이 없습니다. 기관 관리에서 먼저 만드세요.
+                  고를 수 있는 기관이 없습니다. 지역 관리에서 내 기관 아래에 기관을 먼저 만드세요.
                 </p>
               ) : (
                 <p className="hint">
-                  {form.role === 'sido_admin'
-                    ? '이 시·도 아래 시·군 기관들의 마을을 모두 봅니다.'
-                    : '이 기관에 소속된 마을을 모두 봅니다. 주소가 아니라 마을에 지정한 소속 기준입니다.'}
+                  이 기관과 그 아래 모든 기관의 마을을 봅니다. 나중에 붙이는 마을·기관도 자동으로
+                  들어갑니다. 주소가 아니라 지역 관리 트리 기준입니다.
                 </p>
               )}
             </div>

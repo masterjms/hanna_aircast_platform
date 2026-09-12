@@ -36,9 +36,8 @@ const ADMIN: MenuItem[] = [
   { to: '/costs', label: '비용', pending: true },
   { to: '/ota', label: 'OTA 관리', minRole: 'super_admin', pending: true },
   { to: '/settings', label: '설정', minRole: 'super_admin' },
-  { to: '/organizations', label: '기관 관리', minRole: 'super_admin' },
-  { to: '/villages', label: '마을 관리', minRole: 'sigungu_admin' },
-  { to: '/users', label: '계정 관리', minRole: 'sigungu_admin' },
+  { to: '/regions', label: '지역 관리', minRole: 'org_admin' },
+  { to: '/users', label: '계정 관리', minRole: 'org_admin' },
 ];
 
 function MenuLinks({ items, atLeast }: { items: MenuItem[]; atLeast: (r: Role) => boolean }) {
@@ -64,7 +63,7 @@ function MenuLinks({ items, atLeast }: { items: MenuItem[]; atLeast: (r: Role) =
 export function Sidebar() {
   const { user, atLeast, logout } = useAuth();
 
-  // 시·도/시·군 관리자는 기관 이름이 범위를 가장 잘 설명한다. 마을 수십 개를 나열하면
+  // 기관 관리자는 기관 이름이 범위를 가장 잘 설명한다. 마을 수십 개를 나열하면
   // 카드가 넘친다.
   const scopeLabel = user?.all_villages
     ? `전체 ${user.villages.length}개 마을`

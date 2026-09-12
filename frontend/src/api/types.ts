@@ -5,30 +5,29 @@
  * openapi.json 에서 생성하는 쪽으로 바꾸는 게 좋다(지금은 과한 도구다).
  */
 
-/** 관리자 계층(설계 2026-09-08 §2). 순서·표시는 lib/roles.ts. */
-export type Role = 'super_admin' | 'sido_admin' | 'sigungu_admin' | 'village_admin';
+/** 관리자 계층(설계 2026-09-08 §2, v2 2026-09-12). 순서·표시는 lib/roles.ts. */
+export type Role = 'super_admin' | 'org_admin' | 'village_admin';
 
-export type OrgLevel = 'sido' | 'sigungu';
-
-/** 관리 기관 — 시·도청 / 시·군청. 권한은 이 트리를 따른다(설계 §3). */
+/**
+ * 관리 기관 — 권한 트리의 마디. 깊이 제한이 없고 마을은 어느 마디에나 붙는다(설계 v2).
+ * 트리는 lib/orgtree.ts 가 parent_id 로 세운다.
+ */
 export interface Organization {
   id: number;
   name: string;
-  level: OrgLevel;
   parent_id: number | null;
   parent_name: string | null;
-  /** 법정동코드 앞자리. 마을을 만들 때 기관을 제안하는 데만 쓴다. */
-  jurisdiction_code: string | null;
+  /** 바로 아래 것들의 수. 셋 다 0 이어야 지울 수 있다. */
   village_count: number;
   user_count: number;
+  child_count: number;
   created_at: string;
 }
 
 export interface OrganizationInput {
   name: string;
-  level: OrgLevel;
+  /** 붙일 자리. null 은 뿌리(최고 관리자만). */
   parent_id: number | null;
-  jurisdiction_code?: string | null;
 }
 
 export type DeviceStatusFilter = 'online' | 'offline' | 'unassigned';
@@ -74,7 +73,8 @@ export interface Me {
   villages: VillageBrief[];
   all_villages: boolean;
   device_count: number;
-  /** 소속 기관 이름. 시·도/시·군 관리자만 있다. */
+  /** 소속 기관. 기관 관리자만 있다 — 지역 관리 트리의 뿌리가 이 마디다. */
+  organization_id: number | null;
   organization_name: string | null;
 }
 
@@ -99,7 +99,9 @@ export interface Village extends VillageBrief {
   /** MQTT 로 나가는 8자리 표현 */
   /** 법정동코드(10)+연번(2) 12자리. 주소가 없어 못 만든 마을은 null. */
   village_code: string | null;
-  /** 관리 기관(설계 §3). null 이면 최고 관리자만 보는 마을. 주소와 무관하다. */
+  /** 경계 폴리곤이 들어와 있는지. 도형 자체는 지도 API 로만 내려온다. */
+  has_boundary: boolean;
+  /** 관리 기관(트리의 마디). null 이면 최고 관리자만 보는 마을. 주소와 무관하다. */
   organization_id: number | null;
   organization_name: string | null;
   /** MQTT 로 나가는 village_id — village_code, 없으면 예전 방식 id 8자리. */
@@ -264,7 +266,7 @@ export interface User {
   expires_at: string | null;
   created_at: string;
   village_ids: number[];
-  /** 시·도/시·군 관리자의 소속 기관. 다른 역할은 null. */
+  /** 기관 관리자의 소속 기관. 다른 역할은 null. */
   organization_id: number | null;
   organization_name: string | null;
 }
@@ -290,7 +292,7 @@ export interface UserUpdate {
 
 export interface VillageInput {
   name: string;
-  /** 관리 기관. 시·군 관리자는 자기 기관으로 고정된다. */
+  /** 관리 기관(붙일 마디). 기관 관리자가 비우면 자기 기관이 된다. */
   organization_id?: number | null;
   sido?: string | null;
   sigungu?: string | null;

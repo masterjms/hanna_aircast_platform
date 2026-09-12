@@ -39,22 +39,21 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 ### 1.3 역할과 범위
 
-네 계층이다([관리자 계층 설계](../spec/xWIFI_관리자_계층_설계_260908.md)). 범위는 조직 트리(`organizations`)를 따르고 주소와 무관하다.
+세 역할이다([관리자 계층 설계](../spec/xWIFI_관리자_계층_설계_260908.md) v2, 2026-09-12). 범위는 깊이 제한 없는 조직 트리(`organizations`)의 부분 트리를 따르고 주소와 무관하다. 기관 관리자끼리의 위아래는 트리 위치가 정한다.
 
 | 역할 | 계층 | 범위 |
 |---|---:|---|
-| `super_admin` | 3 | 모든 마을, 전체 방송, 미배정 단말, 설정·기관·단말 등록·삭제 |
-| `sido_admin` | 2 | 소속 시·도 기관과 그 하위 시·군 기관에 속한 마을 |
-| `sigungu_admin` | 1 | 소속 시·군 기관에 속한 마을 |
+| `super_admin` | 2 | 모든 마을, 전체 방송, 미배정 단말, 설정·뿌리 기관·단말 등록·삭제 |
+| `org_admin` | 1 | 소속 기관과 그 아래 모든 기관에 속한 마을(`app/core/orgtree.subtree`) |
 | `village_admin` | 0 | `user_villages`에 지정된 마을 |
 
 권한은 세 단계다.
 
 1. `super_admin` 전용 기능은 `SuperAdmin` guard로 제한한다.
-2. 마을·구역(관할)·계정 관리는 `OrgAdmin` guard(시·군 이상)로 제한하고, 그 안에서 "출발지·도착지가 모두 내 관할", "나보다 낮은 계층만"을 service가 검사한다.
+2. 기관·마을·계정 관리는 `OrgAdmin` guard(기관 관리자 이상)로 제한하고, 그 안에서 "출발지·도착지가 모두 내 관할", "나보다 아래 마디만"을 service가 트리(`app/core/orgtree.py`)로 검사한다.
 3. 일반 조회·제어는 `VillageScope`로 쿼리를 필터하고 요청 대상을 검사한다. 역할 → 마을 집합은 `app/core/authz.resolve_scope`가 만들며 그 아래 계층은 역할을 모른다.
 
-미배정 단말은 어떤 마을에도 속하지 않으므로 `super_admin`만 볼 수 있다. `all` 방송도 `super_admin`만 가능하다. 기관이 없는 시·도/시·군 관리자와 담당 마을이 없는 마을 관리자는 빈 범위다.
+미배정 단말은 어떤 마을에도 속하지 않으므로 `super_admin`만 볼 수 있다. `all` 방송도 `super_admin`만 가능하다. 기관이 없는 기관 관리자와 담당 마을이 없는 마을 관리자는 빈 범위다.
 
 ### 1.4 에러 응답
 
@@ -207,9 +206,9 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 |---|---|---|---|
 | GET | `/api/villages` | 로그인·범위 적용 | 접근 가능한 마을 목록 |
 | GET | `/api/villages/{id}` | 로그인·범위 적용 | 마을 한 건 |
-| POST | `/api/villages` | 시·군 이상, 관할 안 | 마을 생성. 시·군 관리자는 자기 기관으로 고정 |
-| PATCH | `/api/villages/{id}` | 시·군 이상, 관할 안 | 마을 부분 수정. `organization_id` 변경은 출발·도착 기관 모두 관할이어야 함 |
-| DELETE | `/api/villages/{id}` | 시·군 이상, 관할 안 | 마을 삭제, 단말은 미배정으로 유지 |
+| POST | `/api/villages` | 기관 관리자 이상, 관할 안 | 마을 생성. `organization_id`는 내 관할 안의 마디. 기관 관리자가 비우면 자기 기관, null은 `super_admin`만 |
+| PATCH | `/api/villages/{id}` | 기관 관리자 이상, 관할 안 | 마을 부분 수정. `organization_id` 변경은 출발·도착 기관 모두 관할이어야 함 |
+| DELETE | `/api/villages/{id}` | 기관 관리자 이상, 관할 안 | 마을 삭제, 단말은 미배정으로 유지 |
 | GET | `/api/villages/{id}/zones` | 로그인·범위 적용 | 구역 목록 |
 | POST | `/api/villages/{id}/zones` | 로그인·범위 적용 | 구역 생성 (이장도 자기 마을 구역은 만든다) |
 | PATCH | `/api/zones/{id}` | 로그인·범위 적용 | 구역 수정 |
@@ -219,11 +218,10 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 | Method | Path | 권한 | 설명 |
 |---|---|---|---|
-| GET | `/api/organizations` | 로그인 | 내 관할 기관 목록. 마을·계정 수 포함 |
-| GET | `/api/organizations/suggest?b_code=` | 로그인 | 법정동코드로 관리 기관 제안. 제안일 뿐 권한과 무관 |
-| POST | `/api/organizations` | `super_admin` | 기관 생성 (`name`, `level: sido\|sigungu`, `parent_id`, `jurisdiction_code`) |
-| PATCH | `/api/organizations/{id}` | `super_admin` | 이름·상위·관할 코드 수정. 수준은 못 바꿈 |
-| DELETE | `/api/organizations/{id}` | `super_admin` | 소속 마을·계정·하위 기관이 있으면 `ORGANIZATION_IN_USE` |
+| GET | `/api/organizations` | 로그인 | 내 관할 기관(부분 트리)의 평평한 목록. `parent_id`, 바로 아래 마을·계정·기관 수(`village_count`·`user_count`·`child_count`) 포함. 트리는 화면이 세운다 |
+| POST | `/api/organizations` | `org_admin` 이상 | 기관 생성 (`name`, `parent_id`). `parent_id`는 내 관할 안이어야 하고 null(뿌리)은 `super_admin`만 |
+| PATCH | `/api/organizations/{id}` | `org_admin` 이상 | 이름 바꾸기·옮기기(`parent_id`). 출발·도착 모두 관할. 자기/후손 아래로는 `ORG_CYCLE` |
+| DELETE | `/api/organizations/{id}` | `org_admin` 이상 | 하위 기관·마을·계정이 있으면 `ORGANIZATION_IN_USE` |
 
 마을 body에 `organization_id`가 있다. NULL이면 `super_admin`만 보는 마을이다.
 
@@ -268,7 +266,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 ## 5. 계정 API
 
-시·군 관리자 이상이 쓴다. **나보다 낮은 계층의 계정만** 보이고 만들고 고칠 수 있다(`TIER_TOO_LOW`). 그 계정의 범위(기관 또는 담당 마을)가 내 관할 안이어야 한다.
+기관 관리자 이상이 쓴다. **나보다 아래의 계정만** 보이고 만들고 고칠 수 있다(`TIER_TOO_LOW`) — 기관 관리자는 자기 마디보다 아래 마디의 기관 관리자와 관할 이장. 같은 마디의 기관 관리자는 동료라 보이지 않는다. 그 계정의 범위(기관 또는 담당 마을)가 내 관할 안이어야 한다.
 
 | Method | Path | 설명 |
 |---|---|---|
@@ -292,7 +290,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 - username: 3~50자, 영문·숫자·`.`·`_`·`-`
 - password: 8~64자이며 bcrypt 72바이트 한계 내여야 함
-- `sido_admin`·`sigungu_admin`은 `organization_id`가 필수이고 수준이 역할과 맞아야 함(`ORG_LEVEL_MISMATCH`). 담당 마을은 지정하지 않음
+- `org_admin`은 `organization_id`가 필수이고 내 관할 안이어야 함. 기관 관리자가 만들 때는 자기 마디보다 **아래**여야 함(같은 마디는 `TIER_TOO_LOW`). 담당 마을은 지정하지 않음
 - `village_admin`은 `village_ids`로 범위를 정하고 `organization_id`는 null. 마을은 전부 내 관할 안이어야 함
 - `super_admin`에는 담당 마을·기관 모두 지정할 수 없음
 - 자기 계정 삭제와 마지막 `super_admin` 삭제는 거부
@@ -378,7 +376,7 @@ PATCH에서 생략한 필드는 유지한다.
 
 PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유지, `village_id: null`이면 배정 해제다. 마을 배정이 바뀌면 CONFIG와 ACL을 다시 배포한다.
 
-마을 이동은 시·군 관리자 이상만 한다(`DEVICE_MOVE_REQUIRES_ORG_ADMIN`). 출발 마을과 도착 마을이 모두 내 범위여야 하므로 군을 넘는 이동은 시·도나 `super_admin`이 한다. 이장은 자기 마을 안에서 별칭·위치·구역만 고친다.
+마을 이동은 기관 관리자 이상만 한다(`DEVICE_MOVE_REQUIRES_ORG_ADMIN`). 출발 마을과 도착 마을이 모두 내 범위여야 하므로 관할을 넘는 이동은 두 관할을 다 가진 위 마디의 관리자나 `super_admin`이 한다. 이장은 자기 마을 안에서 별칭·위치·구역만 고친다.
 
 설치 위치 필드는 `road_address`, `jibun_address`, `address_detail`, `lat`, `lng`다. 좌표가 없으면 지도 API가 zone, village 순으로 fallback한다.
 

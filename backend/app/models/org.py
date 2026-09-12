@@ -17,33 +17,30 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.constants import OrgLevel, Role
+from app.constants import Role
 from app.models.base import Base
 
 _ROLES = ", ".join(f"'{r.value}'" for r in Role)
-_LEVELS = ", ".join(f"'{lv.value}'" for lv in OrgLevel)
 
 
 class Organization(Base):
-    """관리 기관 — 시·도청 또는 시·군청 (관리자 계층 설계 §3).
+    """관리 기관 — 권한 트리의 마디 (관리자 계층 설계 §3).
 
     권한은 이 트리를 따른다. 마을의 주소(b_code)는 트리의 입력값이 아니다 — 주소상
     다른 군에 있는 마을을 이 군청이 관리하는 위탁이 흔해서다(설계 §1 라라마을).
-    두 단계뿐이다: sigungu 의 parent 는 sido 이거나 NULL, sido 의 parent 는 항상 NULL.
+
+    깊이 제한이 없다(2026-09-12 v2). 도 > 시 > 구 > 권역처럼 몇 단이든 되고, 마을은
+    어느 마디에나 붙는다. 수준(sido/sigungu)·관할 코드는 없앴다 — 마디는 이름과 부모뿐이다.
+    순환은 API 가 막는다(app/core/orgtree.would_cycle).
     """
 
     __tablename__ = "organizations"
-    __table_args__ = (CheckConstraint(f"level IN ({_LEVELS})", name="ck_organizations_level"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
-    level: Mapped[str] = mapped_column(String(20), nullable=False)
     parent_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT"), index=True
     )
-    #: 법정동코드 앞자리(시도 2 / 시군구 5). 마을을 만들 때 기관을 **제안**하는 데만
-    #: 쓴다. 권한 판정에는 쓰지 않는다.
-    jurisdiction_code: Mapped[str | None] = mapped_column(String(5))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -117,8 +114,7 @@ class User(Base):
 
     범위는 역할마다 다르게 풀린다(app/core/authz.resolve_scope):
       super_admin    전체
-      sido_admin     organization_id 와 그 하위 기관의 마을
-      sigungu_admin  organization_id 의 마을
+      org_admin      organization_id 와 그 아래 모든 기관의 마을 (깊이 무관)
       village_admin  user_villages
     """
 
@@ -129,7 +125,7 @@ class User(Base):
     username: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False)
-    #: sido_admin·sigungu_admin 의 소속 기관. 다른 역할은 NULL.
+    #: org_admin 의 소속 기관. 다른 역할은 NULL.
     organization_id: Mapped[int | None] = mapped_column(
         ForeignKey("organizations.id", ondelete="RESTRICT")
     )

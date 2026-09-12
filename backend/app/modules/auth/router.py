@@ -50,6 +50,7 @@ async def _build_me(db: Db, user: User, scope: VillageScope) -> MeResponse:
         villages=villages,
         all_villages=scope.all_villages,
         device_count=int(device_count or 0),
+        organization_id=user.organization_id,
         organization_name=org_name,
     )
 

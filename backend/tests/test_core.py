@@ -1403,34 +1403,33 @@ class TestTargetLabel:
         assert await describe_targets(None, [("village", [])]) == [""]
 
 
-# ── 관리자 계층 (설계 2026-09-08) ──────────────────────────────────────
+# ── 관리자 계층 (설계 2026-09-08 · v2 2026-09-12 깊이 무제한) ─────────────
 class TestAuthzTiers:
-    def test_order_is_super_sido_sigungu_village(self):
+    def test_order_is_super_org_village(self):
         from app.core.authz import tier
 
-        assert tier("super_admin") > tier("sido_admin")
-        assert tier("sido_admin") > tier("sigungu_admin") > tier("village_admin")
+        assert tier("super_admin") > tier("org_admin") > tier("village_admin")
 
     def test_unknown_role_is_below_everyone(self):
         from app.core.authz import tier
 
         assert tier("nope") < tier("village_admin")
 
-    def test_manageable_roles_are_strictly_lower(self):
+    def test_manageable_roles(self):
         from app.core.authz import manageable_roles
 
-        # 자기 계층은 못 만든다 — 시·군이 시·군을 만들면 관할이 옆으로 샌다.
-        assert manageable_roles("super_admin") == {"sido_admin", "sigungu_admin", "village_admin"}
-        assert manageable_roles("sido_admin") == {"sigungu_admin", "village_admin"}
-        assert manageable_roles("sigungu_admin") == {"village_admin"}
+        # 최고 관리자는 최고 관리자를 만들지 않는다(배포 때 만든다).
+        assert manageable_roles("super_admin") == {"org_admin", "village_admin"}
+        # 기관 관리자는 기관 관리자도 만든다 — 위치 검사(자기 아래 마디만)는 서비스가 한다.
+        assert manageable_roles("org_admin") == {"org_admin", "village_admin"}
         assert manageable_roles("village_admin") == frozenset()
 
     def test_org_roles_need_an_organization(self):
         from app.core.authz import ORG_ADMIN_ROLES, ORG_ROLES
 
-        assert {"sido_admin", "sigungu_admin"} == ORG_ROLES
-        # 마을·계정을 관리하는 역할 = 시·군 이상
-        assert {"super_admin", "sido_admin", "sigungu_admin"} == ORG_ADMIN_ROLES
+        assert {"org_admin"} == ORG_ROLES
+        # 마을·기관·계정을 관리하는 역할 = 기관 관리자 이상
+        assert {"super_admin", "org_admin"} == ORG_ADMIN_ROLES
 
     def test_role_enum_matches_tier_table(self):
         from app.constants import Role
@@ -1438,6 +1437,138 @@ class TestAuthzTiers:
 
         # 역할을 추가하고 계층표를 빠뜨리면 그 역할은 아무것도 못 만드는 계정이 된다.
         assert set(ROLE_TIER) == {r.value for r in Role}
+
+
+class TestOrgTree:
+    """깊이 제한 없는 기관 트리. 모든 권한 판정이 subtree() 하나로 모인다."""
+
+    @staticmethod
+    def _tree():
+        from app.core.orgtree import OrgTree
+
+        #  1 경기도
+        #  ├─ 2 안양시
+        #  │   ├─ 3 만안구
+        #  │   │   └─ 4 안양권역
+        #  │   └─ 5 동안구
+        #  └─ 6 군포시
+        #  7 강원도 (별도 뿌리)
+        return OrgTree.build(
+            [
+                (1, None, "경기도"),
+                (2, 1, "안양시"),
+                (3, 2, "만안구"),
+                (4, 3, "안양권역"),
+                (5, 2, "동안구"),
+                (6, 1, "군포시"),
+                (7, None, "강원도"),
+            ]
+        )
+
+    def test_subtree_goes_all_the_way_down(self):
+        t = self._tree()
+        assert t.subtree(1) == {1, 2, 3, 4, 5, 6}
+        assert t.subtree(2) == {2, 3, 4, 5}
+        assert t.subtree(4) == {4}
+        assert t.subtree(99) == set()
+
+    def test_subtree_of_many_roots_is_the_union(self):
+        t = self._tree()
+        assert t.subtree_of([3, 6]) == {3, 4, 6}
+
+    def test_path_and_ancestors(self):
+        t = self._tree()
+        assert t.path(4) == [1, 2, 3, 4]
+        assert t.ancestors(4) == [3, 2, 1]
+        assert t.path_names(4) == "경기도 › 안양시 › 만안구 › 안양권역"
+        assert t.depth(1) == 0 and t.depth(4) == 3
+
+    def test_strict_descendant(self):
+        t = self._tree()
+        assert t.is_descendant(4, of=1)
+        assert not t.is_descendant(1, of=1)  # 자기 자신은 아니다
+        assert not t.is_descendant(7, of=1)
+
+    def test_cycle_detection_for_moves(self):
+        t = self._tree()
+        assert t.would_cycle(2, 2)  # 자기 자신
+        assert t.would_cycle(2, 4)  # 자기 후손
+        assert not t.would_cycle(2, 7)  # 다른 뿌리 아래로
+        assert not t.would_cycle(2, None)  # 뿌리로
+
+    def test_roots_and_children_are_name_ordered(self):
+        t = self._tree()
+        assert t.roots() == (7, 1)  # 강원도 < 경기도
+        assert t.children[1] == (6, 2)  # 군포시 < 안양시
+
+    def test_survives_a_corrupt_cycle(self):
+        from app.core.orgtree import OrgTree
+
+        # DB 에 순환이 들어가도(API 는 막지만) 무한 루프에 빠지지 않는다.
+        t = OrgTree.build([(1, 2, "a"), (2, 1, "b")])
+        assert t.subtree(1) == {1, 2}
+        assert t.ancestors(1) == [2]
+
+    @pytest.mark.asyncio
+    async def test_org_ids_under_is_the_subtree(self):
+        import types
+
+        from app.core import authz
+
+        class Stub:
+            async def execute(self, stmt):
+                class R:
+                    def all(self_inner):
+                        return [(1, None, "경기도"), (2, 1, "안양시"), (3, 2, "만안구")]
+
+                return R()
+
+        org_admin = types.SimpleNamespace(role="org_admin", organization_id=2)
+        assert await authz.org_ids_under(Stub(), org_admin) == {2, 3}
+        super_admin = types.SimpleNamespace(role="super_admin", organization_id=None)
+        assert await authz.org_ids_under(Stub(), super_admin) is None
+        orphan = types.SimpleNamespace(role="org_admin", organization_id=None)
+        assert await authz.org_ids_under(Stub(), orphan) == set()
+        village = types.SimpleNamespace(role="village_admin", organization_id=None)
+        assert await authz.org_ids_under(Stub(), village) == set()
+
+
+class TestOrgAdminPeers:
+    """같은 마디의 기관 관리자는 동료다 — 서로 만들거나 고치지 못한다."""
+
+    @pytest.mark.asyncio
+    async def test_manageable_requires_strictly_lower_node(self):
+        import types
+
+        from app.modules.org.service import _manageable
+
+        actor = types.SimpleNamespace(role="org_admin", organization_id=2)
+        org_ids = {2, 3}
+        scope = VillageScope.for_villages([10])
+        below = types.SimpleNamespace(id=9, role="org_admin", organization_id=3)
+        peer = types.SimpleNamespace(id=8, role="org_admin", organization_id=2)
+        outside = types.SimpleNamespace(id=7, role="org_admin", organization_id=1)
+        boss = types.SimpleNamespace(id=6, role="super_admin", organization_id=None)
+        assert await _manageable(None, below, actor, org_ids, scope, villages={})
+        assert not await _manageable(None, peer, actor, org_ids, scope, villages={})
+        assert not await _manageable(None, outside, actor, org_ids, scope, villages={})
+        assert not await _manageable(None, boss, actor, org_ids, scope, villages={})
+        # 이장은 담당 마을이 전부 내 범위 안이어야 한다.
+        chief = types.SimpleNamespace(id=5, role="village_admin", organization_id=None)
+        assert await _manageable(None, chief, actor, org_ids, scope, villages={5: [10]})
+        assert not await _manageable(None, chief, actor, org_ids, scope, villages={5: [10, 11]})
+
+    @pytest.mark.asyncio
+    async def test_super_admin_manages_everyone_but_is_not_managed(self):
+        import types
+
+        from app.modules.org.service import _manageable
+
+        me = types.SimpleNamespace(role="super_admin", organization_id=None)
+        other = types.SimpleNamespace(id=2, role="super_admin", organization_id=None)
+        assert await _manageable(None, other, me, None, VillageScope.for_super_admin())
+        actor = types.SimpleNamespace(role="org_admin", organization_id=2)
+        assert not await _manageable(None, other, actor, {2}, VillageScope.for_villages([]))
 
 
 class TestEventVisibility:
