@@ -2076,3 +2076,32 @@ tr.is-click {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* 포인터로 직접 끄는 동안 — 브라우저 드래그 기능을 쓰지 않으므로 커서·선택도 우리가 정한다. */
+body.is-grabbing,
+body.is-grabbing * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+.trow {
+  touch-action: pan-y; /* 터치에서 세로 스크롤은 되고, 끌기는 마우스로 */
+}
+.drag-ghost {
+  position: fixed;
+  z-index: 70;
+  left: -9999px;
+  top: -9999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  white-space: nowrap;
+}

@@ -22,9 +22,9 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 
@@ -544,11 +544,20 @@ export function RegionsPage() {
     }
   };
 
-  // ── 옮기기(드래그) ──────────────────────────────────────────────────────
-  //: 끌고 있는 행. ref 인 이유: dragstart 안에서 setState 로 화면을 바꾸면 Chrome 이 "드래그
-  //: 대상이 바뀌었다"고 보고 드래그를 즉시 취소한다(2026-09-12 운영에서 실제로 안 끌렸다).
-  //: 판정은 ref 로, 표시(흐리게·놓기 영역)는 한 박자 뒤(setTimeout)에 state 로 한다.
+  // ── 옮기기(끌기) ────────────────────────────────────────────────────────
+  //: HTML5 드래그(dragstart/dragover/drop)를 **쓰지 않는다.** 그 방식은 브라우저가 OS 의
+  //: 드래그 기능에 넘겨서 처리하는데, 2026-09-12 운영 PC 에서 브라우저가 드래그를 끝맺지
+  //: 못해 페이지가 갇히는 일이 반복됐고 개발 PC 에선 재현되지 않았다(브라우저·드라이버·
+  //: 원격 환경을 탄다). 그래서 포인터 누름·이동·뗌만으로 직접 끈다 — 우리 코드 밖에
+  //: 기대는 것이 없다.
   const dragRef = useRef<RowKey | null>(null);
+  //: 누른 자리. 6px 이상 움직여야 끌기가 시작된다(그 전에 떼면 그냥 클릭).
+  const pressRef = useRef<{ key: RowKey; x: number; y: number } | null>(null);
+  //: 지금 마우스 아래의 놓을 자리(판정 끝난 것).
+  const dropRef = useRef<{ key: RowKey; target: DropTarget } | null>(null);
+  //: 끌기 뒤에 따라오는 click 을 한 번 무시한다(놓은 자리의 행이 선택되면 안 된다).
+  const suppressClickRef = useRef(false);
+  const ghostRef = useRef<HTMLDivElement>(null);
 
   /** 이 실체를 target 에 놓아도 되나. */
   const canDropOn = (srcKey: RowKey, target: DropTarget): boolean => {
@@ -619,60 +628,108 @@ export function RegionsPage() {
     }
   };
 
-  /** 드래그 표시를 전부 지운다. dragend 가 안 와도(브라우저가 드래그를 이상하게 끝낸 경우) 풀리게. */
   const clearDrag = () => {
     dragRef.current = null;
+    pressRef.current = null;
+    dropRef.current = null;
     setDragKey(null);
     setDropKey(null);
+    document.body.classList.remove('is-grabbing');
   };
 
-  // 안전망 — dragend 를 못 받은 채 남은 드래그 표시는 Esc·마우스 뗌·창 밖 dragend 로 푼다.
+  /** 화면 좌표 아래의 놓을 자리. 기관 행·「기관 없음」 행·트리의 빈 자리(뿌리). 마을 행은 없음. */
+  const targetAt = (x: number, y: number): { key: RowKey; target: DropTarget } | null => {
+    const el = document.elementFromPoint(x, y) as HTMLElement | null;
+    if (!el) return null;
+    const rowEl = el.closest<HTMLElement>('[data-key]');
+    if (rowEl) {
+      const key = rowEl.dataset.key ?? '';
+      const ent = entityOf(key);
+      if (ent?.kind === 'org') return { key, target: { kind: 'org', orgId: ent.orgId } };
+      if (ent?.kind === 'orphans') return { key, target: { kind: 'orphans' } };
+      return null;
+    }
+    const tree = treeRef.current;
+    if (tree && (el === tree || el.closest('.explorer__dropzone') !== null))
+      return { key: 'root', target: { kind: 'root' } };
+    return null;
+  };
+
+  // 창 전역 리스너는 한 번만 달고, 판정 함수는 매 렌더의 최신 것을 ref 로 본다.
+  const latest = useRef({ targetAt, canDropOn, planMove, entityOf, canDragOrg });
+  latest.current = { targetAt, canDropOn, planMove, entityOf, canDragOrg };
+
+  const onPointerDown = (e: ReactPointerEvent, row: Row) => {
+    if (e.button !== 0 || (row.kind !== 'org' && row.kind !== 'village')) return;
+    if ((e.target as HTMLElement).closest('.trow__toggle, input')) return;
+    if (editing) return;
+    pressRef.current = { key: row.key, x: e.clientX, y: e.clientY };
+  };
+
   useEffect(() => {
-    if (!dragKey) return;
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && clearDrag();
-    const onUp = () => clearDrag();
+    const onMove = (e: globalThis.PointerEvent) => {
+      const press = pressRef.current;
+      if (!press) return;
+      const fn = latest.current;
+      if (!dragRef.current) {
+        if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 6) return;
+        const ent = fn.entityOf(press.key);
+        if (!ent || ent.kind === 'orphans' || (ent.kind === 'org' && !fn.canDragOrg(ent.node))) {
+          pressRef.current = null;
+          return;
+        }
+        dragRef.current = press.key;
+        suppressClickRef.current = true;
+        document.body.classList.add('is-grabbing');
+        setDragKey(press.key);
+      }
+      const g = ghostRef.current;
+      if (g) {
+        g.style.left = `${e.clientX + 14}px`;
+        g.style.top = `${e.clientY + 10}px`;
+      }
+      const t = fn.targetAt(e.clientX, e.clientY);
+      const ok = t !== null && fn.canDropOn(dragRef.current, t.target) ? t : null;
+      if ((dropRef.current?.key ?? null) !== (ok?.key ?? null)) {
+        dropRef.current = ok;
+        setDropKey(ok?.key ?? null);
+      }
+      e.preventDefault();
+    };
+    const onUp = () => {
+      const press = pressRef.current;
+      if (!press) return;
+      if (!dragRef.current) {
+        pressRef.current = null;
+        return;
+      }
+      const src = dragRef.current;
+      const drop = dropRef.current;
+      clearDrag();
+      // 따라오는 click 은 한 번 무시한다. 확인은 이 이벤트가 끝난 다음 렌더의 모달로.
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+      if (drop) {
+        const plan = latest.current.planMove(src, drop.target);
+        if (plan) setPendingMove(plan);
+      }
+    };
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape' && dragRef.current) clearDrag();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
     window.addEventListener('keydown', onKey);
-    window.addEventListener('mouseup', onUp);
-    window.addEventListener('dragend', onUp);
-    window.addEventListener('drop', onUp);
     return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('mouseup', onUp);
-      window.removeEventListener('dragend', onUp);
-      window.removeEventListener('drop', onUp);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dragKey]);
-
-  const onDragStart = (e: DragEvent, row: Row) => {
-    if (row.kind === 'org' && row.node && !canDragOrg(row.node)) {
-      e.preventDefault();
-      return;
-    }
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', row.key);
-    dragRef.current = row.key;
-    const key = row.key;
-    window.setTimeout(() => setDragKey(key), 0);
-  };
-  const onDragOver = (e: DragEvent, target: DropTarget, targetKey: RowKey) => {
-    const src = dragRef.current;
-    if (src && canDropOn(src, target)) {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = 'move';
-      if (dropKey !== targetKey) setDropKey(targetKey);
-    }
-  };
-  const onDrop = (e: DragEvent, target: DropTarget) => {
-    e.preventDefault();
-    const src = dragRef.current ?? e.dataTransfer.getData('text/plain');
-    clearDrag();
-    if (!src) return;
-    // 확인창은 이 이벤트가 끝난 다음에 — drop 안에서 모달을 띄우지 않는다(planMove 주석).
-    const plan = planMove(src, target);
-    if (plan) window.setTimeout(() => setPendingMove(plan), 0);
-  };
-  const onDragEnd = () => clearDrag();
+  }, []);
 
   // ── 키보드 ──────────────────────────────────────────────────────────────
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -844,25 +901,6 @@ export function RegionsPage() {
             role="tree"
             tabIndex={0}
             onKeyDown={onKeyDown}
-            onDragOver={(e) => {
-              // 행이 아닌 빈 자리·놓기 영역에서만 — 뿌리(기관) 또는 기관 없음(마을)으로.
-              const el = e.target as HTMLElement;
-              const onBlank = el === e.currentTarget || el.closest('.explorer__dropzone') !== null;
-              if (onBlank && dragRef.current && canDropOn(dragRef.current, { kind: 'root' })) {
-                e.preventDefault();
-                if (dropKey !== 'root') setDropKey('root');
-              }
-            }}
-            onDrop={(e) => {
-              // dragover 와 같은 판정을 다시 한다 — state(dropKey)는 렌더 한 박자 늦을 수 있다.
-              const el = e.target as HTMLElement;
-              const onBlank = el === e.currentTarget || el.closest('.explorer__dropzone') !== null;
-              if (onBlank && dragRef.current && canDropOn(dragRef.current, { kind: 'root' }))
-                onDrop(e, { kind: 'root' });
-            }}
-            onDragLeave={(e) => {
-              if (e.currentTarget === e.target) setDropKey(null);
-            }}
           >
             {loading ? (
               <div className="empty">불러오는 중…</div>
@@ -880,12 +918,6 @@ export function RegionsPage() {
                 const isEditingThis = editing?.mode === 'rename' && editing.key === row.key;
                 const isDrop = dropKey === row.key;
                 const isDragging = dragKey === row.key;
-                const dropTarget: DropTarget | undefined =
-                  row.kind === 'org' && row.orgId !== null
-                    ? { kind: 'org', orgId: row.orgId }
-                    : row.kind === 'orphans'
-                      ? { kind: 'orphans' }
-                      : undefined;
                 return (
                   <div
                     key={row.key}
@@ -895,21 +927,10 @@ export function RegionsPage() {
                     aria-level={row.depth + 1}
                     className={`trow trow--${row.kind}${isSel ? ' is-selected' : ''}${isDrop ? ' is-drop' : ''}${isDragging ? ' is-dragging' : ''}`}
                     style={{ ['--depth' as string]: row.depth }}
-                    draggable={row.kind === 'org' || row.kind === 'village'}
-                    onDragStart={(e) => onDragStart(e, row)}
-                    onDragEnd={onDragEnd}
-                    onDragOver={(e) => {
-                      // 행 위에서는 컨테이너(뿌리 놓기)로 번지지 않게. 마을 행은 놓을 자리가 아니다.
-                      e.stopPropagation();
-                      if (dropTarget) onDragOver(e, dropTarget, row.key);
-                    }}
-                    onDragLeave={() => dropKey === row.key && setDropKey(null)}
-                    onDrop={(e) => {
-                      e.stopPropagation();
-                      if (dropTarget) onDrop(e, dropTarget);
-                    }}
+                    data-key={row.kind === 'new' ? undefined : row.key}
+                    onPointerDown={(e) => onPointerDown(e, row)}
                     onClick={() => {
-                      if (row.kind === 'new') return;
+                      if (row.kind === 'new' || suppressClickRef.current) return;
                       setSelected({ key: row.key });
                       treeRef.current?.focus();
                     }}
@@ -1041,6 +1062,16 @@ export function RegionsPage() {
           )}
         </section>
       </div>
+
+      {dragKey && (
+        <div ref={ghostRef} className="drag-ghost" aria-hidden="true">
+          {entityOf(dragKey)?.kind === 'org' ? <FolderIcon open={false} /> : <VillageIcon />}
+          {(() => {
+            const ent = entityOf(dragKey);
+            return ent?.kind === 'org' ? ent.node.org.name : ent?.kind === 'village' ? ent.village.name : '';
+          })()}
+        </div>
+      )}
 
       {pendingMove && (
         <Modal
