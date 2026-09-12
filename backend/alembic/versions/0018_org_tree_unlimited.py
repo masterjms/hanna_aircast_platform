@@ -23,6 +23,7 @@ Revises: 0017
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "0018"
@@ -35,8 +36,10 @@ _NEW_ROLES = "role IN ('super_admin', 'org_admin', 'village_admin')"
 
 
 def upgrade() -> None:
-    op.execute("UPDATE users SET role = 'org_admin' WHERE role IN ('sido_admin', 'sigungu_admin')")
+    # 제약을 먼저 푼다 — 옛 CHECK 가 살아 있으면 'org_admin' 으로 바꾸는 UPDATE 가 거절된다
+    # (2026-09-12 첫 배포에서 실제로 실패; 트랜잭션이라 전부 롤백됐다).
     op.drop_constraint("ck_users_role", "users", type_="check")
+    op.execute("UPDATE users SET role = 'org_admin' WHERE role IN ('sido_admin', 'sigungu_admin')")
     op.create_check_constraint("ck_users_role", "users", _NEW_ROLES)
 
     op.drop_constraint("ck_organizations_level", "organizations", type_="check")
@@ -45,10 +48,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.add_column("organizations", sa.Column("jurisdiction_code", sa.String(length=5), nullable=True))
+    op.add_column(
+        "organizations", sa.Column("jurisdiction_code", sa.String(length=5), nullable=True)
+    )
     op.add_column("organizations", sa.Column("level", sa.String(length=20), nullable=True))
     op.execute(
-        "UPDATE organizations SET level = CASE WHEN parent_id IS NULL THEN 'sido' ELSE 'sigungu' END"
+        "UPDATE organizations "
+        "SET level = CASE WHEN parent_id IS NULL THEN 'sido' ELSE 'sigungu' END"
     )
     op.alter_column("organizations", "level", nullable=False)
     op.create_check_constraint(
