@@ -31,6 +31,7 @@ import {
 import { ApiError, api } from '../api/client';
 import type { Organization, Village } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { Modal } from '../components/Modal';
 import { Tile, VillageIcon, VillagePanel } from '../components/regions/VillagePanel';
 import {
   buildForest,
@@ -85,6 +86,16 @@ type Entity =
 
 /** 놓을 자리. org = 기관 행, orphans = 「기관 없음」 행(마을만), root = 트리의 빈 자리 */
 type DropTarget = { kind: 'org'; orgId: number } | { kind: 'orphans' } | { kind: 'root' };
+
+/** 놓은 뒤 확인을 기다리는 옮기기. 확인창은 drop 이벤트 밖에서 그린다(아래 planMove 주석). */
+interface PendingMove {
+  srcKey: RowKey;
+  srcKind: 'org' | 'village';
+  srcName: string;
+  targetOrgId: number | null;
+  targetName: string;
+  what: string;
+}
 
 const ORPHANS_KEY = 'orphans';
 const keyOfOrg = (id: number) => `o${id}`;
@@ -556,9 +567,15 @@ export function RegionsPage() {
     return isSuperAdmin && src.orgId !== null; // 기관 없음으로 — 최고 관리자만
   };
 
-  const move = async (srcKey: RowKey, target: DropTarget) => {
+  /**
+   * 놓았을 때 — 무엇을 어디로 옮길지만 정한다. **여기서 window.confirm 을 부르지 않는다.**
+   * drop 이벤트 안에서 브라우저 모달을 띄우면 Windows 에서 OS 드래그가 끝맺음(dragend)을
+   * 못 받고 페이지가 드래그 상태에 갇혀 이후 클릭이 먹지 않는 일이 있다(2026-09-12 운영 보고).
+   * 확인은 우리 Modal 로, drop 이 완전히 끝난 다음 렌더에서 묻는다.
+   */
+  const planMove = (srcKey: RowKey, target: DropTarget): PendingMove | null => {
     const src = entityOf(srcKey);
-    if (!src || src.kind === 'orphans' || !canDropOn(srcKey, target)) return;
+    if (!src || src.kind === 'orphans' || !canDropOn(srcKey, target)) return null;
     const targetOrgId = target.kind === 'org' ? target.orgId : null;
     const targetName =
       target.kind === 'org'
@@ -566,25 +583,66 @@ export function RegionsPage() {
         : src.kind === 'org'
           ? '최상위'
           : '기관 없음(최고 관리자만 봄)';
-    const srcName = src.kind === 'org' ? src.node.org.name : src.village.name;
-    // 옮기면 누가 보고 방송하는지가 바뀐다. 손가락이 미끄러져 옆 기관에 떨어지는 일에
-    // 확인 없이 일어나면 안 된다(설계 §6.2).
-    const what =
-      src.kind === 'org'
-        ? '이 기관과 그 아래 전부의 관할이 바뀝니다.'
-        : '이 마을을 보는 계정이 바뀝니다. 단말·주소·이력은 그대로입니다.';
-    if (!window.confirm(`"${srcName}" 을(를) "${targetName}" 아래로 옮길까요?\n${what}`)) return;
+    return {
+      srcKey,
+      srcKind: src.kind,
+      srcName: src.kind === 'org' ? src.node.org.name : src.village.name,
+      targetOrgId,
+      targetName,
+      // 옮기면 누가 보고 방송하는지가 바뀐다. 손가락이 미끄러져 옆 기관에 떨어지는 일에
+      // 확인 없이 일어나면 안 된다(설계 §6.2).
+      what:
+        src.kind === 'org'
+          ? '이 기관과 그 아래 전부의 관할이 바뀝니다.'
+          : '이 마을을 보는 계정이 바뀝니다. 단말·주소·이력은 그대로입니다.',
+    };
+  };
+
+  const [pendingMove, setPendingMove] = useState<PendingMove | null>(null);
+
+  const applyMove = async (p: PendingMove) => {
+    const src = entityOf(p.srcKey);
+    setPendingMove(null);
+    if (!src || src.kind === 'orphans') return;
     setError(null);
+    setBusy(true);
     try {
-      if (src.kind === 'org') await api.organizations.update(src.node.org.id, { parent_id: targetOrgId });
-      else await api.villages.update(src.village.id, { organization_id: targetOrgId });
-      if (targetOrgId !== null) toggle(keyOfOrg(targetOrgId), true);
+      if (src.kind === 'org') await api.organizations.update(src.node.org.id, { parent_id: p.targetOrgId });
+      else await api.villages.update(src.village.id, { organization_id: p.targetOrgId });
+      if (p.targetOrgId !== null) toggle(keyOfOrg(p.targetOrgId), true);
       else if (src.kind === 'village') toggle(ORPHANS_KEY, true);
       await load();
     } catch (err) {
       fail(err, '옮기지 못했습니다.');
+    } finally {
+      setBusy(false);
     }
   };
+
+  /** 드래그 표시를 전부 지운다. dragend 가 안 와도(브라우저가 드래그를 이상하게 끝낸 경우) 풀리게. */
+  const clearDrag = () => {
+    dragRef.current = null;
+    setDragKey(null);
+    setDropKey(null);
+  };
+
+  // 안전망 — dragend 를 못 받은 채 남은 드래그 표시는 Esc·마우스 뗌·창 밖 dragend 로 푼다.
+  useEffect(() => {
+    if (!dragKey) return;
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === 'Escape' && clearDrag();
+    const onUp = () => clearDrag();
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mouseup', onUp);
+    window.addEventListener('dragend', onUp);
+    window.addEventListener('drop', onUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('dragend', onUp);
+      window.removeEventListener('drop', onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragKey]);
 
   const onDragStart = (e: DragEvent, row: Row) => {
     if (row.kind === 'org' && row.node && !canDragOrg(row.node)) {
@@ -608,16 +666,13 @@ export function RegionsPage() {
   const onDrop = (e: DragEvent, target: DropTarget) => {
     e.preventDefault();
     const src = dragRef.current ?? e.dataTransfer.getData('text/plain');
-    dragRef.current = null;
-    setDragKey(null);
-    setDropKey(null);
-    if (src) void move(src, target);
+    clearDrag();
+    if (!src) return;
+    // 확인창은 이 이벤트가 끝난 다음에 — drop 안에서 모달을 띄우지 않는다(planMove 주석).
+    const plan = planMove(src, target);
+    if (plan) window.setTimeout(() => setPendingMove(plan), 0);
   };
-  const onDragEnd = () => {
-    dragRef.current = null;
-    setDragKey(null);
-    setDropKey(null);
-  };
+  const onDragEnd = () => clearDrag();
 
   // ── 키보드 ──────────────────────────────────────────────────────────────
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -986,6 +1041,35 @@ export function RegionsPage() {
           )}
         </section>
       </div>
+
+      {pendingMove && (
+        <Modal
+          title="옮기기"
+          onClose={() => setPendingMove(null)}
+          footer={
+            <>
+              <button type="button" className="btn" onClick={() => setPendingMove(null)}>
+                취소
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => void applyMove(pendingMove)}
+                disabled={busy}
+                autoFocus
+              >
+                옮기기
+              </button>
+            </>
+          }
+        >
+          <p className="sentence" style={{ fontSize: 15 }}>
+            <span className="chip">{pendingMove.srcName}</span> 을(를){' '}
+            <span className="chip">{pendingMove.targetName}</span> 아래로 옮길까요?
+          </p>
+          <p className="hint">{pendingMove.what}</p>
+        </Modal>
+      )}
 
       {menu && menuRow && (
         <div
