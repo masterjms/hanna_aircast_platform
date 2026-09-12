@@ -8,7 +8,7 @@
  * 마을 좌표와 경계 폴리곤이라 여기만 정확하면 된다.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { ApiError, api } from '../../api/client';
@@ -68,12 +68,22 @@ export function VillagePanel({
   const fail = (err: unknown, fallback: string) =>
     setError(err instanceof ApiError ? err.message : fallback);
 
-  // 다른 마을을 고르면 폼을 그 마을 값으로 다시 채운다. 저장 뒤 목록이 새로 오면
-  // 같은 마을이라도 서버 값으로 맞춘다(village_code 가 그때 생긴다).
+  const dirty = !sameForm(form, formOf(village));
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+
+  // 다른 마을을 고르면 폼·표시를 그 마을 것으로 바꾼다.
   useEffect(() => {
     setForm(formOf(village));
     setSaved(false);
     setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [village.id]);
+
+  // 같은 마을의 서버 값이 새로 오면(저장 뒤, 트리에서 이름을 바꾼 뒤) 고치던 게 없을 때만
+  // 맞춘다 — 주소를 반쯤 적는 중에 트리 조작으로 목록이 갱신돼도 입력이 날아가면 안 된다.
+  useEffect(() => {
+    if (!dirtyRef.current) setForm(formOf(village));
   }, [village]);
 
   useEffect(() => {
@@ -96,8 +106,6 @@ export function VillagePanel({
       cancelled = true;
     };
   }, [village.id]);
-
-  const dirty = !sameForm(form, formOf(village));
 
   const save = async () => {
     setBusy(true);

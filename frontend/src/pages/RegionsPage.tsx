@@ -77,6 +77,15 @@ interface Menu {
   key: RowKey;
 }
 
+/** 트리의 실체 — 행과 달리 접힘·검색과 무관하게 항상 찾을 수 있다. */
+type Entity =
+  | { kind: 'org'; node: OrgNode; orgId: number; parentKey: RowKey | null }
+  | { kind: 'village'; village: Village; orgId: number | null; parentKey: RowKey }
+  | { kind: 'orphans'; orgId: null; parentKey: null };
+
+/** 놓을 자리. org = 기관 행, orphans = 「기관 없음」 행(마을만), root = 트리의 빈 자리 */
+type DropTarget = { kind: 'org'; orgId: number } | { kind: 'orphans' } | { kind: 'root' };
+
 const ORPHANS_KEY = 'orphans';
 const keyOfOrg = (id: number) => `o${id}`;
 const keyOfVillage = (id: number) => `v${id}`;
@@ -310,17 +319,45 @@ export function RegionsPage() {
     [forest, expanded, query, editing, showOrphans],
   );
   const rowByKey = useMemo(() => new Map(rows.map((r) => [r.key, r])), [rows]);
+  //: 화면에 보이는 행. 부모가 접혀 있으면 없다 — 키보드 이동에만 쓴다.
   const selectedRow = selected ? (rowByKey.get(selected.key) ?? null) : null;
 
-  // 선택된 것이 목록에서 사라지면(삭제·검색) 선택을 푼다.
+  // 실체는 트리에서 찾는다 — 부모를 접어도, 검색으로 걸러져도 선택은 살아 있어야 한다.
+  // 예전에는 보이는 행에서만 찾아서 폴더를 접으면 오른쪽 패널이 비어 버렸다.
+  const villageById = useMemo(() => new Map(villages.map((v) => [v.id, v])), [villages]);
+  const entityOf = useCallback(
+    (key: RowKey): Entity | null => {
+      if (key === ORPHANS_KEY) return { kind: 'orphans', orgId: null, parentKey: null };
+      if (key.startsWith('o')) {
+        const node = forest.byId.get(Number(key.slice(1)));
+        return node
+          ? {
+              kind: 'org',
+              node,
+              orgId: node.org.id,
+              parentKey: node.parent ? keyOfOrg(node.parent.org.id) : null,
+            }
+          : null;
+      }
+      if (key.startsWith('v')) {
+        const village = villageById.get(Number(key.slice(1)));
+        if (!village) return null;
+        const orgId =
+          village.organization_id !== null && forest.byId.has(village.organization_id)
+            ? village.organization_id
+            : null;
+        return { kind: 'village', village, orgId, parentKey: orgId === null ? ORPHANS_KEY : keyOfOrg(orgId) };
+      }
+      return null;
+    },
+    [forest, villageById],
+  );
+  const selectedEntity = selected ? entityOf(selected.key) : null;
+
+  // 선택된 것이 사라지면(삭제) 선택을 푼다.
   useEffect(() => {
-    if (selected && !query && !rowByKey.has(selected.key)) {
-      const existsInForest =
-        (selected.key.startsWith('o') && forest.byId.has(Number(selected.key.slice(1)))) ||
-        (selected.key.startsWith('v') && villages.some((v) => keyOfVillage(v.id) === selected.key));
-      if (!existsInForest) setSelected(null);
-    }
-  }, [selected, rowByKey, query, forest, villages]);
+    if (selected && !loading && !entityOf(selected.key)) setSelected(null);
+  }, [selected, loading, entityOf]);
 
   useEffect(() => {
     if (editing) inputRef.current?.focus();
@@ -376,14 +413,14 @@ export function RegionsPage() {
    * 골랐으면 최고 관리자는 뿌리, 기관 관리자는 자기 기관.
    */
   const targetParent = (): { parentId: number | null; afterKey: RowKey | null } => {
-    const row = selectedRow;
-    if (row?.kind === 'org' && row.node) return { parentId: row.node.org.id, afterKey: row.key };
-    if (row?.kind === 'village') {
-      return row.orgId === null
+    const ent = selectedEntity;
+    if (ent?.kind === 'org') return { parentId: ent.orgId, afterKey: keyOfOrg(ent.orgId) };
+    if (ent?.kind === 'village') {
+      return ent.orgId === null
         ? { parentId: null, afterKey: ORPHANS_KEY }
-        : { parentId: row.orgId, afterKey: keyOfOrg(row.orgId) };
+        : { parentId: ent.orgId, afterKey: keyOfOrg(ent.orgId) };
     }
-    if (row?.kind === 'orphans') return { parentId: null, afterKey: ORPHANS_KEY };
+    if (ent?.kind === 'orphans') return { parentId: null, afterKey: ORPHANS_KEY };
     if (myRootId !== null && forest.byId.has(myRootId))
       return { parentId: myRootId, afterKey: keyOfOrg(myRootId) };
     return { parentId: null, afterKey: null };
@@ -402,11 +439,13 @@ export function RegionsPage() {
   };
 
   const startRename = (key: RowKey) => {
-    const row = rowByKey.get(key);
-    if (!row || (row.kind !== 'org' && row.kind !== 'village')) return;
-    setDraft(row.kind === 'org' ? row.node!.org.name : row.village!.name);
+    const ent = entityOf(key);
+    if (!ent || ent.kind === 'orphans') return;
+    // 접혀 있으면 펼친다 — 입력칸은 보이는 행에만 그려진다.
+    if (ent.parentKey) toggle(ent.parentKey, true);
+    setDraft(ent.kind === 'org' ? ent.node.org.name : ent.village.name);
     setMenu(null);
-    setEditing({ mode: 'rename', kind: row.kind, key, afterKey: null });
+    setEditing({ mode: 'rename', kind: ent.kind, key, afterKey: null });
   };
 
   const cancelEdit = () => {
@@ -415,13 +454,19 @@ export function RegionsPage() {
     treeRef.current?.focus();
   };
 
+  //: 커밋 진행 중 표시. Enter 로 커밋하는 동안 입력칸이 disabled 되며 blur 가 한 번 더 올 수
+  //: 있는데, 그때 같은 커밋이 두 번 나가면 안 된다. 상태(busy)는 렌더 한 박자 늦어 ref 로 잡는다.
+  const committingRef = useRef(false);
+
   const commitEdit = async () => {
-    if (!editing) return;
+    if (!editing || committingRef.current) return;
+    const token = editing;
     const name = draft.trim();
     if (!name) {
       cancelEdit();
       return;
     }
+    committingRef.current = true;
     setBusy(true);
     setError(null);
     try {
@@ -436,49 +481,51 @@ export function RegionsPage() {
           setSelected({ key: keyOfVillage(created.id) });
         }
       } else if (editing.key) {
-        const row = rowByKey.get(editing.key);
-        if (row?.kind === 'org' && row.node && row.node.org.name !== name)
-          await api.organizations.update(row.node.org.id, { name });
-        if (row?.kind === 'village' && row.village && row.village.name !== name)
-          await api.villages.update(row.village.id, { name });
+        const ent = entityOf(editing.key);
+        if (ent?.kind === 'org' && ent.node.org.name !== name)
+          await api.organizations.update(ent.node.org.id, { name });
+        if (ent?.kind === 'village' && ent.village.name !== name)
+          await api.villages.update(ent.village.id, { name });
         await load();
       }
-      setEditing(null);
-      setDraft('');
+      // 그사이 다른 입력칸이 열렸으면(blur 로 커밋되는 동안 [새 마을]을 눌렀을 때) 그건 둔다.
+      setEditing((cur) => (cur === token ? null : cur));
+      setDraft((cur) => (editing === token ? '' : cur));
       treeRef.current?.focus();
     } catch (err) {
       fail(err, '저장에 실패했습니다.');
       // 입력칸은 그대로 둔다 — 이름을 고쳐 다시 Enter 칠 수 있게.
       inputRef.current?.focus();
     } finally {
+      committingRef.current = false;
       setBusy(false);
     }
   };
 
   // ── 삭제 ────────────────────────────────────────────────────────────────
   const remove = async (key: RowKey) => {
-    const row = rowByKey.get(key);
+    const ent = entityOf(key);
     setMenu(null);
-    if (!row) return;
+    if (!ent || ent.kind === 'orphans') return;
     setError(null);
     try {
-      if (row.kind === 'org' && row.node) {
-        if (!canDeleteOrg(row.node)) {
-          setError(deleteBlockReason(row.node));
+      if (ent.kind === 'org') {
+        if (!canDeleteOrg(ent.node)) {
+          setError(deleteBlockReason(ent.node));
           return;
         }
-        if (!window.confirm(`기관 "${row.node.org.name}" 을(를) 삭제할까요?`)) return;
-        await api.organizations.remove(row.node.org.id);
-        setSelected(row.parentKey ? { key: row.parentKey } : null);
-      } else if (row.kind === 'village' && row.village) {
-        const v = row.village;
+        if (!window.confirm(`기관 "${ent.node.org.name}" 을(를) 삭제할까요?`)) return;
+        await api.organizations.remove(ent.node.org.id);
+        setSelected(ent.parentKey ? { key: ent.parentKey } : null);
+      } else {
+        const v = ent.village;
         const warning =
           v.device_count > 0
             ? `${v.name} 을(를) 삭제하면 소속 단말 ${v.device_count}대가 미배정으로 돌아갑니다. 계속할까요?`
             : `${v.name} 을(를) 삭제할까요?`;
         if (!window.confirm(warning)) return;
         await api.villages.remove(v.id);
-        setSelected(row.parentKey && row.parentKey !== ORPHANS_KEY ? { key: row.parentKey } : null);
+        setSelected(ent.parentKey !== ORPHANS_KEY ? { key: ent.parentKey } : null);
       }
       await load();
     } catch (err) {
@@ -487,34 +534,39 @@ export function RegionsPage() {
   };
 
   // ── 옮기기(드래그) ──────────────────────────────────────────────────────
-  /** 이 행을 target 기관(null = 뿌리/기관 없음) 아래로 놓아도 되나. */
-  const canDropOn = (srcKey: RowKey, targetOrgId: number | null): boolean => {
-    const src = rowByKey.get(srcKey);
-    if (!src) return false;
-    if (src.kind === 'org' && src.node) {
+  //: 끌고 있는 행. ref 인 이유: dragstart 안에서 setState 로 화면을 바꾸면 Chrome 이 "드래그
+  //: 대상이 바뀌었다"고 보고 드래그를 즉시 취소한다(2026-09-12 운영에서 실제로 안 끌렸다).
+  //: 판정은 ref 로, 표시(흐리게·놓기 영역)는 한 박자 뒤(setTimeout)에 state 로 한다.
+  const dragRef = useRef<RowKey | null>(null);
+
+  /** 이 실체를 target 에 놓아도 되나. */
+  const canDropOn = (srcKey: RowKey, target: DropTarget): boolean => {
+    const src = entityOf(srcKey);
+    if (!src || src.kind === 'orphans') return false;
+    if (src.kind === 'org') {
       if (!canDragOrg(src.node)) return false;
-      if (targetOrgId === null) return isSuperAdmin && src.node.org.parent_id !== null;
-      const target = forest.byId.get(targetOrgId);
-      if (!target || target === src.node || isUnder(target, src.node)) return false; // 순환
-      return src.node.org.parent_id !== targetOrgId;
+      if (target.kind === 'orphans') return false; // 「기관 없음」은 마을만 받는다
+      if (target.kind === 'root') return isSuperAdmin && src.node.org.parent_id !== null;
+      const node = forest.byId.get(target.orgId);
+      if (!node || node === src.node || isUnder(node, src.node)) return false; // 순환
+      return src.node.org.parent_id !== target.orgId;
     }
-    if (src.kind === 'village') {
-      if (targetOrgId === null && !isSuperAdmin) return false;
-      return src.orgId !== targetOrgId;
-    }
-    return false;
+    // 마을
+    if (target.kind === 'org') return src.orgId !== target.orgId;
+    return isSuperAdmin && src.orgId !== null; // 기관 없음으로 — 최고 관리자만
   };
 
-  const move = async (srcKey: RowKey, targetOrgId: number | null) => {
-    const src = rowByKey.get(srcKey);
-    if (!src || !canDropOn(srcKey, targetOrgId)) return;
+  const move = async (srcKey: RowKey, target: DropTarget) => {
+    const src = entityOf(srcKey);
+    if (!src || src.kind === 'orphans' || !canDropOn(srcKey, target)) return;
+    const targetOrgId = target.kind === 'org' ? target.orgId : null;
     const targetName =
-      targetOrgId === null
-        ? src.kind === 'org'
+      target.kind === 'org'
+        ? (forest.byId.get(target.orgId)?.org.name ?? '기관')
+        : src.kind === 'org'
           ? '최상위'
-          : '기관 없음(최고 관리자만 봄)'
-        : (forest.byId.get(targetOrgId)?.org.name ?? '기관');
-    const srcName = src.kind === 'org' ? src.node!.org.name : src.village!.name;
+          : '기관 없음(최고 관리자만 봄)';
+    const srcName = src.kind === 'org' ? src.node.org.name : src.village.name;
     // 옮기면 누가 보고 방송하는지가 바뀐다. 손가락이 미끄러져 옆 기관에 떨어지는 일에
     // 확인 없이 일어나면 안 된다(설계 §6.2).
     const what =
@@ -524,9 +576,10 @@ export function RegionsPage() {
     if (!window.confirm(`"${srcName}" 을(를) "${targetName}" 아래로 옮길까요?\n${what}`)) return;
     setError(null);
     try {
-      if (src.kind === 'org') await api.organizations.update(src.node!.org.id, { parent_id: targetOrgId });
-      else await api.villages.update(src.village!.id, { organization_id: targetOrgId });
+      if (src.kind === 'org') await api.organizations.update(src.node.org.id, { parent_id: targetOrgId });
+      else await api.villages.update(src.village.id, { organization_id: targetOrgId });
       if (targetOrgId !== null) toggle(keyOfOrg(targetOrgId), true);
+      else if (src.kind === 'village') toggle(ORPHANS_KEY, true);
       await load();
     } catch (err) {
       fail(err, '옮기지 못했습니다.');
@@ -540,23 +593,28 @@ export function RegionsPage() {
     }
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', row.key);
-    setDragKey(row.key);
+    dragRef.current = row.key;
+    const key = row.key;
+    window.setTimeout(() => setDragKey(key), 0);
   };
-  const onDragOver = (e: DragEvent, targetOrgId: number | null, targetKey: RowKey) => {
-    if (dragKey && canDropOn(dragKey, targetOrgId)) {
+  const onDragOver = (e: DragEvent, target: DropTarget, targetKey: RowKey) => {
+    const src = dragRef.current;
+    if (src && canDropOn(src, target)) {
       e.preventDefault();
       e.dataTransfer.dropEffect = 'move';
       if (dropKey !== targetKey) setDropKey(targetKey);
     }
   };
-  const onDrop = (e: DragEvent, targetOrgId: number | null) => {
+  const onDrop = (e: DragEvent, target: DropTarget) => {
     e.preventDefault();
-    const src = dragKey ?? e.dataTransfer.getData('text/plain');
+    const src = dragRef.current ?? e.dataTransfer.getData('text/plain');
+    dragRef.current = null;
     setDragKey(null);
     setDropKey(null);
-    if (src) void move(src, targetOrgId);
+    if (src) void move(src, target);
   };
   const onDragEnd = () => {
+    dragRef.current = null;
     setDragKey(null);
     setDropKey(null);
   };
@@ -645,14 +703,14 @@ export function RegionsPage() {
       }}
       onBlur={() => {
         // VS Code 와 같다: 비우고 나가면 취소, 적고 나가면 만든다.
-        if (!busy) void commitEdit();
+        if (!committingRef.current) void commitEdit();
       }}
       disabled={busy}
       aria-label={editing?.mode === 'rename' ? '새 이름' : '이름'}
     />
   );
 
-  const menuRow = menu ? rowByKey.get(menu.key) : undefined;
+  const menuRow = menu ? entityOf(menu.key) : null;
 
   return (
     <>
@@ -732,14 +790,20 @@ export function RegionsPage() {
             tabIndex={0}
             onKeyDown={onKeyDown}
             onDragOver={(e) => {
-              // 빈 자리에 놓으면 뿌리(기관) 또는 기관 없음(마을)으로.
-              if (dragKey && canDropOn(dragKey, null)) {
+              // 행이 아닌 빈 자리·놓기 영역에서만 — 뿌리(기관) 또는 기관 없음(마을)으로.
+              const el = e.target as HTMLElement;
+              const onBlank = el === e.currentTarget || el.closest('.explorer__dropzone') !== null;
+              if (onBlank && dragRef.current && canDropOn(dragRef.current, { kind: 'root' })) {
                 e.preventDefault();
                 if (dropKey !== 'root') setDropKey('root');
               }
             }}
             onDrop={(e) => {
-              if (dropKey === 'root') onDrop(e, null);
+              // dragover 와 같은 판정을 다시 한다 — state(dropKey)는 렌더 한 박자 늦을 수 있다.
+              const el = e.target as HTMLElement;
+              const onBlank = el === e.currentTarget || el.closest('.explorer__dropzone') !== null;
+              if (onBlank && dragRef.current && canDropOn(dragRef.current, { kind: 'root' }))
+                onDrop(e, { kind: 'root' });
             }}
             onDragLeave={(e) => {
               if (e.currentTarget === e.target) setDropKey(null);
@@ -761,7 +825,12 @@ export function RegionsPage() {
                 const isEditingThis = editing?.mode === 'rename' && editing.key === row.key;
                 const isDrop = dropKey === row.key;
                 const isDragging = dragKey === row.key;
-                const dropOrgId = row.kind === 'org' ? row.orgId : row.kind === 'orphans' ? null : undefined;
+                const dropTarget: DropTarget | undefined =
+                  row.kind === 'org' && row.orgId !== null
+                    ? { kind: 'org', orgId: row.orgId }
+                    : row.kind === 'orphans'
+                      ? { kind: 'orphans' }
+                      : undefined;
                 return (
                   <div
                     key={row.key}
@@ -774,23 +843,16 @@ export function RegionsPage() {
                     draggable={row.kind === 'org' || row.kind === 'village'}
                     onDragStart={(e) => onDragStart(e, row)}
                     onDragEnd={onDragEnd}
-                    onDragOver={
-                      dropOrgId !== undefined
-                        ? (e) => {
-                            e.stopPropagation();
-                            onDragOver(e, dropOrgId, row.key);
-                          }
-                        : undefined
-                    }
+                    onDragOver={(e) => {
+                      // 행 위에서는 컨테이너(뿌리 놓기)로 번지지 않게. 마을 행은 놓을 자리가 아니다.
+                      e.stopPropagation();
+                      if (dropTarget) onDragOver(e, dropTarget, row.key);
+                    }}
                     onDragLeave={() => dropKey === row.key && setDropKey(null)}
-                    onDrop={
-                      dropOrgId !== undefined
-                        ? (e) => {
-                            e.stopPropagation();
-                            onDrop(e, dropOrgId);
-                          }
-                        : undefined
-                    }
+                    onDrop={(e) => {
+                      e.stopPropagation();
+                      if (dropTarget) onDrop(e, dropTarget);
+                    }}
                     onClick={() => {
                       if (row.kind === 'new') return;
                       setSelected({ key: row.key });
@@ -867,7 +929,7 @@ export function RegionsPage() {
                 );
               })
             )}
-            {dragKey && isSuperAdmin && rowByKey.get(dragKey)?.kind === 'org' && (
+            {dragKey && isSuperAdmin && entityOf(dragKey)?.kind === 'org' && (
               <div className={`explorer__dropzone${dropKey === 'root' ? ' is-drop' : ''}`}>
                 여기에 놓으면 최상위 기관이 됩니다
               </div>
@@ -881,7 +943,7 @@ export function RegionsPage() {
         </aside>
 
         <section className="explorer__detail">
-          {!selectedRow || selectedRow.kind === 'new' ? (
+          {!selectedEntity ? (
             <div className="empty explorer__empty">
               <p className="strong">왼쪽에서 기관이나 마을을 고르세요.</p>
               <p className="dim">
@@ -889,18 +951,16 @@ export function RegionsPage() {
                 주소·좌표·구역·단말은 마을에만 있습니다.
               </p>
             </div>
-          ) : selectedRow.kind === 'village' ? (
+          ) : selectedEntity.kind === 'village' ? (
             <VillagePanel
-              village={selectedRow.village!}
+              village={selectedEntity.village}
               pathLabel={
-                selectedRow.orgId !== null && forest.byId.has(selectedRow.orgId)
-                  ? pathLabel(forest.byId.get(selectedRow.orgId)!)
-                  : ''
+                selectedEntity.orgId !== null ? pathLabel(forest.byId.get(selectedEntity.orgId)!) : ''
               }
               onChanged={load}
-              onDelete={() => void remove(selectedRow.key)}
+              onDelete={() => void remove(keyOfVillage(selectedEntity.village.id))}
             />
-          ) : selectedRow.kind === 'orphans' ? (
+          ) : selectedEntity.kind === 'orphans' ? (
             <div className="empty explorer__empty">
               <p className="strong">기관 없음 · 마을 {forest.orphans.length}개</p>
               <p className="dim">
@@ -910,17 +970,17 @@ export function RegionsPage() {
             </div>
           ) : (
             <OrgPanel
-              node={selectedRow.node!}
-              isMyRoot={selectedRow.node!.org.id === myRootId}
-              canDelete={canDeleteOrg(selectedRow.node!)}
-              deleteReason={deleteBlockReason(selectedRow.node!)}
-              onRename={() => startRename(selectedRow.key)}
+              node={selectedEntity.node}
+              isMyRoot={selectedEntity.orgId === myRootId}
+              canDelete={canDeleteOrg(selectedEntity.node)}
+              deleteReason={deleteBlockReason(selectedEntity.node)}
+              onRename={() => startRename(keyOfOrg(selectedEntity.orgId))}
               onNewOrg={() => startCreate('org')}
               onNewVillage={() => startCreate('village')}
-              onDelete={() => void remove(selectedRow.key)}
+              onDelete={() => void remove(keyOfOrg(selectedEntity.orgId))}
               onSelect={(key) => {
                 setSelected({ key });
-                if (selectedRow.node) toggle(selectedRow.key, true);
+                toggle(keyOfOrg(selectedEntity.orgId), true);
               }}
             />
           )}
@@ -949,16 +1009,16 @@ export function RegionsPage() {
           {(menuRow.kind === 'org' || menuRow.kind === 'village') && (
             <>
               <div className="ctxmenu__sep" />
-              <button type="button" role="menuitem" onClick={() => startRename(menuRow.key)}>
+              <button type="button" role="menuitem" onClick={() => startRename(menu.key)}>
                 이름 바꾸기 <kbd>F2</kbd>
               </button>
               <button
                 type="button"
                 role="menuitem"
                 className="is-danger"
-                onClick={() => void remove(menuRow.key)}
-                disabled={menuRow.kind === 'org' && !canDeleteOrg(menuRow.node!)}
-                title={menuRow.kind === 'org' ? deleteBlockReason(menuRow.node!) || undefined : undefined}
+                onClick={() => void remove(menu.key)}
+                disabled={menuRow.kind === 'org' && !canDeleteOrg(menuRow.node)}
+                title={menuRow.kind === 'org' ? deleteBlockReason(menuRow.node) || undefined : undefined}
               >
                 삭제 <kbd>Del</kbd>
               </button>
