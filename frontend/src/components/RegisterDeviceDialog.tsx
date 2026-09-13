@@ -609,15 +609,25 @@ export function RegisterDeviceDialog({
       </div>
 
       {/* 생산 라인 공유기 — 있으면 주입 프레임에 @SSID·@PASSWORD 로 함께 나간다.
-          라인에서 여러 대를 연달아 등록하므로 값을 기억한다(문제점 35번). */}
+          라인에서 여러 대를 연달아 등록하므로 값을 기억한다(문제점 35번).
+
+          ⚠ 비밀번호 칸을 type="password" 로 두지 않는다(문제점 39번). 브라우저 비밀번호
+          관리자가 「text 칸 + password 칸」 짝을 로그인 폼으로 보고, 이 사이트에 저장된
+          관리자 계정(아이디·비밀번호)을 두 칸에 **자동으로 채워 넣는다** — autocomplete="off"
+          는 무시된다. 채우면서 input 이벤트까지 보내므로 React 상태와 localStorage 도
+          그 값으로 덮여, 지웠던 SSID·비밀번호가 등록 버튼을 누른 뒤 되살아나 단말로
+          나갔다. 글자 가리기는 CSS(-webkit-text-security)로 한다. */}
       <div className="field-row">
         <div className="field">
           <label htmlFor="line-ssid">생산 라인 Wi-Fi (@SSID)</label>
           <input
             id="line-ssid"
+            name="xwifi-line-ssid"
             className="mono"
             type="text"
             autoComplete="off"
+            data-lpignore="true"
+            data-1p-ignore=""
             placeholder="비워 두면 보내지 않음"
             value={lineSsid}
             onChange={(e) => {
@@ -631,9 +641,12 @@ export function RegisterDeviceDialog({
           <div style={{ display: 'flex', gap: 6 }}>
             <input
               id="line-wifi-pw"
-              className="mono"
-              type={showLinePw ? 'text' : 'password'}
+              name="xwifi-line-key"
+              className={`mono${showLinePw ? '' : ' masked'}`}
+              type="text"
               autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore=""
               placeholder="비워 두면 보내지 않음"
               value={lineWifiPw}
               onChange={(e) => {

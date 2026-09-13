@@ -2105,3 +2105,10 @@ body.is-grabbing * {
   pointer-events: none;
   white-space: nowrap;
 }
+
+/* type="password" 대신 쓰는 가리기 — 브라우저 비밀번호 관리자의 자동 채움을 피하려고
+   (RegisterDeviceDialog, 문제점 39번). Firefox 는 이 속성을 몰라 글자가 보인다 —
+   옆의 [보기/숨기기] 로 어차피 볼 수 있는 생산 라인 공유기 값이라 감수한다. */
+input.masked {
+  -webkit-text-security: disc;
+}

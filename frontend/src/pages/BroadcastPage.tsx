@@ -570,7 +570,20 @@ export function BroadcastPage() {
                             : '대기'}
                     </span>
                     {mic.state === 'live' && (
-                      <span className="dim num">{Math.round(mic.bytesSent / 1024)} KB 전송</span>
+                      <span
+                        className="dim num"
+                        title={`설정 ${liveBitrateKbps} kbps + Ogg 페이지 포장(약 0.7 KB/s). 단말이 받는 양과 같습니다.`}
+                      >
+                        {Math.round(mic.bytesSent / 1024)} KB 전송
+                        {(() => {
+                          // 시작 시각은 방송 시작 때 찍는다. 10초 뒤부터 실효 kbps 를 같이 보인다 —
+                          // 몇 초 안 된 값은 튀어서 오해를 산다(문제점 36번).
+                          const sec = (Date.now() - liveStartedAt.current) / 1000;
+                          if (sec < 10) return null;
+                          const kbps = (mic.bytesSent * 8) / 1000 / sec;
+                          return ` · ${Math.round(sec)}초 · 실효 ${kbps.toFixed(1)} kbps`;
+                        })()}
+                      </span>
                     )}
                   </div>
                 </div>

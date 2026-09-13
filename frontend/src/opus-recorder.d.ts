@@ -10,7 +10,8 @@ declare module 'opus-recorder' {
     encoderPath?: string;
     encoderSampleRate?: number;
     numberOfChannels?: number;
-    bitRate?: number;
+    /** bps. 이름은 encoderBitRate 다 — bitRate 로 적으면 인코더가 조용히 무시한다(문제점 36번). */
+    encoderBitRate?: number;
     /** ms 단위 Opus 프레임 길이. 통신 사양은 40. */
     encoderFrameSize?: number;
     /** Ogg 페이지 하나에 담을 프레임 수. 1 이면 지연이 최소가 된다. */

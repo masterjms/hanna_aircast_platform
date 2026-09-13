@@ -138,3 +138,33 @@ docker exec xwifi-mosquitto sh -c 'grep "open files" /proc/1/limits'
 | `SERVER_BROKER_QUESTIONS_2026-09-01.md` | 원 질문 |
 | `SERVER_BROADCAST_STOP_SEQUENCE_2026-09-03.md` | 별건 — 방송 종료 순서. 서버 반영 완료(`xWIFI_API_설계_260815.md` §4) |
 | `xWIFI_API_설계_260815.md` §2 | 단말별 계정·ACL 생성 구조 |
+
+## 추가 (2026-09-13) — 문제점 37번: CONFIG retained 와 ACL 은 어떻게 유지되나
+
+### 1. CONFIG retained 백업/복원 — 백업하지 않는다. 정본이 DB 라서 브로커를 갈아도 서버가 다시 채운다
+
+브로커의 retained CONFIG 는 **캐시**다. 정본은 서버 DB 두 곳이다:
+
+| 값 | 정본 |
+|---|---|
+| 공통 설정(`iotradio/all/config`: STATUS 주기·LIVE_STATS 주기·QoS·config_version) | `current_config` 테이블 |
+| 단말별 마을 배정(`iotradio/device/<mac>/config` 의 `village_id`) | `devices.village_id` + `villages.village_code` |
+
+서버가 이 정본을 브로커에 다시 써 넣는 경로가 셋 있다(`backend/app/tasks/config_reconcile.py`, `backend/app/mqtt/status_buffer.py`):
+
+1. **기동 시 1회** — backend 컨테이너가 뜨면 MQTT 연결을 기다렸다가(최대 15초) 공통 CONFIG 1건 + 배정된 단말 전부의 CONFIG + 미배정 단말의 「전부 0」 CONFIG 를 retained 로 발행한다.
+2. **주기적으로** — 기본 1시간마다(`CONFIG_RECONCILE_INTERVAL_SEC`, 기본 3600) 같은 것을 다시 발행한다. 같은 값·같은 버전이면 단말이 무시하므로 매번 보내도 무해하다.
+3. **단말이 STATUS 로 올린 `village_id`/`config_version` 이 DB 와 다르면 즉시** 그 단말에만 다시 발행한다(불일치 자동 복구, 단말당 재발행 간격 제한 있음).
+
+따라서 **브로커를 재설치해도 마을 배정은 사라지지 않는다.** 재설치 직후 retained 가 비어 있는 동안 재접속한 단말은 잠깐 CONFIG 를 못 받지만, (a) 서버를 재시작하면 즉시, 아니면 (b) 다음 재조정 주기(≤1시간), 아니면 (c) 그 단말이 STATUS 를 올리는 순간(3) 으로 복구된다. 브로커 교체 절차에 「교체 뒤 backend 재시작(`docker compose restart backend`)」 한 줄만 넣으면 (a) 로 끝난다.
+
+`mosquitto-data` 볼륨의 persistence 파일을 따로 백업할 이유는 없다 — 거기 든 것은 전부 DB 에서 재생성된다. DB 백업(일 1회 `pg_dump`)이 곧 CONFIG 백업이다.
+
+### 2. MQTT ACL 운영 — 파일을 손으로 만지지 않는다. DB 에서 생성해 브로커에 밀어 넣는다
+
+- 단말 계정(`passwd`)과 ACL(`aclfile`)은 backend 가 DB(`devices.mac`·`mqtt_password`·`village_id`)에서 **통째로 생성**해 공유 볼륨 `mqtt-dynamic` 에 `passwd.generated`·`aclfile.generated` 로 쓴다(`device_service.export_broker_accounts`).
+- 생성 시점: backend 기동 시, 단말 등록·삭제·credential 재발급, 마을 배정 변경, 마을 삭제, 마을의 MQTT 문자열 변경(옛 8자리 → 12자리) 때. 기관 트리에서 마을·기관을 옮기는 것은 ACL 과 무관하다(토픽이 안 바뀐다).
+- mosquitto 컨테이너의 entrypoint 가 두 파일의 변경을 감시해 `/mosquitto/data/` 에 설치하고 `SIGHUP` 으로 리로드한다. 사람이 브로커에 들어가 편집할 일이 없고, 편집해도 다음 생성 때 덮인다.
+- ACL 규칙(통신 사양 §2.1): 단말은 자기 `device/<mac>/…` 와 자기 마을 `village/<village_id>/…` 만 구독·발행할 수 있고, `iotradio/all/cmd` 는 서버 계정만 발행한다. 미배정 단말은 마을 토픽이 없다.
+- 확인은 리포의 seed 파일이 아니라 브로커 안의 설치본(`/mosquitto/data/aclfile`)을 본다 — 운영 문서 06 §5.2.
+- 브로커 재설치 때 ACL 도 마찬가지로 backend 가 다시 만든다. 단, backend 가 브로커보다 **먼저** 떠서 generated 파일을 이미 써 둔 상태면 entrypoint 부트스트랩이 그 파일을 집어 쓴다; 브로커가 먼저 떴다면 seed 로 시작했다가 backend 기동 시 생성본으로 교체된다. 어느 순서든 결과는 같다.

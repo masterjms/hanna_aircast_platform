@@ -9,12 +9,14 @@
  * 브라우저와 무관하게 항상 같은 Ogg/Opus 가 나간다.
  *
  * 인코더 파라미터는 통신 사양 §채널 B 와 일치해야 한다:
- *   16 kHz mono · 24 kbps · 40 ms 프레임
+ *   16 kHz mono · 16 또는 24 kbps(설정) · 40 ms 프레임
  * LIVE_START 로 단말에 보내는 codec/frame_ms/sample_rate 도 같은 값이다.
  * 한쪽만 바꾸면 단말 지터 버퍼가 깨진다.
  *
  * maxFramesPerPage: 1 — Ogg 페이지 하나에 프레임 하나만 담는다. 페이지를
- * 채우려고 기다리지 않으므로 지연이 프레임 하나(40ms)로 유지된다.
+ * 채우려고 기다리지 않으므로 지연이 프레임 하나(40ms)로 유지된다. 대신 페이지마다
+ * 28바이트 헤더가 붙어 초당 25페이지 = 0.7 KB/s 가 오디오 위에 얹힌다 — 24 kbps 면
+ * 실효 약 30 kbps, 16 kbps 면 약 22 kbps. 화면의 「전송」 표시는 이 포장을 포함한 값이다.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -244,7 +246,10 @@ export function useMicUplink(): MicUplink {
           encoderPath,
           encoderSampleRate: SAMPLE_RATE,
           numberOfChannels: 1,
-          bitRate: bitrateKbps * 1000,
+          // 옵션 이름은 encoderBitRate 다. 예전에 bitRate 로 잘못 적어 인코더가 이 값을 무시하고
+          // libopus 자동값(16 kHz mono 는 약 19 kbps, VBR)으로 돌았다 — 설정 화면의 16/24 가
+          // 실제로는 적용되지 않던 원인(문제점 36번, 2026-09-13).
+          encoderBitRate: bitrateKbps * 1000,
           encoderFrameSize: FRAME_MS,
           // Ogg 페이지에 프레임 하나만 담아 지연을 40ms 로 유지한다.
           maxFramesPerPage: 1,
