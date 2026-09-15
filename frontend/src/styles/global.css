@@ -2112,3 +2112,10 @@ body.is-grabbing * {
 input.masked {
   -webkit-text-security: disc;
 }
+
+/* 실시간 방송 — 단말이 받는 스트림 규격 한 줄 (BroadcastPage) */
+.mic__spec {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}

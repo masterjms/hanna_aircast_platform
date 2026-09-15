@@ -570,20 +570,23 @@ export function BroadcastPage() {
                             : '대기'}
                     </span>
                     {mic.state === 'live' && (
-                      <span
-                        className="dim num"
-                        title={`설정 ${liveBitrateKbps} kbps + Ogg 페이지 포장(약 0.7 KB/s). 단말이 받는 양과 같습니다.`}
-                      >
-                        {Math.round(mic.bytesSent / 1024)} KB 전송
-                        {(() => {
-                          // 시작 시각은 방송 시작 때 찍는다. 10초 뒤부터 실효 kbps 를 같이 보인다 —
-                          // 몇 초 안 된 값은 튀어서 오해를 산다(문제점 36번).
-                          const sec = (Date.now() - liveStartedAt.current) / 1000;
-                          if (sec < 10) return null;
-                          const kbps = (mic.bytesSent * 8) / 1000 / sec;
-                          return ` · ${Math.round(sec)}초 · 실효 ${kbps.toFixed(1)} kbps`;
-                        })()}
-                      </span>
+                      <>
+                        {/* 단말이 받는 스트림 규격. 서버는 재인코딩하지 않으므로 여기서 인코딩한
+                            것이 곧 단말이 받는 것이다. 비트레이트는 인코더 목표값(설정)이다 —
+                            회선 평균(Ogg 포장 포함, 가변)을 kbps 로 보이면 설정과 달라 보여
+                            오해를 샀다(문제점 40번). */}
+                        <span className="mic__spec num">
+                          Opus 16 kHz · mono · {liveBitrateKbps} kbps · 40 ms
+                        </span>
+                        <span
+                          className="dim num"
+                          title="송출을 시작한 뒤 서버로 보낸 누적량과 경과 시간입니다. Ogg 포장이 포함돼 kbps 로 환산하면 설정값과 다릅니다."
+                        >
+                          누적 {Math.round(mic.bytesSent / 1024)} KB
+                          {mic.liveSince !== null &&
+                            ` · ${Math.max(0, Math.round((Date.now() - mic.liveSince) / 1000))}초`}
+                        </span>
+                      </>
                     )}
                   </div>
                 </div>

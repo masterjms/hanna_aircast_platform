@@ -40,6 +40,8 @@ export interface MicUplink {
   /** 마이크 입력 세기 0~1. 레벨 미터에 쓴다. */
   level: number;
   bytesSent: number;
+  /** 마이크가 실제로 송출을 시작한 시각(ms). 송출 전·종료 후는 null. */
+  liveSince: number | null;
   /** bitrateKbps 는 서버 설정값(16 또는 24). 생략하면 24 로 인코딩한다. */
   start: (sessionId: number, token: string, bitrateKbps?: number) => Promise<void>;
   stop: () => void;
@@ -111,6 +113,7 @@ export function useMicUplink(): MicUplink {
   const [error, setError] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
   const [bytesSent, setBytesSent] = useState(0);
+  const [liveSince, setLiveSince] = useState<number | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<InstanceType<typeof Recorder> | null>(null);
@@ -157,6 +160,7 @@ export function useMicUplink(): MicUplink {
     async (sessionId: number, token: string, bitrateKbps: number = DEFAULT_BITRATE_KBPS) => {
       setError(null);
       setBytesSent(0);
+      setLiveSince(null);
       setState('connecting');
       closingRef.current = false;
 
@@ -284,6 +288,7 @@ export function useMicUplink(): MicUplink {
         };
         rafRef.current = requestAnimationFrame(tick);
 
+        setLiveSince(Date.now());
         setState('live');
       } catch (err) {
         cleanup();
@@ -296,5 +301,5 @@ export function useMicUplink(): MicUplink {
     [cleanup],
   );
 
-  return { state, error, level, bytesSent, start, stop };
+  return { state, error, level, bytesSent, liveSince, start, stop };
 }
