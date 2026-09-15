@@ -576,7 +576,13 @@ export function BroadcastPage() {
                             회선 평균(Ogg 포장 포함, 가변)을 kbps 로 보이면 설정과 달라 보여
                             오해를 샀다(문제점 40번). */}
                         <span className="mic__spec num">
-                          Opus 16 kHz · mono · {liveBitrateKbps} kbps · 40 ms
+                          {/* 항목 단위로만 줄을 바꾼다 — 좁은 카드에서 한 줄로 두면 밖으로 넘친다. */}
+                          {['Opus 16 kHz', 'mono', `${liveBitrateKbps} kbps`, '40 ms'].map((part, i) => (
+                            <span key={part} className="mic__spec-part">
+                              {i > 0 && ' · '}
+                              {part}
+                            </span>
+                          ))}
                         </span>
                         <span
                           className="dim num"

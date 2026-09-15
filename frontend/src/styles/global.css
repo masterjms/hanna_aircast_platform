@@ -924,6 +924,10 @@ textarea {
   flex-direction: column;
   gap: 5px;
   font-size: 12px;
+  /* 미터 옆 남은 폭만 쓴다. min-width:0 이 없으면 긴 줄이 카드 밖으로 밀고 나간다. */
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: flex-start;
 }
 
 /* ── 미리듣기 ─────────────────────────────────────────────── */
@@ -2117,5 +2121,8 @@ input.masked {
 .mic__spec {
   font-size: 12px;
   color: var(--text-2);
+  line-height: 1.5;
+}
+.mic__spec-part {
   white-space: nowrap;
 }
