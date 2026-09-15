@@ -12,7 +12,7 @@
  * 사용자가 판단하게 한다.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type {
@@ -20,11 +20,14 @@ import type {
   BroadcastDetail,
   BroadcastOverlapDetail,
   Device,
+  Organization,
   TargetScope,
   Village,
   Zone,
 } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { VillageTreePicker, summarizeSelection } from '../components/broadcast/VillageTreePicker';
+import { buildForest } from '../lib/orgtree';
 import { getToken } from '../api/client';
 import { uplinkBlockedReason, useMicUplink } from '../hooks/useMicUplink';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
@@ -205,6 +208,8 @@ export function BroadcastPage() {
   const [liveBitrateKbps, setLiveBitrateKbps] = useState(24);
 
   const [villages, setVillages] = useState<Village[]>([]);
+  // 기관 트리. 기관을 체크하면 아래 마을 전부가 대상이 된다. 이장은 빈 목록.
+  const [orgs, setOrgs] = useState<Organization[]>([]);
   const [zones, setZones] = useState<Zone[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [files, setFiles] = useState<AudioFile[]>([]);
@@ -232,12 +237,15 @@ export function BroadcastPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const [v, f, d] = await Promise.all([
+        const [v, f, d, o] = await Promise.all([
           api.villages.list(),
           api.files.list(),
           api.devices.list(),
+          // 트리를 못 읽어도 마을 목록으로 방송은 할 수 있어야 한다.
+          api.organizations.list().catch(() => [] as Organization[]),
         ]);
         setVillages(v);
+        setOrgs(o);
         setFiles(f);
         setDevices(d);
         if (v.length === 1) setVillageId(v[0].id);
@@ -263,6 +271,11 @@ export function BroadcastPage() {
     if (scope === 'zone') return zoneId === '' ? [] : [String(zoneId)];
     return macs;
   };
+
+  const selectionLabels = useMemo(
+    () => summarizeSelection(buildForest(orgs, villages), villageIds),
+    [orgs, villages, villageIds],
+  );
 
   const targetReady = scope === 'all' || targetIds().length > 0;
   const ready = fileId !== '' && targetReady;
@@ -433,7 +446,15 @@ export function BroadcastPage() {
                     onChange={() => setScope(s)}
                   />
                   <span>
-                    {s === 'village' ? '마을' : s === 'zone' ? '구역' : s === 'device' ? '개별 단말' : '전체'}
+                    {s === 'village'
+                      ? orgs.length > 0
+                        ? '기관·마을'
+                        : '마을'
+                      : s === 'zone'
+                        ? '구역'
+                        : s === 'device'
+                          ? '개별 단말'
+                          : '전체'}
                   </span>
                 </label>
               ),
@@ -442,27 +463,30 @@ export function BroadcastPage() {
 
           {scope === 'village' && (
             <div className="field">
-              <label>마을 (여러 곳 선택 가능)</label>
-              <div className="check-list">
-                {villages.map((v) => (
-                  <label key={v.id} className="check-list__item">
-                    <input
-                      type="checkbox"
-                      checked={villageIds.includes(v.id)}
-                      disabled={v.online_count === 0}
-                      onChange={(e) =>
-                        setVillageIds((prev) =>
-                          e.target.checked ? [...prev, v.id] : prev.filter((x) => x !== v.id),
-                        )
-                      }
-                    />
-                    {v.name} <DeviceCount online={v.online_count} total={v.device_count} />
-                  </label>
-                ))}
+              <div className="tree-picker__head">
+                <label>
+                  {orgs.length > 0
+                    ? '기관을 체크하면 아래 마을 전체가 선택됩니다'
+                    : '마을 (여러 곳 선택 가능)'}
+                </label>
+                {villageIds.length > 0 && (
+                  <button type="button" className="btn btn--ghost btn--sm" onClick={() => setVillageIds([])}>
+                    선택 해제
+                  </button>
+                )}
               </div>
-              {villageIds.length > 1 && (
+              <VillageTreePicker
+                orgs={orgs}
+                villages={villages}
+                value={villageIds}
+                onChange={setVillageIds}
+                renderCount={(online, total) => <DeviceCount online={online} total={total} />}
+              />
+              {villageIds.length > 0 && (
                 <p className="hint">
-                  선택한 {villageIds.length}개 마을이 같은 방송을 동시에 받습니다.
+                  대상: {selectionLabels.slice(0, 4).join(', ')}
+                  {selectionLabels.length > 4 ? ` 외 ${selectionLabels.length - 4}` : ''} · 마을{' '}
+                  {villageIds.length}곳이 같은 방송을 동시에 받습니다.
                 </p>
               )}
             </div>

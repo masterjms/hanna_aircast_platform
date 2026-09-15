@@ -89,6 +89,17 @@ export function subtreeIds(node: OrgNode): Set<number> {
   return out;
 }
 
+/** 자기 포함 아래 전부의 마을(깊이 무관). 방송 대상에서 「경기도 전체」를 펼칠 때 쓴다. */
+export function subtreeVillages(node: OrgNode): Village[] {
+  const out: Village[] = [];
+  const walk = (n: OrgNode) => {
+    out.push(...n.villages);
+    n.children.forEach(walk);
+  };
+  walk(node);
+  return out;
+}
+
 export interface SubtreeStats {
   orgs: number;
   villages: number;
