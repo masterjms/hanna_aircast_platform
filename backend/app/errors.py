@@ -139,6 +139,17 @@ class OrganizationInUse(Conflict):
     message = "소속 마을이나 계정이 있는 기관은 삭제할 수 없습니다. 먼저 옮기거나 지우세요."
 
 
+class ScheduleTargetInUse(Conflict):
+    """자동방송이 대상으로 가리키는 기관·마을·단말 삭제(2026-09-15 시나리오 검증).
+
+    지우면 스케줄이 대상 없는 규칙으로 남아 매번 조용히 건너뛰고, 기관 관리자 화면에서는
+    보이지도 않았다. 파일함의 FILE_IN_USE 와 같은 원칙 — 어느 스케줄인지 대 주고 막는다.
+    """
+
+    code = "SCHEDULE_TARGET_IN_USE"
+    message = "자동방송 스케줄이 대상으로 쓰고 있어 삭제할 수 없습니다."
+
+
 class DuplicateUsername(Conflict):
     code = "DUPLICATE_USERNAME"
     message = "이미 사용 중인 아이디입니다."

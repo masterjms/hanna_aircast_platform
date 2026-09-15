@@ -2065,3 +2065,233 @@ class TestUserListBatch:
         from app.modules.org.service import villages_by_user
 
         assert await villages_by_user(None, []) == {}
+
+
+# ── 트리·스케줄·브로커 경쟁 (2026-09-15 시나리오 검증 결함 A·B·C·D) ─────────────
+class TestTreeLock:
+    """A: 동시 옮기기로 순환이 생겨 두 기관이 화면에서 사라졌다. 트리를 바꾸는 쓰기는 한 줄로."""
+
+    def _src(self, fn):
+        import inspect
+
+        return inspect.getsource(fn)
+
+    def test_move_locks_before_reading_tree(self):
+        from app.modules.org import service
+
+        src = self._src(service.update_organization)
+        assert "await lock_tree(db)" in src
+        # 락 전에 트리를 읽으면 락이 소용없다 — 커밋 전 상태를 못 본 판정이 된다.
+        assert src.index("await lock_tree(db)") < src.index("await load_tree(db)")
+
+    def test_every_attach_or_delete_takes_the_lock(self):
+        from app.modules.org import service
+
+        for fn in (
+            service.create_organization,
+            service.delete_organization,
+            service.create_village,
+            service.update_village,
+            service._check_role_shape,
+        ):
+            assert "await lock_tree(db)" in self._src(fn), fn.__name__
+
+    def test_lock_keys_are_distinct(self):
+        from app.core.orgtree import ORG_TREE_LOCK_KEY
+        from app.modules.broadcast.service import _BROADCAST_LOCK_KEY
+        from app.modules.device.service import _BROKER_EXPORT_LOCK_KEY
+
+        keys = {ORG_TREE_LOCK_KEY, _BROADCAST_LOCK_KEY, _BROKER_EXPORT_LOCK_KEY}
+        assert len(keys) == 3
+        assert all(0 < k < 2**63 for k in keys)  # pg bigint
+
+
+class TestOrgScheduleVisibility:
+    """B: 마을을 다 옮긴 빈 기관의 스케줄이 만든 기관 관리자에게 안 보였다."""
+
+    def test_empty_org_schedule_visible_and_editable_to_its_org_admin(self):
+        from app.core.scope import VillageScope
+        from app.modules.schedule.service import _editable, _visible
+
+        scope = VillageScope.for_villages([])
+        assert _visible(set(), scope, orgs=[5], org_ids={5, 6})
+        assert _editable(set(), scope, orgs=[5], org_ids={5, 6})
+
+    def test_village_admin_sees_but_cannot_edit_org_schedule(self):
+        from app.core.scope import VillageScope
+        from app.modules.schedule.service import _editable, _visible
+
+        scope = VillageScope.for_villages([1])
+        assert _visible({1}, scope, orgs=[5], org_ids=set())
+        assert not _editable({1}, scope, orgs=[5], org_ids=set())
+
+    def test_other_branch_does_not_see(self):
+        from app.core.scope import VillageScope
+        from app.modules.schedule.service import _editable, _visible
+
+        scope = VillageScope.for_villages([9])
+        assert not _visible({1}, scope, orgs=[5], org_ids={9})
+        assert not _editable({1}, scope, orgs=[5], org_ids={9})
+
+    def test_village_targets_unchanged(self):
+        from app.core.scope import VillageScope
+        from app.modules.schedule.service import _editable, _visible
+
+        scope = VillageScope.for_villages([1, 2])
+        assert _visible({2, 3}, scope)
+        assert not _editable({2, 3}, scope)
+        assert _editable({1, 2}, scope)
+
+
+class TestScheduleTargetInUse:
+    """B·C: 스케줄이 가리키는 기관·마을·단말을 지우면 대상 없는 규칙이 남았다."""
+
+    @pytest.mark.asyncio
+    async def test_message_names_the_schedules(self, monkeypatch):
+        from app.errors import ScheduleTargetInUse
+        from app.modules.schedule import service
+
+        async def fake(_db, _scope, _ids):
+            return [
+                "매일 07:00 a.mp3",
+                "매주 08:00 b.mp3",
+                "매월 09:00 c.mp3",
+                "매년 10:00 d.mp3",
+            ]
+
+        monkeypatch.setattr(service, "schedules_targeting", fake)
+        with pytest.raises(ScheduleTargetInUse) as exc:
+            await service.ensure_not_schedule_target(
+                None, what="기관", target_scope="organization", ids=[1]
+            )
+        assert exc.value.status_code == 409
+        assert "4건" in exc.value.message and "매일 07:00 a.mp3" in exc.value.message
+        assert "d.mp3" not in exc.value.message and " 외" in exc.value.message
+        assert len(exc.value.detail["schedules"]) == 4
+
+    @pytest.mark.asyncio
+    async def test_no_schedules_passes(self, monkeypatch):
+        from app.modules.schedule import service
+
+        async def fake(_db, _scope, _ids):
+            return []
+
+        monkeypatch.setattr(service, "schedules_targeting", fake)
+        await service.ensure_not_schedule_target(
+            None, what="단말", target_scope="device", ids=["aa"]
+        )
+
+    def test_delete_routes_check_before_deleting(self):
+        import inspect
+
+        from app.modules.device import router as device_router
+        from app.modules.org import router as org_router
+
+        for fn, delete_call in (
+            (org_router.delete_organization, "service.delete_organization("),
+            (org_router.delete_village, "service.delete_village("),
+            (device_router.delete_device, "service.delete_device("),
+        ):
+            src = inspect.getsource(fn)
+            assert "ensure_not_schedule_target" in src, fn.__name__
+            assert src.index("ensure_not_schedule_target") < src.index(delete_call), fn.__name__
+
+    def test_village_delete_also_checks_its_devices(self):
+        import inspect
+
+        from app.modules.org import router as org_router
+
+        src = inspect.getsource(org_router.delete_village)
+        assert "ScheduleTarget.VILLAGE" in src and "ScheduleTarget.DEVICE" in src
+
+
+class TestAclBeforeConfig:
+    """D: CONFIG 가 ACL 설치보다 먼저 가면 단말이 새 마을 방송을 놓친다(실제 mosquitto 확인)."""
+
+    def test_device_move_exports_and_waits_before_config(self):
+        import inspect
+
+        from app.modules.device import service
+
+        src = inspect.getsource(service.update_device)
+        block = src[src.index("if village_changed:"):]
+        assert "wait_applied=new_village is not None" in block
+        assert block.index("export_broker_accounts(") < block.index("resync_config(")
+        assert block.index("export_broker_accounts(") < block.index("clear_device_configs(")
+
+    def test_first_address_exports_and_waits_before_config(self):
+        import inspect
+
+        from app.modules.org import router
+
+        src = inspect.getsource(router.update_village)
+        export_at = src.index("export_broker_accounts(db, wait_applied=True)")
+        assert export_at < src.index("resync_config(")
+
+    def test_export_is_serialized(self):
+        import inspect
+
+        from app.modules.device import service
+
+        src = inspect.getsource(service.export_broker_accounts)
+        assert "pg_advisory_xact_lock" in src
+        assert src.index("pg_advisory_xact_lock") < src.index("select(Device.mac")
+
+    def _setup(self, monkeypatch, tmp_path):
+        from app.config import settings
+        from app.core import mqtt_accounts
+
+        monkeypatch.setattr(settings, "mosquitto_passwd_export", str(tmp_path / "passwd.generated"))
+        monkeypatch.setattr(mqtt_accounts, "_last_acl_digest", None)
+        return mqtt_accounts
+
+    @pytest.mark.asyncio
+    async def test_waits_until_marker_matches(self, monkeypatch, tmp_path):
+        import asyncio
+
+        m = self._setup(monkeypatch, tmp_path)
+        (tmp_path / "aclfile.applied").write_text("old\n", encoding="ascii")
+        assert m.export_acl({"aabbccddeeff": "123456789012"})
+        # 파일 바이트의 md5 == 백엔드가 기대하는 값(entrypoint 의 md5sum 과 같은 기준)
+        data = (tmp_path / "aclfile.generated").read_bytes()
+        assert b"\r\n" not in data
+        import hashlib
+
+        expected = hashlib.md5(data, usedforsecurity=False).hexdigest()
+        assert m._last_acl_digest == expected
+
+        async def watcher():
+            await asyncio.sleep(0.2)
+            (tmp_path / "aclfile.applied").write_text(expected + "\n", encoding="ascii")
+
+        task = asyncio.create_task(watcher())
+        assert await m.wait_acl_applied(timeout=2.0, interval=0.05)
+        await task
+
+    @pytest.mark.asyncio
+    async def test_no_marker_means_no_wait(self, monkeypatch, tmp_path):
+        import time
+
+        m = self._setup(monkeypatch, tmp_path)
+        assert m.export_acl({})
+        started = time.monotonic()
+        assert not await m.wait_acl_applied(timeout=5.0)
+        assert time.monotonic() - started < 0.5
+
+    @pytest.mark.asyncio
+    async def test_times_out_without_raising(self, monkeypatch, tmp_path):
+        m = self._setup(monkeypatch, tmp_path)
+        (tmp_path / "aclfile.applied").write_text("stale\n", encoding="ascii")
+        assert m.export_acl({})
+        assert not await m.wait_acl_applied(timeout=0.2, interval=0.05)
+
+    def test_entrypoint_compares_content_and_reports(self):
+        from pathlib import Path
+
+        script = (Path(__file__).resolve().parents[2] / "infra/mosquitto/entrypoint.sh").read_text(
+            encoding="utf-8"
+        )
+        # 초 단위 mtime 비교는 같은 초의 두 번째 쓰기를 놓쳤다.
+        assert "stat -c %Y" not in script
+        assert "md5sum" in script
+        assert "aclfile.applied" in script

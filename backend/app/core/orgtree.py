@@ -18,10 +18,27 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.org import Organization
+
+#: 트리 모양을 바꾸는 쓰기를 한 줄로 세우는 어드바이저리 락 키. 이 서버 안에서 유일하면 된다.
+ORG_TREE_LOCK_KEY = 0x78776966_6F726774  # "xwiforgt"
+
+
+async def lock_tree(db: AsyncSession) -> None:
+    """트리를 바꾸는 쓰기(기관 추가·옮기기·삭제, 마을·계정을 기관에 붙이기)를 직렬화한다.
+
+    순환 검사는 "지금 트리"를 읽고 판정한다. 두 요청이 동시에 X→Y 아래, Y→X 아래로
+    옮기면 서로 커밋 전 상태를 못 보고 둘 다 통과해 순환이 생긴다 — 그러면 두 기관 모두
+    뿌리가 없어져 지역 관리 화면에서 사라진다(2026-09-15 실제 DB 로 재현). 삭제도 같다:
+    빈 기관인지 센 뒤 지우는 사이에 다른 요청이 마을을 붙일 수 있다.
+
+    트랜잭션 락이라 커밋·롤백 때 풀린다. 구조 변경은 사람이 가끔 하는 일이라 비용이 없다.
+    반드시 트리를 읽기 **전에** 잡는다.
+    """
+    await db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ORG_TREE_LOCK_KEY})
 
 
 @dataclass(frozen=True)

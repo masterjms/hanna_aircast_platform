@@ -77,7 +77,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | 401 | `UNAUTHORIZED`, `INVALID_CREDENTIALS` |
 | 403 | `FORBIDDEN`, `SUPER_ADMIN_REQUIRED`, `VILLAGE_OUT_OF_SCOPE` |
 | 404 | `DEVICE_NOT_FOUND`, `VILLAGE_NOT_FOUND`, `ZONE_NOT_FOUND`, `USER_NOT_FOUND`, `FILE_NOT_FOUND`, `BROADCAST_NOT_FOUND` |
-| 409 | `DUPLICATE_USERNAME`, `DEVICE_ALREADY_EXISTS`, `BROADCAST_OVERLAP`, `FILE_IN_USE`, `BROADCAST_ALREADY_ENDED`, `BROADCAST_STOP_PENDING` |
+| 409 | `DUPLICATE_USERNAME`, `DEVICE_ALREADY_EXISTS`, `BROADCAST_OVERLAP`, `FILE_IN_USE`, `SCHEDULE_TARGET_IN_USE`, `ORGANIZATION_IN_USE`, `BROADCAST_ALREADY_ENDED`, `BROADCAST_STOP_PENDING` |
 | 422 | `VALIDATION_FAILED` |
 | 500 | `MQTT_PAYLOAD_TOO_LARGE` |
 | 503 | `MQTT_UNAVAILABLE`, `SERVICE_UNAVAILABLE` |
@@ -208,7 +208,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | GET | `/api/villages/{id}` | 로그인·범위 적용 | 마을 한 건 |
 | POST | `/api/villages` | 기관 관리자 이상, 관할 안 | 마을 생성. `organization_id`는 내 관할 안의 마디. 기관 관리자가 비우면 자기 기관, null은 `super_admin`만 |
 | PATCH | `/api/villages/{id}` | 기관 관리자 이상, 관할 안 | 마을 부분 수정. `organization_id` 변경은 출발·도착 기관 모두 관할이어야 함 |
-| DELETE | `/api/villages/{id}` | 기관 관리자 이상, 관할 안 | 마을 삭제, 단말은 미배정으로 유지 |
+| DELETE | `/api/villages/{id}` | 기관 관리자 이상, 관할 안 | 마을 삭제, 단말은 미배정으로 유지. 자동방송이 이 마을이나 소속 단말을 직접 가리키면 `SCHEDULE_TARGET_IN_USE`(어느 스케줄인지 `detail.schedules`) |
 | GET | `/api/villages/{id}/zones` | 로그인·범위 적용 | 구역 목록 |
 | POST | `/api/villages/{id}/zones` | 로그인·범위 적용 | 구역 생성 (이장도 자기 마을 구역은 만든다) |
 | PATCH | `/api/zones/{id}` | 로그인·범위 적용 | 구역 수정 |
@@ -221,7 +221,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | GET | `/api/organizations` | 로그인 | 내 관할 기관(부분 트리)의 평평한 목록. `parent_id`, 바로 아래 마을·계정·기관 수(`village_count`·`user_count`·`child_count`) 포함. 트리는 화면이 세운다 |
 | POST | `/api/organizations` | `org_admin` 이상 | 기관 생성 (`name`, `parent_id`). `parent_id`는 내 관할 안이어야 하고 null(뿌리)은 `super_admin`만 |
 | PATCH | `/api/organizations/{id}` | `org_admin` 이상 | 이름 바꾸기·옮기기(`parent_id`). 출발·도착 모두 관할. 자기/후손 아래로는 `ORG_CYCLE` |
-| DELETE | `/api/organizations/{id}` | `org_admin` 이상 | 하위 기관·마을·계정이 있으면 `ORGANIZATION_IN_USE` |
+| DELETE | `/api/organizations/{id}` | `org_admin` 이상 | 하위 기관·마을·계정이 있으면 `ORGANIZATION_IN_USE`, 자동방송이 이 기관을 대상으로 하면 `SCHEDULE_TARGET_IN_USE` |
 
 마을 body에 `organization_id`가 있다. NULL이면 `super_admin`만 보는 마을이다.
 
@@ -372,7 +372,7 @@ PATCH에서 생략한 필드는 유지한다.
 | Method | Path | 설명 |
 |---|---|---|
 | PATCH | `/api/devices/{mac}` | label, 마을·구역, 주소·좌표 부분 수정 |
-| DELETE | `/api/devices/{mac}` | `super_admin`. 단말 삭제, credential·ACL·retained CONFIG 정리 |
+| DELETE | `/api/devices/{mac}` | `super_admin`. 단말 삭제, credential·ACL·retained CONFIG 정리. 자동방송이 이 단말을 대상으로 하면 `SCHEDULE_TARGET_IN_USE` |
 
 PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유지, `village_id: null`이면 배정 해제다. 마을 배정이 바뀌면 CONFIG와 ACL을 다시 배포한다.
 
@@ -641,7 +641,7 @@ wss://<host>/ingest?session=<broadcast_events.id>
 
 | Method | Path | 권한 | 설명 |
 |---|---|---|---|
-| GET | `/api/schedules` | 로그인·범위 적용 | 내 범위와 겹치는 스케줄. `editable`, `next_fire_at`, `last_run` 포함. 질의 수는 규칙 수와 무관(4회) |
+| GET | `/api/schedules` | 로그인·범위 적용 | 내 범위와 겹치는 스케줄. 기관 대상은 대상 기관이 내 관할이면 마을이 비어도 보이고, 고치기는 대상 기관 전부가 관할일 때만(이장은 못 고침). `editable`, `next_fire_at`, `last_run` 포함. 질의 수는 규칙 수와 무관(4회) |
 | POST | `/api/schedules` | 로그인 | 생성. 대상은 내 범위 안, `organization`은 내 관할 기관. 전체 100개 상한 |
 | PATCH | `/api/schedules/{id}` | 대상 전체가 내 범위 | 부분 수정. `{"enabled": false}`만 보내면 끄기 |
 | DELETE | `/api/schedules/{id}` | 대상 전체가 내 범위 | 삭제. 지난 실행 기록은 남음 |

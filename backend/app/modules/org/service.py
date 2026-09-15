@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import Role
 from app.core import authz
-from app.core.orgtree import load_tree
+from app.core.orgtree import load_tree, lock_tree
 from app.core.presence import online_clause, online_cutoff
 from app.core.scope import VillageScope
 from app.core.security import hash_password
@@ -149,6 +149,7 @@ async def create_organization(
     """마디 추가. 기관 관리자는 자기 관할 안의 마디 아래에만 붙인다(자기 마디 포함)."""
     _ensure_parent_allowed(payload.parent_id, org_ids)
     if payload.parent_id is not None:
+        await lock_tree(db)  # 붙일 부모가 같은 순간 지워지지 않게
         await _load_org(db, payload.parent_id)
     org = Organization(name=payload.name, parent_id=payload.parent_id)
     db.add(org)
@@ -163,10 +164,15 @@ async def update_organization(
 
     옮기기는 출발(지금 자리)·도착(새 부모)이 모두 관할이어야 한다(§6). 기관 관리자는
     결과적으로 자기 마디를 못 옮긴다 — 관할 안의 도착지는 전부 자기 아래라 순환이다.
+
+    옮기기는 트리 락을 잡은 뒤 트리를 읽는다(orgtree.lock_tree) — 동시 옮기기로 순환이
+    생기는 것을 막는다.
     """
+    data = payload.model_dump(exclude_unset=True)
+    if "parent_id" in data:
+        await lock_tree(db)
     org = await _load_org(db, org_id)
     _ensure_org_allowed(org_id, org_ids)
-    data = payload.model_dump(exclude_unset=True)
     if "parent_id" in data and data["parent_id"] != org.parent_id:
         tree = await load_tree(db)
         if tree.would_cycle(org_id, data["parent_id"]):
@@ -187,7 +193,11 @@ async def delete_organization(db: AsyncSession, org_id: int, *, org_ids: set[int
 
     빈 폴더만 지운다 — 안에 든 것이 있으면 사람이 먼저 옮기거나 지운다. 마을에는
     단말·이력·스케줄이 매달려 있어 연쇄 삭제는 두지 않는다.
+
+    이 기관을 대상으로 한 스케줄이 있는지는 라우터가 먼저 본다(스케줄 모듈 소관).
+    센 뒤 지우는 사이에 다른 요청이 마을·하위 기관을 붙이지 못하게 트리 락을 잡는다.
     """
+    await lock_tree(db)
     org = await _load_org(db, org_id)
     _ensure_org_allowed(org_id, org_ids)
     in_use = await db.scalar(
@@ -293,6 +303,7 @@ async def create_village(
         data["organization_id"] = actor.organization_id
     _ensure_org_allowed(data["organization_id"], org_ids)
     if data["organization_id"] is not None:
+        await lock_tree(db)
         await _load_org(db, data["organization_id"])
 
     village = Village(**data)
@@ -327,6 +338,7 @@ async def update_village(
         _ensure_org_allowed(village.organization_id, org_ids)
         _ensure_org_allowed(data["organization_id"], org_ids)
         if data["organization_id"] is not None:
+            await lock_tree(db)
             await _load_org(db, data["organization_id"])
 
     for key, value in data.items():
@@ -565,6 +577,7 @@ async def _check_role_shape(
     if role in authz.ORG_ROLES:
         if organization_id is None:
             raise ApiError("기관 관리자에게는 소속 기관이 필요합니다.", code="ORG_REQUIRED")
+        await lock_tree(db)
         await _load_org(db, organization_id)
         _ensure_org_allowed(organization_id, org_ids)
         # 같은 마디의 기관 관리자는 동료다 — 만들면 내 관할이 옆으로 샌다. 아래 마디만.

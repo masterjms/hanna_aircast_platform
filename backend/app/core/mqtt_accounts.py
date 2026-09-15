@@ -14,6 +14,7 @@ SIGHUP 으로 리로드한다. 백엔드는 mosquitto 컨테이너에 직접 신
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import logging
@@ -151,14 +152,18 @@ def render_acl(device_villages: dict[str, str | None]) -> str:
 
 
 def _export_file(target: Path, content: str, label: str) -> bool:
-    """공유 볼륨에 원자적으로 쓴다. 실패는 로그만 — 정본은 DB 다."""
+    """공유 볼륨에 원자적으로 쓴다. 실패는 로그만 — 정본은 DB 다.
+
+    바이트 그대로 쓴다(개행 변환 없음) — 감시 루프가 보고하는 md5 가 여기서 계산한
+    값과 같아야 한다.
+    """
     try:
         # 같은 디렉터리에 임시 파일 → 원자적 교체. 감시 루프가 반쯤 쓴 파일을
         # 설치하는 일이 없게 한다.
         fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(content)
+            with os.fdopen(fd, "wb") as f:
+                f.write(content.encode("utf-8"))
             os.chmod(tmp, 0o600)
             os.replace(tmp, target)
         except BaseException:
@@ -194,10 +199,58 @@ def acl_export_path() -> Path | None:
     return Path(target).parent / "aclfile.generated" if target else None
 
 
+#: 마지막으로 내보낸 aclfile 내용의 md5. 감시 루프가 적용했다고 보고한 값과 비교한다.
+_last_acl_digest: str | None = None
+
+
+def content_digest(content: str) -> str:
+    """entrypoint 의 `md5sum` 과 같은 값."""
+    return hashlib.md5(content.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+
 def export_acl(device_villages: dict[str, str | None]) -> bool:
     """aclfile 을 공유 볼륨에 쓴다. passwd 와 같은 규칙(실패는 로그만)."""
+    global _last_acl_digest
     target = acl_export_path()
     if target is None:
         return False
     assigned = sum(1 for v in device_villages.values() if v is not None)
-    return _export_file(target, render_acl(device_villages), f"aclfile(배정 {assigned}대)")
+    content = render_acl(device_villages)
+    ok = _export_file(target, content, f"aclfile(배정 {assigned}대)")
+    if ok:
+        _last_acl_digest = content_digest(content)
+    return ok
+
+
+def acl_applied_path() -> Path | None:
+    """감시 루프가 "브로커가 지금 쓰는 aclfile 의 md5"를 적어 두는 파일."""
+    target = acl_export_path()
+    return target.with_name("aclfile.applied") if target else None
+
+
+async def wait_acl_applied(timeout: float = 5.0, interval: float = 0.1) -> bool:
+    """마지막으로 내보낸 aclfile 을 브로커가 읽어 들일 때까지 기다린다. 적용되면 True.
+
+    ACL 을 바꾼 직후 CONFIG 를 보내는 경로가 쓴다. 단말은 CONFIG 를 받자마자 새 마을
+    topic 을 구독하는데, mosquitto 는 구독은 받아 두고 메시지를 넘길 때 ACL 을 본다 —
+    권한이 설치되기 전에 나간 방송은 그 단말에 영영 안 간다(2026-09-15 실측).
+
+    적용 보고 파일이 아예 없으면(보고를 안 하는 옛 감시 루프·개발 환경) 기다리지 않는다.
+    시간 안에 안 오면 경고만 남기고 진행한다 — 요청을 실패시킬 일은 아니다.
+    """
+    marker = acl_applied_path()
+    expected = _last_acl_digest
+    if marker is None or expected is None or not marker.exists():
+        return False
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        try:
+            if marker.read_text(encoding="ascii").strip() == expected:
+                return True
+        except OSError:
+            pass  # 감시 루프가 막 교체하는 중 — 다음 바퀴에 다시 읽는다
+        if loop.time() >= deadline:
+            log.warning("브로커 aclfile 적용 확인 %.1f초 초과 — CONFIG 를 그대로 보낸다", timeout)
+            return False
+        await asyncio.sleep(interval)

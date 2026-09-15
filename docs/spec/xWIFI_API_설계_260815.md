@@ -26,7 +26,7 @@ GET    /api/devices/:mac            상세 (last_status 포함)
 POST   /api/devices                 등록 {mac, label, village_id, zone_id, p4/c6 모델·버전, mqtt_password}
 POST   /api/devices/credential      신규 등록용 비밀번호+서버호스트 사전 발급 (super_admin, DB 미기록)
 PATCH  /api/devices/:mac            수정/재배정
-DELETE /api/devices/:mac            삭제 (DB 행 + 브로커 계정을 한 묶음으로 제거)
+DELETE /api/devices/:mac            삭제 (DB 행 + 브로커 계정을 한 묶음으로 제거). 스케줄 대상이면 SCHEDULE_TARGET_IN_USE
 POST   /api/devices/:mac/credential 단말별 MQTT 계정 발행/조회 {reissue} (super_admin)
 ```
 
@@ -61,7 +61,7 @@ GET    /api/organizations                내 관할 기관(부분 트리, 평평
                                           바로 아래 마을·계정·기관 수 포함
 POST   /api/organizations                {name, parent_id}   기관 관리자 이상. parent 는 내 관할 안. null(뿌리)은 super_admin 만
 PATCH  /api/organizations/:id            {name?, parent_id?}  옮기기는 출발·도착 모두 관할. 자기/후손 아래로는 ORG_CYCLE
-DELETE /api/organizations/:id            하위 기관·마을·계정 있으면 ORGANIZATION_IN_USE
+DELETE /api/organizations/:id            하위 기관·마을·계정 있으면 ORGANIZATION_IN_USE, 스케줄 대상이면 SCHEDULE_TARGET_IN_USE
 
 GET    /api/villages            목록 (역할 범위)
 POST   /api/villages            생성 {name, organization_id, sido, sigungu, address_detail, …}
@@ -248,7 +248,7 @@ GET    /api/schedules/occurrences?from&to     예정 회차 — 서버가 규칙
 GET    /api/schedules/:id/runs                최근 실행 결과
 ```
 
-**2026-09-09 구현** — [스케줄 설계](xWIFI_스케줄_설계_260909.md). 규칙 하나만 저장하고 실행 날짜는 계산한다(cron 과 같다). 반복은 매일·매주·매월·매년 중 하나, 시각은 하나(KST). 대상은 `village`·`device`·`organization`(관할 전체 — 실행 시점에 마을로 펼침). 실행기가 매분 규칙을 평가해 기존 `start_file_broadcast` 로 `FILE_START` 를 건다 — 단말 프로토콜은 그대로. 중복 실행 방지는 `schedule_runs UNIQUE(schedule_id, fire_at)`, 유예 120초를 넘긴 회차는 건너뛰고 기록만 남긴다(재시도 없음). 권한: 보기는 범위가 겹치면, 수정·삭제는 대상 전체가 범위 안일 때만. `schedules.created_by` 는 계정이 삭제되면 NULL 이 된다(0014).
+**2026-09-09 구현** — [스케줄 설계](xWIFI_스케줄_설계_260909.md). 규칙 하나만 저장하고 실행 날짜는 계산한다(cron 과 같다). 반복은 매일·매주·매월·매년 중 하나, 시각은 하나(KST). 대상은 `village`·`device`·`organization`(관할 전체 — 실행 시점에 마을로 펼침). 실행기가 매분 규칙을 평가해 기존 `start_file_broadcast` 로 `FILE_START` 를 건다 — 단말 프로토콜은 그대로. 중복 실행 방지는 `schedule_runs UNIQUE(schedule_id, fire_at)`, 유예 120초를 넘긴 회차는 건너뛰고 기록만 남긴다(재시도 없음). 권한: 보기는 범위가 겹치면, 수정·삭제는 대상 전체가 범위 안일 때만. 기관 대상은 기관으로 판정한다(대상 기관이 관할이면 보이고, 전부 관할이면 고친다 — 2026-09-15). 스케줄이 가리키는 기관·마을·단말은 삭제를 막는다(`SCHEDULE_TARGET_IN_USE`). `schedules.created_by` 는 계정이 삭제되면 NULL 이 된다(0014).
 
 ## 10. OTA
 

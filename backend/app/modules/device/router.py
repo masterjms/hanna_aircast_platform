@@ -6,9 +6,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
+from app.constants import ScheduleTarget
 from app.core import authz, mqtt_accounts
 from app.core.deps import CurrentUser, Db, Publisher, Scope, SuperAdmin
 from app.modules.device import service
+from app.modules.schedule import service as schedule_service
 from app.modules.system import service as system_service
 from app.mqtt.topics import normalize_mac
 from app.schemas.device import (
@@ -128,5 +130,12 @@ async def delete_device(
     _: SuperAdmin,
     publisher: Publisher,
 ) -> None:
-    """단말 삭제 — 최고 관리자만(설계 §5). MQTT 계정 삭제까지 같이 일어나는 파괴적 작업."""
+    """단말 삭제 — 최고 관리자만(설계 §5). MQTT 계정 삭제까지 같이 일어나는 파괴적 작업.
+
+    자동방송이 이 단말을 대상으로 하면 막는다(SCHEDULE_TARGET_IN_USE). 도난 단말을 급히
+    끊어야 하면 스케줄을 먼저 지운다 — 어느 스케줄인지 응답이 알려준다.
+    """
+    await schedule_service.ensure_not_schedule_target(
+        db, what="단말", target_scope=ScheduleTarget.DEVICE.value, ids=[mac]
+    )
     await service.delete_device(db, mac, scope, publisher)

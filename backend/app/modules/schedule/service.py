@@ -8,6 +8,14 @@ app/tasks/schedule_runner.py 가 한다.
   수정·삭제  대상 **전체**가 내 범위 안일 때만. 군청이 건 관할 전체 스케줄을 이장이 지우면
              안 된다(방송 중지는 "보이면 멈춘다"가 맞지만 그건 긴급 제어다)
   만들기     대상이 내 범위 안. organization 은 내 관할 기관이어야
+
+기관 대상은 마을이 아니라 **기관**으로도 본다(2026-09-15). 마을을 전부 다른 기관으로 옮겨
+빈 기관이 되면 마을로는 아무에게도 안 겹쳐서, 만든 기관 관리자 화면에서 사라졌다 — 그
+기관을 지우려 하면 보이지 않는 스케줄 때문에 막히는 일이 생긴다.
+  보기       대상 기관 중 하나라도 내 관할이거나, 닿는 마을이 겹치면
+  수정·삭제  대상 기관이 전부 내 관할일 때만(이장은 기관 대상을 못 고친다)
+
+스케줄이 가리키는 기관·마을·단말은 지울 수 없다(ensure_not_schedule_target).
 """
 
 from __future__ import annotations
@@ -16,10 +24,10 @@ import datetime as dt
 import logging
 from collections.abc import Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import SCHEDULE_MAX, ScheduleTarget
+from app.constants import REPEAT_LABEL, SCHEDULE_MAX, ScheduleTarget
 from app.core.orgtree import load_tree
 from app.core.scope import VillageScope
 from app.errors import (
@@ -28,6 +36,7 @@ from app.errors import (
     NotFound,
     OrganizationNotFound,
     OrganizationOutOfScope,
+    ScheduleTargetInUse,
     VillageNotFound,
 )
 from app.models.device import Device
@@ -94,14 +103,106 @@ async def target_villages(
     return set(rows.all())
 
 
-def _visible(villages: set[int], scope: VillageScope) -> bool:
-    return scope.all_villages or any(scope.allows(v) for v in villages)
+def _orgs_of(target_scope: str, target_ids: Sequence[str]) -> list[int] | None:
+    """기관 대상이면 대상 기관 id, 아니면 None."""
+    if target_scope == ScheduleTarget.ORGANIZATION.value:
+        return _ints(target_ids)
+    return None
 
 
-def _editable(villages: set[int], scope: VillageScope) -> bool:
+def _visible(
+    villages: set[int],
+    scope: VillageScope,
+    *,
+    orgs: list[int] | None = None,
+    org_ids: set[int] | None = None,
+) -> bool:
     if scope.all_villages:
         return True
+    if orgs and org_ids and any(o in org_ids for o in orgs):
+        return True
+    return any(scope.allows(v) for v in villages)
+
+
+def _editable(
+    villages: set[int],
+    scope: VillageScope,
+    *,
+    orgs: list[int] | None = None,
+    org_ids: set[int] | None = None,
+) -> bool:
+    if scope.all_villages:
+        return True
+    if orgs is not None:
+        # 기관 대상은 기관으로 판정한다 — 마을이 비어도 만든 기관은 고칠 수 있고,
+        # 마을이 전부 내 담당인 이장이라도 군청의 관할 전체 스케줄은 못 고친다.
+        return bool(orgs) and org_ids is not None and all(o in org_ids for o in orgs)
     return bool(villages) and all(scope.allows(v) for v in villages)
+
+
+def _visible_s(
+    s: Schedule, villages: set[int], scope: VillageScope, org_ids: set[int] | None
+) -> bool:
+    return _visible(
+        villages, scope, orgs=_orgs_of(s.target_scope, s.target_ids), org_ids=org_ids
+    )
+
+
+def _editable_s(
+    s: Schedule, villages: set[int], scope: VillageScope, org_ids: set[int] | None
+) -> bool:
+    return _editable(
+        villages, scope, orgs=_orgs_of(s.target_scope, s.target_ids), org_ids=org_ids
+    )
+
+
+# ── 대상 삭제 보호 ────────────────────────────────────────────────────────
+async def schedules_targeting(
+    db: AsyncSession, target_scope: str, ids: Sequence[str | int]
+) -> list[str]:
+    """이 기관·마을·단말을 직접 가리키는 스케줄의 설명("매일 07:00 안내.mp3").
+
+    기관 대상 스케줄이 그 기관 아래 마을을 펼쳐 닿는 것은 세지 않는다 — 마을을 지워도
+    기관 스케줄은 남은 마을로 계속 나간다. 직접 가리키는 것만 대상이 사라진다.
+    """
+    wanted: list[str | int] = []
+    for i in ids:
+        wanted.append(str(i))
+        # 정본은 문자열이지만 손으로 넣은 행에 숫자가 섞여 있어도 놓치지 않는다.
+        if isinstance(i, int) or str(i).isdigit():
+            wanted.append(int(i))
+    if not wanted:
+        return []
+    rows = (
+        await db.execute(
+            select(Schedule.repeat, Schedule.fire_time, File.filename)
+            .join(File, File.id == Schedule.file_id)
+            .where(
+                Schedule.target_scope == target_scope,
+                or_(*(Schedule.target_ids.contains([w]) for w in wanted)),
+            )
+            .order_by(Schedule.fire_time, Schedule.id)
+        )
+    ).all()
+    return [
+        f"{REPEAT_LABEL.get(repeat, repeat)} {fire_time:%H:%M} {filename}"
+        for repeat, fire_time, filename in rows
+    ]
+
+
+async def ensure_not_schedule_target(
+    db: AsyncSession, *, what: str, target_scope: str, ids: Sequence[str | int]
+) -> None:
+    """스케줄이 가리키는 대상이면 409. what 은 받침 있는 명사("기관"·"마을"·"단말")."""
+    used = await schedules_targeting(db, target_scope, ids)
+    if not used:
+        return
+    raise ScheduleTargetInUse(
+        f"이 {what}을 대상으로 하는 자동방송이 {len(used)}건 있습니다 ({', '.join(used[:3])}"
+        f"{' 외' if len(used) > 3 else ''}). "
+        "자동방송 화면에서 그 스케줄을 먼저 지우거나 대상을 바꿔 주세요.",
+        detail={"schedules": used},
+    )
 
 
 async def _validate_target(
@@ -258,6 +359,7 @@ def _to_out(
     s: Schedule,
     scope: VillageScope,
     *,
+    org_ids: set[int] | None,
     now: dt.datetime,
     file_names: dict[int, str],
     last_runs: dict[int, ScheduleRun],
@@ -267,7 +369,7 @@ def _to_out(
     out = ScheduleOut.model_validate(s)
     out.file_name = file_names.get(s.file_id)
     out.target_label = label
-    out.editable = _editable(villages, scope)
+    out.editable = _editable_s(s, villages, scope, org_ids)
     if s.enabled:
         out.next_fire_at = rules.next_occurrence(rules.rule_of(s), now)
     run = last_runs.get(s.id)
@@ -276,24 +378,31 @@ def _to_out(
 
 
 async def _visible_schedules(
-    db: AsyncSession, scope: VillageScope, *, enabled_only: bool = False
+    db: AsyncSession,
+    scope: VillageScope,
+    *,
+    org_ids: set[int] | None,
+    enabled_only: bool = False,
 ) -> tuple[list[Schedule], dict[int, tuple[set[int], str]]]:
     """보이는 스케줄과 그 해석 결과(마을 집합·이름)를 함께 돌려준다.
 
     해석을 한 번만 하고 보이는지·고칠 수 있는지·이름에 모두 쓴다. 예전에는 마을 집합을
     두 번 구했다 — 보이는지 판정에 한 번, 고칠 수 있는지 판정에 또 한 번.
+
+    마을 범위가 비어도 관할 기관이 있으면 기관 대상 스케줄은 보인다 — 마을을 옮기기 전의
+    새 기관 관리자가 자기 기관에 건 스케줄을 볼 수 있어야 한다.
     """
     stmt = select(Schedule).order_by(Schedule.fire_time, Schedule.id)
     if enabled_only:
         stmt = stmt.where(Schedule.enabled.is_(True))
     rows = list((await db.scalars(stmt)).all())
-    if not rows or scope.is_empty:
-        return ([] if scope.is_empty else rows, await resolve_batch(db, rows) if rows else {})
+    if not rows or (scope.is_empty and not org_ids):
+        return [], {}
 
     resolved = await resolve_batch(db, rows)
     if scope.all_villages:
         return rows, resolved
-    visible = [s for s in rows if _visible(resolved[s.id][0], scope)]
+    visible = [s for s in rows if _visible_s(s, resolved[s.id][0], scope, org_ids)]
     return visible, resolved
 
 
@@ -304,41 +413,63 @@ async def _file_names(db: AsyncSession, ids: Sequence[int]) -> dict[int, str]:
     return dict(rows.all())
 
 
-async def list_schedules(db: AsyncSession, scope: VillageScope) -> list[ScheduleOut]:
-    schedules, resolved = await _visible_schedules(db, scope)
+async def list_schedules(
+    db: AsyncSession, scope: VillageScope, *, org_ids: set[int] | None
+) -> list[ScheduleOut]:
+    schedules, resolved = await _visible_schedules(db, scope, org_ids=org_ids)
     now = dt.datetime.now(dt.timezone.utc)
     names = await _file_names(db, [s.file_id for s in schedules])
     runs = await _last_runs(db, [s.id for s in schedules])
     return [
         _to_out(
-            s, scope, now=now, file_names=names, last_runs=runs, resolved=resolved[s.id]
+            s,
+            scope,
+            org_ids=org_ids,
+            now=now,
+            file_names=names,
+            last_runs=runs,
+            resolved=resolved[s.id],
         )
         for s in schedules
     ]
 
 
-async def get_schedule(db: AsyncSession, schedule_id: int, scope: VillageScope) -> ScheduleOut:
-    s = await _load(db, schedule_id, scope)
+async def get_schedule(
+    db: AsyncSession, schedule_id: int, scope: VillageScope, *, org_ids: set[int] | None
+) -> ScheduleOut:
+    s = await _load(db, schedule_id, scope, org_ids)
     now = dt.datetime.now(dt.timezone.utc)
     names = await _file_names(db, [s.file_id])
     runs = await _last_runs(db, [s.id])
     resolved = (await resolve_batch(db, [s]))[s.id]
     return _to_out(
-        s, scope, now=now, file_names=names, last_runs=runs, resolved=resolved
+        s,
+        scope,
+        org_ids=org_ids,
+        now=now,
+        file_names=names,
+        last_runs=runs,
+        resolved=resolved,
     )
 
 
-async def _load(db: AsyncSession, schedule_id: int, scope: VillageScope) -> Schedule:
+async def _load(
+    db: AsyncSession, schedule_id: int, scope: VillageScope, org_ids: set[int] | None
+) -> Schedule:
     s = await db.get(Schedule, schedule_id)
     if s is None:
         raise ScheduleNotFound()
-    if not _visible(await target_villages(db, s.target_scope, s.target_ids), scope):
+    villages = await target_villages(db, s.target_scope, s.target_ids)
+    if not _visible_s(s, villages, scope, org_ids):
         raise ScheduleNotFound()
     return s
 
 
-async def _ensure_editable(db: AsyncSession, s: Schedule, scope: VillageScope) -> None:
-    if not _editable(await target_villages(db, s.target_scope, s.target_ids), scope):
+async def _ensure_editable(
+    db: AsyncSession, s: Schedule, scope: VillageScope, org_ids: set[int] | None
+) -> None:
+    villages = await target_villages(db, s.target_scope, s.target_ids)
+    if not _editable_s(s, villages, scope, org_ids):
         raise ApiError(
             "대상 전체가 내 관할인 스케줄만 고치거나 지울 수 있습니다.",
             code="SCHEDULE_NOT_EDITABLE",
@@ -379,7 +510,7 @@ async def create_schedule(
     db.add(s)
     await db.flush()
     log.info("스케줄 등록 #%d %s %s", s.id, s.repeat, s.fire_time)
-    return await get_schedule(db, s.id, scope)
+    return await get_schedule(db, s.id, scope, org_ids=org_ids)
 
 
 async def update_schedule(
@@ -390,8 +521,8 @@ async def update_schedule(
     scope: VillageScope,
     org_ids: set[int] | None,
 ) -> ScheduleOut:
-    s = await _load(db, schedule_id, scope)
-    await _ensure_editable(db, s, scope)
+    s = await _load(db, schedule_id, scope, org_ids)
+    await _ensure_editable(db, s, scope, org_ids)
     data = payload.model_dump(exclude_unset=True)
 
     # 켜기·끄기만 바꾸는 경우가 대부분이다. 그때는 모양 검사를 다시 하지 않는다.
@@ -399,7 +530,7 @@ async def update_schedule(
         for k, v in data.items():
             setattr(s, k, v)
         await db.flush()
-        return await get_schedule(db, s.id, scope)
+        return await get_schedule(db, s.id, scope, org_ids=org_ids)
 
     # 나머지는 바꾼 뒤의 전체 모양을 ScheduleCreate 검증기로 다시 통과시킨다 —
     # 매주로 바꾸면서 요일을 안 주면 영영 안 나가는 규칙이 되는 것을 막는다.
@@ -431,7 +562,10 @@ async def update_schedule(
         await _validate_target(db, checked.target_scope.value, checked.target_ids, scope, org_ids)
         # 새 대상도 전부 내 범위여야 한다 — 남의 마을로 옮겨 놓고 손을 떼는 일을 막는다.
         if not _editable(
-            await target_villages(db, checked.target_scope.value, checked.target_ids), scope
+            await target_villages(db, checked.target_scope.value, checked.target_ids),
+            scope,
+            orgs=_orgs_of(checked.target_scope.value, checked.target_ids),
+            org_ids=org_ids,
         ):
             raise ApiError(
                 "대상 전체가 내 관할이어야 합니다.", code="SCHEDULE_NOT_EDITABLE"
@@ -448,12 +582,14 @@ async def update_schedule(
     s.store_flash = checked.store_flash
     s.enabled = checked.enabled
     await db.flush()
-    return await get_schedule(db, s.id, scope)
+    return await get_schedule(db, s.id, scope, org_ids=org_ids)
 
 
-async def delete_schedule(db: AsyncSession, schedule_id: int, *, scope: VillageScope) -> None:
-    s = await _load(db, schedule_id, scope)
-    await _ensure_editable(db, s, scope)
+async def delete_schedule(
+    db: AsyncSession, schedule_id: int, *, scope: VillageScope, org_ids: set[int] | None
+) -> None:
+    s = await _load(db, schedule_id, scope, org_ids)
+    await _ensure_editable(db, s, scope, org_ids)
     await db.delete(s)
     await db.flush()
 
@@ -464,7 +600,12 @@ OCCURRENCE_MAX_DAYS = 31
 
 
 async def occurrences(
-    db: AsyncSession, scope: VillageScope, start: dt.datetime, end: dt.datetime
+    db: AsyncSession,
+    scope: VillageScope,
+    start: dt.datetime,
+    end: dt.datetime,
+    *,
+    org_ids: set[int] | None,
 ) -> list[OccurrenceOut]:
     """[start, end) 의 예정 회차. 켜진 스케줄만. 실행기와 같은 규칙 함수를 쓴다."""
     if end <= start:
@@ -474,7 +615,9 @@ async def occurrences(
             f"예정표는 한 번에 {OCCURRENCE_MAX_DAYS}일까지 볼 수 있습니다.",
             code="OCCURRENCE_RANGE_TOO_WIDE",
         )
-    schedules, resolved = await _visible_schedules(db, scope, enabled_only=True)
+    schedules, resolved = await _visible_schedules(
+        db, scope, org_ids=org_ids, enabled_only=True
+    )
     names = await _file_names(db, [s.file_id for s in schedules])
     out: list[OccurrenceOut] = []
     for s in schedules:
@@ -494,9 +637,14 @@ async def occurrences(
 
 
 async def list_runs(
-    db: AsyncSession, schedule_id: int, scope: VillageScope, *, limit: int = 30
+    db: AsyncSession,
+    schedule_id: int,
+    scope: VillageScope,
+    *,
+    org_ids: set[int] | None,
+    limit: int = 30,
 ) -> list[ScheduleRunOut]:
-    await _load(db, schedule_id, scope)
+    await _load(db, schedule_id, scope, org_ids)
     rows = await db.scalars(
         select(ScheduleRun)
         .where(ScheduleRun.schedule_id == schedule_id)

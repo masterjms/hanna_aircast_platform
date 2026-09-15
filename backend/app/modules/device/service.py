@@ -9,7 +9,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Select, func, not_, or_, select
+from sqlalchemy import Select, func, not_, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -34,6 +34,9 @@ from app.schemas.device import (
 from app.tasks import config_reconcile
 
 log = logging.getLogger(__name__)
+
+#: 브로커 passwd·aclfile 내보내기를 직렬화하는 어드바이저리 락 키(export_broker_accounts).
+_BROKER_EXPORT_LOCK_KEY = 0x78776966_61636C78  # "xwifaclx"
 
 
 
@@ -389,15 +392,25 @@ def _device_accounts_enforced() -> bool:
 
 
 # ── 단말별 MQTT 계정 ─────────────────────────────────────────────────────
-async def export_broker_accounts(db: AsyncSession) -> None:
+async def export_broker_accounts(db: AsyncSession, *, wait_applied: bool = False) -> None:
     """DB 의 계정·마을 배정을 mosquitto passwd + aclfile 로 내보낸다.
 
     등록/삭제/마을 배정 변경/마을 삭제/기동 때 호출. ACL 은 단말마다 자기 마을
     topic 만 여는 파일이라(통신 사양 §2.1 "별도 규칙") 배정이 바뀌면 같이 다시
     만들어야 한다 — 안 하면 옛 마을 명령을 계속 듣거나 새 마을 명령이 안 온다.
 
+    내보내기는 락으로 한 줄로 선다. 파일은 통째로 덮어쓰는데 커밋 전 트랜잭션에서 만들기
+    때문에, 두 요청이 동시에 단말을 옮기면 뒤에 쓴 쪽이 앞 요청의 변경을 못 보고 지운다.
+    락은 앞 요청이 커밋한 뒤에 풀리므로 뒤 요청은 그 변경을 읽고 쓴다.
+
+    wait_applied=True 면 브로커가 이 파일을 실제로 읽어 들일 때까지 기다린다 — 뒤이어
+    CONFIG 를 보내는 경로(단말 마을 이동, 주소 첫 입력)가 쓴다.
+
     실패해도 예외를 던지지 않는다 — 정본은 DB 이고 다음 호출이 따라잡는다.
     """
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": _BROKER_EXPORT_LOCK_KEY}
+    )
     rows = (
         await db.execute(
             select(Device.mac, Device.mqtt_password, Device.village_id, Village.village_code)
@@ -407,9 +420,11 @@ async def export_broker_accounts(db: AsyncSession) -> None:
     ).all()
     mqtt_accounts.export_passwd({mac: pw for mac, pw, _, _ in rows})
     # ACL 의 마을 topic 은 12자리 코드(없으면 legacy id)로 — 발행 토픽과 같아야 읽힌다.
-    mqtt_accounts.export_acl(
+    exported = mqtt_accounts.export_acl(
         {mac: (token_for(vid, code) if vid is not None else None) for mac, _, vid, code in rows}
     )
+    if exported and wait_applied:
+        await mqtt_accounts.wait_acl_applied()
 
 
 async def issue_credential(
@@ -559,14 +574,17 @@ async def update_device(
     await db.flush()
 
     if village_changed:
+        # ACL 이 먼저다 — 이 단말이 읽을 수 있는 village topic 이 바뀐다. CONFIG 를 먼저
+        # 보내면 단말은 새 topic 을 바로 구독하지만 브로커는 권한이 설치될 때까지(감시
+        # 루프 주기) 그 topic 메시지를 이 단말에 넘기지 않는다 — 그 사이 나간 방송을
+        # 놓친다(2026-09-15 실제 mosquitto 로 확인). 설치를 확인한 뒤 CONFIG 를 보낸다.
+        await export_broker_accounts(db, wait_applied=new_village is not None)
         if new_village is None:
             # 해제는 미배정(전부 0) CONFIG 를 새 버전으로 명시해야 단말이 마을 topic
             # 구독을 끊는다. clear_device_configs 가 버전을 올리고 전체를 다시 맞춘다.
             await clear_device_configs(publisher, [mac], db)
         else:
             await resync_config(db, publisher)
-        # ACL 도 마을을 따라간다 — 이 단말이 읽을 수 있는 village topic 이 바뀐다.
-        await export_broker_accounts(db)
 
     return await get_device(db, mac, scope)
 

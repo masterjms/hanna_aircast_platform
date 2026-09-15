@@ -12,9 +12,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, status
 
+from app.constants import ScheduleTarget
 from app.core.deps import CurrentUser, Db, OrgAdmin, OrgIds, Publisher, Scope
 from app.modules.device import service as device_service
 from app.modules.org import service
+from app.modules.schedule import service as schedule_service
 from app.schemas.org import (
     OrganizationCreate,
     OrganizationOut,
@@ -58,6 +60,10 @@ async def update_organization(
 
 @router.delete("/api/organizations/{org_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_organization(org_id: int, db: Db, _: OrgAdmin, org_ids: OrgIds) -> None:
+    """빈 기관만. 자동방송이 이 기관을 대상으로 하면 SCHEDULE_TARGET_IN_USE."""
+    await schedule_service.ensure_not_schedule_target(
+        db, what="기관", target_scope=ScheduleTarget.ORGANIZATION.value, ids=[org_id]
+    )
     await service.delete_organization(db, org_id, org_ids=org_ids)
 
 
@@ -91,12 +97,15 @@ async def update_village(
 ) -> VillageOut:
     """마을 수정. 주소를 처음 넣어 MQTT 문자열이 legacy → 12자리로 바뀌면
     그 마을 단말들의 CONFIG 를 새 버전으로 다시 내리고 ACL 도 다시 만든다 —
-    단말이 구독하는 topic 이 바뀌기 때문이다. 관리 기관 변경은 단말과 무관하다."""
+    단말이 구독하는 topic 이 바뀌기 때문이다. 관리 기관 변경은 단말과 무관하다.
+
+    순서는 ACL 먼저, 브로커가 적용한 것을 확인한 뒤 CONFIG — 반대로 하면 단말이 새 topic
+    을 구독한 뒤 권한이 설치되기 전까지 나간 방송을 놓친다(2026-09-15 실측)."""
     before = await service.get_village(db, village_id, scope)
     out = await service.update_village(db, village_id, payload, scope, org_ids=org_ids)
     if out.village_token != before.village_token:
+        await device_service.export_broker_accounts(db, wait_applied=True)
         await device_service.resync_config(db, publisher)
-        await device_service.export_broker_accounts(db)
     return out
 
 
@@ -112,13 +121,22 @@ async def delete_village(
 
     삭제 전에 MAC 을 모아두고, 삭제 후 CONFIG retain 을 지운다.
     안 지우면 단말이 재접속할 때 브로커가 없어진 마을 배정을 다시 물려준다.
+
+    자동방송이 이 마을이나 소속 단말을 직접 가리키면 막는다(SCHEDULE_TARGET_IN_USE) —
+    지우면 대상 없는 규칙이 남아 매번 조용히 건너뛴다.
     """
     scope.ensure_allowed(village_id)
     macs = await service.macs_in_village(db, village_id)
+    await schedule_service.ensure_not_schedule_target(
+        db, what="마을", target_scope=ScheduleTarget.VILLAGE.value, ids=[village_id]
+    )
+    await schedule_service.ensure_not_schedule_target(
+        db, what="마을 소속 단말", target_scope=ScheduleTarget.DEVICE.value, ids=macs
+    )
     await service.delete_village(db, village_id)
-    await device_service.clear_device_configs(publisher, macs, db)
-    # 미배정으로 돌아간 단말들의 village topic 허용도 ACL 에서 빠져야 한다.
+    # 미배정으로 돌아간 단말들의 village topic 허용을 ACL 에서 먼저 빼고 CONFIG 를 보낸다.
     await device_service.export_broker_accounts(db)
+    await device_service.clear_device_configs(publisher, macs, db)
 
 
 # ── 구역 ─────────────────────────────────────────────────────────────────
