@@ -594,29 +594,15 @@ export function BroadcastPage() {
                             : '대기'}
                     </span>
                     {mic.state === 'live' && (
-                      <>
-                        {/* 단말이 받는 스트림 규격. 서버는 재인코딩하지 않으므로 여기서 인코딩한
-                            것이 곧 단말이 받는 것이다. 비트레이트는 인코더 목표값(설정)이다 —
-                            회선 평균(Ogg 포장 포함, 가변)을 kbps 로 보이면 설정과 달라 보여
-                            오해를 샀다(문제점 40번). */}
-                        <span className="mic__spec num">
-                          {/* 항목 단위로만 줄을 바꾼다 — 좁은 카드에서 한 줄로 두면 밖으로 넘친다. */}
-                          {['Opus 16 kHz', 'mono', `${liveBitrateKbps} kbps`, '40 ms'].map((part, i) => (
-                            <span key={part} className="mic__spec-part">
-                              {i > 0 && ' · '}
-                              {part}
-                            </span>
-                          ))}
-                        </span>
-                        <span
-                          className="dim num"
-                          title="송출을 시작한 뒤 서버로 보낸 누적량과 경과 시간입니다. Ogg 포장이 포함돼 kbps 로 환산하면 설정값과 다릅니다."
-                        >
-                          누적 {Math.round(mic.bytesSent / 1024)} KB
-                          {mic.liveSince !== null &&
-                            ` · ${Math.max(0, Math.round((Date.now() - mic.liveSince) / 1000))}초`}
-                        </span>
-                      </>
+                      // 짧게 한 줄만 — 규격 전체를 늘어놓으면 좁은 카드 밖으로 넘쳤다.
+                      // 비트레이트는 인코더 목표값(설정)이다. 회선 평균은 Ogg 포장이 붙어
+                      // 설정과 달라 보여 오해를 샀다(문제점 40번). 나머지 규격은 툴팁으로.
+                      <span
+                        className="mic__spec num"
+                        title={`Opus 16 kHz · mono · ${liveBitrateKbps} kbps · 40 ms`}
+                      >
+                        Opus {liveBitrateKbps}kbps
+                      </span>
                     )}
                   </div>
                 </div>
