@@ -104,7 +104,7 @@ docker exec xwifi-mosquitto sh -c 'grep "open files" /proc/1/limits'
 | 구성 | 값 | |
 |---|---|---|
 | nginx | `worker_rlimit_nofile 65536`, `worker_connections 16384` × 워커 | 라이브 스트림은 nginx 를 거쳐 Icecast 로 간다 |
-| Icecast | `clients 4000` | 전체 방송 시 등록 단말 전부가 동시에 붙는다 |
+| Icecast | `clients 4064`, 컨테이너 `nofile` 65536 (2026-09-17, 문제점 41번) | 전체 방송 시 등록 단말 전부가 동시에 붙는다. 기본 fd 한도 1024 가 약 1,000대에서 먼저 막혔다. clients 는 소스·관리 접속도 세므로 4000 + sources 64 |
 | 백엔드 STATUS 처리 | MAC별 최신값을 모아 1초에 한 트랜잭션 | 3000대에서 초당 100건 — 실측 11,900 msg/s 여유 |
 
 ### 재시작 때 TLS 핸드셰이크 폭주
