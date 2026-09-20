@@ -26,8 +26,13 @@ import type {
   Zone,
 } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
-import { VillageTreePicker, summarizeSelection } from '../components/broadcast/VillageTreePicker';
-import { buildForest } from '../lib/orgtree';
+import {
+  EMPTY_PICK,
+  TargetTreePicker,
+  summarize,
+  type PickMode,
+  type Picked,
+} from '../components/broadcast/TargetTreePicker';
 import { getToken } from '../api/client';
 import { uplinkBlockedReason, useMicUplink } from '../hooks/useMicUplink';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
@@ -188,12 +193,14 @@ export function BroadcastPage() {
   const { user, isSuperAdmin } = useAuth();
 
   const [scope, setScope] = useState<TargetScope>('village');
-  // 마을·단말은 다중 선택이다 — "마을 2곳 동시 방송" 같은 요구를 담는다.
-  // villageId(단수)는 구역·단말 목록을 거르는 필터로만 쓴다.
-  const [villageIds, setVillageIds] = useState<number[]>([]);
-  const [villageId, setVillageId] = useState<number | ''>('');
-  const [zoneId, setZoneId] = useState<number | ''>('');
-  const [macs, setMacs] = useState<string[]>([]);
+  // 마을·구역·단말 모두 같은 트리에서 다중 선택한다(향후검토 7·8·9번). 종류를 바꿔도
+  // 각자의 선택은 남겨 둔다 — 잘못 눌러 바꿨을 때 다시 고르게 하지 않는다.
+  const [picks, setPicks] = useState<Record<PickMode, Picked>>({
+    village: EMPTY_PICK,
+    zone: EMPTY_PICK,
+    device: EMPTY_PICK,
+  });
+  const [zonesOf, setZonesOf] = useState<Record<number, Zone[] | undefined>>({});
   const [fileId, setFileId] = useState<number | ''>('');
   const [storeFlash, setStoreFlash] = useState(false);
 
@@ -210,7 +217,6 @@ export function BroadcastPage() {
   const [villages, setVillages] = useState<Village[]>([]);
   // 기관 트리. 기관을 체크하면 아래 마을 전부가 대상이 된다. 이장은 빈 목록.
   const [orgs, setOrgs] = useState<Organization[]>([]);
-  const [zones, setZones] = useState<Zone[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
   const [files, setFiles] = useState<AudioFile[]>([]);
 
@@ -248,7 +254,6 @@ export function BroadcastPage() {
         setOrgs(o);
         setFiles(f);
         setDevices(d);
-        if (v.length === 1) setVillageId(v[0].id);
         if (f.length > 0) setFileId(f[0].id);
       } catch (err) {
         setError(err instanceof ApiError ? err.message : '기본 정보를 불러오지 못했습니다.');
@@ -256,25 +261,30 @@ export function BroadcastPage() {
     })();
   }, []);
 
-  useEffect(() => {
-    if (villageId === '') {
-      setZones([]);
-      return;
-    }
-    void api.villages.zones(villageId).then(setZones).catch(() => setZones([]));
-    setZoneId('');
-  }, [villageId]);
+  /** 구역은 마을마다 따로 읽어야 한다 — 트리에서 그 마을을 펼칠 때 한 번만 가져온다. */
+  const loadZones = useCallback((villageId: number) => {
+    setZonesOf((prev) => (villageId in prev ? prev : { ...prev, [villageId]: undefined }));
+    void api.villages
+      .zones(villageId)
+      .then((z) => setZonesOf((prev) => ({ ...prev, [villageId]: z })))
+      .catch(() => setZonesOf((prev) => ({ ...prev, [villageId]: [] })));
+  }, []);
 
-  const targetIds = (): string[] => {
-    if (scope === 'all') return [];
-    if (scope === 'village') return villageIds.map(String);
-    if (scope === 'zone') return zoneId === '' ? [] : [String(zoneId)];
-    return macs;
-  };
+  // 구역 방송으로 바꾸면 마을이 많지 않은 한 미리 다 읽어 둔다 — 펼칠 때마다
+  // 기다리지 않게. 많으면 펼치는 마을만 읽는다(요청 폭주 방지).
+  useEffect(() => {
+    if (scope !== 'zone' || villages.length > 50) return;
+    for (const v of villages) if (!(v.id in zonesOf)) loadZones(v.id);
+  }, [scope, villages, zonesOf, loadZones]);
+
+  const pickMode: PickMode | null = scope === 'all' ? null : (scope as PickMode);
+  const pick = pickMode ? picks[pickMode] : EMPTY_PICK;
+
+  const targetIds = (): string[] => (pickMode ? picks[pickMode].leaves : []);
 
   const selectionLabels = useMemo(
-    () => summarizeSelection(buildForest(orgs, villages), villageIds),
-    [orgs, villages, villageIds],
+    () => (pickMode ? summarize(pick, orgs, villages, pickMode, devices, zonesOf) : []),
+    [pick, pickMode, orgs, villages, devices, zonesOf],
   );
 
   const targetReady = scope === 'all' || targetIds().length > 0;
@@ -461,96 +471,48 @@ export function BroadcastPage() {
             )}
           </div>
 
-          {scope === 'village' && (
+          {pickMode && (
             <div className="field">
               <div className="tree-picker__head">
                 <label>
-                  {orgs.length > 0
-                    ? '기관을 체크하면 아래 마을 전체가 선택됩니다'
-                    : '마을 (여러 곳 선택 가능)'}
+                  {pickMode === 'village'
+                    ? orgs.length > 0
+                      ? '기관을 체크하면 아래 마을 전체가 선택됩니다'
+                      : '마을 (여러 곳 선택 가능)'
+                    : pickMode === 'zone'
+                      ? '마을을 체크하면 그 마을 구역 전체가 선택됩니다'
+                      : '마을을 체크하면 그 마을 단말 전체가 선택됩니다'}
                 </label>
-                {villageIds.length > 0 && (
-                  <button type="button" className="btn btn--ghost btn--sm" onClick={() => setVillageIds([])}>
+                {pick.leaves.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => setPicks((prev) => ({ ...prev, [pickMode]: EMPTY_PICK }))}
+                  >
                     선택 해제
                   </button>
                 )}
               </div>
-              <VillageTreePicker
+              <TargetTreePicker
+                mode={pickMode}
                 orgs={orgs}
                 villages={villages}
-                value={villageIds}
-                onChange={setVillageIds}
+                devices={devices}
+                zonesOf={zonesOf}
+                onNeedZones={loadZones}
+                value={pick}
+                onChange={(next) => setPicks((prev) => ({ ...prev, [pickMode]: next }))}
                 renderCount={(online, total) => <DeviceCount online={online} total={total} />}
               />
-              {villageIds.length > 0 && (
+              {pick.leaves.length > 0 && (
                 <p className="hint">
                   대상: {selectionLabels.slice(0, 4).join(', ')}
-                  {selectionLabels.length > 4 ? ` 외 ${selectionLabels.length - 4}` : ''} · 마을{' '}
-                  {villageIds.length}곳이 같은 방송을 동시에 받습니다.
+                  {selectionLabels.length > 4 ? ` 외 ${selectionLabels.length - 4}` : ''} ·{' '}
+                  {pickMode === 'village' ? '마을' : pickMode === 'zone' ? '구역' : '단말'}{' '}
+                  {pick.leaves.length}
+                  {pickMode === 'device' ? '대가' : '곳이'} 같은 방송을 동시에 받습니다.
                 </p>
               )}
-            </div>
-          )}
-
-          {(scope === 'zone' || scope === 'device') && (
-            <div className="field">
-              <label htmlFor="b-village">마을</label>
-              <select
-                id="b-village"
-                value={villageId}
-                onChange={(e) => setVillageId(e.target.value === '' ? '' : Number(e.target.value))}
-              >
-                <option value="">선택하세요</option>
-                {villages.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.name} (온라인 {v.online_count}/{v.device_count}대)
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {scope === 'zone' && (
-            <div className="field">
-              <label htmlFor="b-zone">구역</label>
-              <select
-                id="b-zone"
-                value={zoneId}
-                onChange={(e) => setZoneId(e.target.value === '' ? '' : Number(e.target.value))}
-                disabled={villageId === ''}
-              >
-                <option value="">선택하세요</option>
-                {zones.map((z) => (
-                  <option key={z.id} value={z.id}>
-                    {z.name} (온라인 {z.online_count}/{z.device_count}대)
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {scope === 'device' && (
-            <div className="field">
-              <label>단말 (여러 대 선택 가능)</label>
-              <div className="check-list">
-                {devices
-                  .filter((d) => villageId === '' || d.village_id === villageId)
-                  .map((d) => (
-                    <label key={d.mac} className="check-list__item">
-                      <input
-                        type="checkbox"
-                        checked={macs.includes(d.mac)}
-                        disabled={!d.online}
-                        onChange={(e) =>
-                          setMacs((prev) =>
-                            e.target.checked ? [...prev, d.mac] : prev.filter((m) => m !== d.mac),
-                          )
-                        }
-                      />
-                      {d.label ?? d.mac} {d.online ? '' : '(오프라인)'}
-                    </label>
-                  ))}
-              </div>
             </div>
           )}
 

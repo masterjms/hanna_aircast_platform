@@ -1729,6 +1729,13 @@ tr.is-selected td {
   justify-content: space-between;
   gap: 8px;
 }
+/* 대상 검색 — 걸리는 가지만 남기고 펼친다(향후검토 9번). */
+.tree-picker__search {
+  margin-bottom: 6px;
+}
+.tree-picker__search input {
+  width: 100%;
+}
 .timepick { display: flex; gap: 8px; align-items: center; }
 .timepick select { min-width: 84px; }
 .sentence {
