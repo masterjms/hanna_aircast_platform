@@ -50,7 +50,6 @@ import { WEEKDAY_LABELS, dateLabel, formatTime as clock, kstToday } from '../lib
 
 type Method = 'mic' | 'tts' | 'file';
 type When = 'now' | 'reserve';
-const METHOD_KEY = 'xwifi.bc.method';
 /** 시선을 끌 곳 — 아직 안 끝난 첫 단계. 다 됐으면 맨 아래 버튼. */
 type Guide = 1 | 2 | 3 | 4 | 'go';
 type ReserveKind = 'once' | 'daily' | 'weekly';
@@ -251,23 +250,8 @@ export function BroadcastPage() {
   const { isSuperAdmin } = useAuth();
 
   // ── ① 어떻게 ──
-  // 지난번에 쓴 방법을 기억해 둔다 — 늘 같은 방법을 쓰는 분은 ①을 누를 일이 없다.
-  const [method, setMethod] = useState<Method>(() => {
-    try {
-      const saved = localStorage.getItem(METHOD_KEY);
-      if (saved === 'mic' || saved === 'tts' || saved === 'file') return saved;
-    } catch {
-      /* 저장소를 못 쓰면 기본값 */
-    }
-    return 'tts';
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem(METHOD_KEY, method);
-    } catch {
-      /* 무시 */
-    }
-  }, [method]);
+  // 처음엔 아무것도 골라 두지 않는다 — 시선 안내가 ① 부터 차례로 흐르게(2026-09-21 현장 의견).
+  const [method, setMethod] = useState<Method | null>(null);
 
   // ── ② 어디에 ── (트리 선택은 예전 방송 제어와 같다 — 향후검토 7·8·9번)
   const [scope, setScope] = useState<TargetScope>('village');
@@ -465,6 +449,7 @@ export function BroadcastPage() {
 
   /** 지금 무엇이 빠졌는지 — 어느 단계인지와 버튼 위 한 줄 안내. 없으면 null. */
   const need: { step: 1 | 2 | 3 | 4; text: string } | null = (() => {
+    if (!method) return { step: 1, text: '① 방송 방법을 골라 주세요.' };
     if (scope !== 'all' && pick.leaves.length === 0) return { step: 2, text: '② 방송할 곳을 골라 주세요.' };
     if (method === 'tts' && !text.trim()) return { step: 3, text: '③ 방송할 글을 적어 주세요.' };
     if (method === 'tts' && text.length > MAX_TEXT) return { step: 3, text: `글은 ${MAX_TEXT}자까지입니다.` };
@@ -547,7 +532,7 @@ export function BroadcastPage() {
   };
 
   const go = async () => {
-    if (missing) return;
+    if (missing || !method) return;
     setBusy(true);
     setError(null);
     setOverlap(null);
@@ -798,6 +783,14 @@ export function BroadcastPage() {
         </div>
 
         <div className="bc-col">
+          {/* ③ 자리 — 방법을 고르기 전에는 빈 칸 대신 안내를 둔다(고르면 칸이 바뀐다) */}
+          {!method && (
+            <section className="bc-step bc-step--what bc-step--wait">
+              <StepTitle n={3}>무엇을 방송할까요?</StepTitle>
+              <p className="bc-wait">왼쪽 ①에서 방송 방법을 고르면 여기에 내용을 넣는 칸이 나옵니다.</p>
+            </section>
+          )}
+
           {/* ③ (마이크) — 말하기 안내와 소리 막대 */}
           {method === 'mic' && (
             <section className={stepClass(3, 'bc-step--what bc-step--mic')}>
@@ -836,7 +829,7 @@ export function BroadcastPage() {
           )}
 
           {/* ③ 무엇을 */}
-          {method !== 'mic' && (
+          {method && method !== 'mic' && (
             <section className={stepClass(3, 'bc-step--what')}>
               <StepTitle n={3} done={isDone(3)}>{method === 'tts' ? '무엇이라고 방송할까요?' : '어떤 소리를 틀까요?'}</StepTitle>
               {method === 'tts' ? (
@@ -931,7 +924,7 @@ export function BroadcastPage() {
           )}
 
           {/* ④ 언제 */}
-          {method !== 'mic' && (
+          {method && method !== 'mic' && (
             <section className={stepClass(4, 'bc-step--when')}>
               <StepTitle n={4} done={isDone(4)}>언제 방송할까요?</StepTitle>
               <div className="bc-when">
