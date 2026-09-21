@@ -111,6 +111,7 @@ CREATE TABLE schedules (
     weekdays      INTEGER[],              -- weekly: 0=일 ~ 6=토
     month_days    INTEGER[],              -- monthly: 1~31. 그 날이 없는 달은 건너뛴다
     year_dates    JSONB,                  -- yearly: [{"month":3,"day":1}]
+    once_date     DATE,                   -- once: 그 날짜에 한 번 (0020)
     fire_time     TIME NOT NULL,          -- 시각 하나, KST
     file_id       INTEGER NOT NULL REFERENCES files(id),
     target_scope  VARCHAR(20) NOT NULL CHECK (target_scope IN ('village','device','organization')),

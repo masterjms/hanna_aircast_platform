@@ -56,6 +56,9 @@ class Repeat(StrEnum):
     WEEKLY = "weekly"
     MONTHLY = "monthly"
     YEARLY = "yearly"
+    #: 정해진 날짜·시각에 한 번만(once_date). 이장님이 가장 많이 쓰는 「내일 아침 7시」
+    #: 예약이다(2026-09-21 방송 화면 개편). 나간 뒤에는 다시 걸리지 않는다.
+    ONCE = "once"
 
 
 #: 반복 종류의 한국어 표기. 서버가 문구를 만들 때 쓴다(파일 삭제 거절 사유 등).
@@ -64,6 +67,7 @@ REPEAT_LABEL: dict[str, str] = {
     Repeat.WEEKLY.value: "매주",
     Repeat.MONTHLY.value: "매월",
     Repeat.YEARLY.value: "매년",
+    Repeat.ONCE.value: "한 번",
 }
 
 #: 등록 가능한 스케줄 수. 원안 10개는 단일 고객 전제였고, 도청 관할이면 부족하다.

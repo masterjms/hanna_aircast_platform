@@ -112,11 +112,11 @@ export function SchedulesPage() {
     <>
       <div className="page-head page-head--row">
         <div>
-          <h1>스케줄</h1>
+          <h1>예약 방송</h1>
           <p>자동방송 규칙 {schedules.length}개 · 시각은 한국 시간입니다.</p>
         </div>
         <button type="button" className="btn btn--primary" onClick={() => setWizard({ open: true })}>
-          스케줄 추가하기
+          예약 추가하기
         </button>
       </div>
 
@@ -148,7 +148,7 @@ export function SchedulesPage() {
           {loading ? (
             <div className="empty">불러오는 중…</div>
           ) : schedules.length === 0 ? (
-            <div className="empty">등록된 스케줄이 없습니다. 「스케줄 추가하기」로 첫 규칙을 만드세요.</div>
+            <div className="empty">등록된 예약이 없습니다. 「예약 추가하기」나 「방송하기」 화면에서 만들 수 있습니다.</div>
           ) : (
             <table>
               <thead>

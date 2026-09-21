@@ -485,7 +485,8 @@ export interface BroadcastOverlapDetail {
 }
 
 // ── 자동방송 스케줄 (스케줄 설계 2026-09-09) ────────────────────────────
-export type Repeat = 'daily' | 'weekly' | 'monthly' | 'yearly';
+/** once = 정해진 날짜에 한 번(2026-09-21). */
+export type Repeat = 'daily' | 'weekly' | 'monthly' | 'yearly' | 'once';
 /** 방송 TargetScope 와 달리 zone·all 이 없고 organization(관할 전체)이 있다. */
 export type ScheduleTarget = 'village' | 'device' | 'organization';
 
@@ -508,6 +509,8 @@ export interface Schedule {
   weekdays: number[] | null;
   month_days: number[] | null;
   year_dates: YearDate[] | null;
+  /** once 일 때 "2026-09-22" (KST) */
+  once_date: string | null;
   /** "09:00:00" KST */
   fire_time: string;
   file_id: number;
@@ -531,6 +534,7 @@ export interface ScheduleInput {
   weekdays?: number[] | null;
   month_days?: number[] | null;
   year_dates?: YearDate[] | null;
+  once_date?: string | null;
   fire_time: string;
   file_id: number;
   target_scope: ScheduleTarget;

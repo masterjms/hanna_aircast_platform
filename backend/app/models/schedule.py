@@ -14,6 +14,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -55,6 +56,8 @@ class Schedule(Base):
     month_days: Mapped[list[int] | None] = mapped_column(ARRAY(Integer))
     #: yearly — [{"month": m, "day": d}, …]
     year_dates: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    #: (once) 그 날짜의 fire_time 에 한 번만 나간다(0020).
+    once_date: Mapped[dt.date | None] = mapped_column(Date)
     #: 하루 중 시각(KST). timezone 없는 TIME 이고 그 값이 곧 한국 시각이다.
     fire_time: Mapped[dt.time] = mapped_column(Time, nullable=False)
 

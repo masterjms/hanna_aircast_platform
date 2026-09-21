@@ -10,6 +10,7 @@ import type { Repeat, YearDate } from '../api/types';
 export const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'] as const;
 
 export const REPEAT_LABEL: Record<Repeat, string> = {
+  once: '한 번',
   daily: '매일',
   weekly: '매주',
   monthly: '매월',
@@ -21,8 +22,17 @@ export interface RuleLike {
   weekdays: number[] | null;
   month_days: number[] | null;
   year_dates: YearDate[] | null;
+  /** once 일 때 "2026-09-22" */
+  once_date?: string | null;
   /** "09:00" 또는 "09:00:00" */
   fire_time: string;
+}
+
+/** "2026-09-22" → "9월 22일(월)". 요일까지 붙여야 「내일인지 모레인지」 헷갈리지 않는다. */
+export function dateLabel(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const wd = WEEKDAY_LABELS[new Date(y, m - 1, d).getDay()];
+  return `${m}월 ${d}일(${wd})`;
 }
 
 /** "09:05:00" → "오전 9:05". 이장님 화면이라 24시간 표기를 쓰지 않는다. */
@@ -36,6 +46,8 @@ export function formatTime(hhmm: string): string {
 /** 반복 부분만 — "매주 월·수", "매월 2일·15일", "매년 3월 1일", "매일". */
 export function repeatLabel(r: RuleLike): string {
   switch (r.repeat) {
+    case 'once':
+      return r.once_date ? dateLabel(r.once_date) : '한 번';
     case 'daily':
       return '매일';
     case 'weekly':
@@ -47,14 +59,24 @@ export function repeatLabel(r: RuleLike): string {
   }
 }
 
-/** 반복 + 시각 — "매주 월·수 오전 9:00". */
+/** 반복 + 시각 — "매주 월·수 오전 9:00", 한 번짜리는 "9월 22일(월) 오전 7:00 한 번". */
 export function whenLabel(r: RuleLike): string {
-  return `${repeatLabel(r)} ${formatTime(r.fire_time)}`;
+  const base = `${repeatLabel(r)} ${formatTime(r.fire_time)}`;
+  return r.repeat === 'once' ? `${base} 한 번` : base;
 }
 
 /** 확인 화면 문장. 목업 3 그대로. */
 export function sentence(r: RuleLike, targetLabel: string, fileName: string): string {
+  if (r.repeat === 'once') {
+    return `${repeatLabel(r)} ${formatTime(r.fire_time)}에 한 번 ${fileName}을(를) ${targetLabel}에 방송합니다.`;
+  }
   return `앞으로 ${whenLabel(r)}마다 ${fileName}을(를) ${targetLabel}에 방송합니다.`;
+}
+
+/** 오늘(KST) "2026-09-21". 날짜 입력칸의 최솟값·기본값에 쓴다. */
+export function kstToday(offsetDays = 0): string {
+  const d = new Date(Date.now() + offsetDays * 86_400_000);
+  return d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
 }
 
 /** KST 기준 날짜 키 "2026-09-09". 예정표를 날짜별로 묶을 때 쓴다. */

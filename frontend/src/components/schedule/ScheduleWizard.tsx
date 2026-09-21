@@ -24,7 +24,7 @@ import type {
   Village,
 } from '../../api/types';
 import { buildForest, subtreeStats, type OrgNode } from '../../lib/orgtree';
-import { REPEAT_LABEL, WEEKDAY_LABELS, formatTime, repeatLabel } from '../../lib/schedule';
+import { REPEAT_LABEL, WEEKDAY_LABELS, formatTime, kstToday, repeatLabel } from '../../lib/schedule';
 import { Modal } from '../Modal';
 import { TtsModal } from '../TtsModal';
 
@@ -36,6 +36,7 @@ interface Props {
 
 /** 오른쪽 상세 패널의 제목. 목업 2 의 「매년|매주|매월|매일 몇일에 방송할까요?」. */
 const DETAIL_TITLE: Record<Repeat, string> = {
+  once: '며칠에 방송할까요?',
   daily: '매일 몇 시에 방송할까요?',
   weekly: '매주 무슨 요일에 방송할까요?',
   monthly: '매월 며칠에 방송할까요?',
@@ -190,20 +191,38 @@ function RepeatDetail({
   weekdays,
   monthDays,
   yearDates,
+  onceDate,
   onWeekdays,
   onMonthDays,
   onYearDates,
+  onOnceDate,
 }: {
   repeat: Repeat;
   weekdays: number[];
   monthDays: number[];
   yearDates: Date[];
+  onceDate: string;
   onWeekdays: (v: number[]) => void;
   onMonthDays: (v: number[]) => void;
   onYearDates: (v: Date[]) => void;
+  onOnceDate: (v: string) => void;
 }) {
   const toggle = (list: number[], v: number) =>
     list.includes(v) ? list.filter((x) => x !== v) : [...list, v].sort((a, b) => a - b);
+
+  if (repeat === 'once') {
+    // 정해진 날짜에 한 번(2026-09-21). 지난 날짜는 고를 수 없다 — 서버도 막는다.
+    return (
+      <input
+        type="date"
+        className="date-big"
+        aria-label="방송할 날짜"
+        min={kstToday()}
+        value={onceDate}
+        onChange={(e) => onOnceDate(e.target.value)}
+      />
+    );
+  }
 
   if (repeat === 'daily') return <p className="hint">매일 같은 시각에 나갑니다.</p>;
   if (repeat === 'weekly') {
@@ -398,6 +417,7 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
   const [repeat, setRepeat] = useState<Repeat | null>(initial?.repeat ?? null);
   const [weekdays, setWeekdays] = useState<number[]>(initial?.weekdays ?? []);
   const [monthDays, setMonthDays] = useState<number[]>(initial?.month_days ?? []);
+  const [onceDate, setOnceDate] = useState<string>(initial?.once_date ?? kstToday(1));
   const [yearDates, setYearDates] = useState<Date[]>(
     (initial?.year_dates ?? []).map((d) => new Date(new Date().getFullYear(), d.month - 1, d.day)),
   );
@@ -462,14 +482,16 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
               repeat === 'yearly'
                 ? yearDates.map((d) => ({ month: d.getMonth() + 1, day: d.getDate() }))
                 : null,
+            once_date: repeat === 'once' ? onceDate : null,
             fire_time: `${String(hour24).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00`,
           },
-    [repeat, weekdays, monthDays, yearDates, hour24, minute],
+    [repeat, weekdays, monthDays, yearDates, onceDate, hour24, minute],
   );
 
   const repeatComplete =
     rule !== null &&
     (rule.repeat === 'daily' ||
+      (rule.repeat === 'once' && onceDate !== '') ||
       (rule.repeat === 'weekly' && weekdays.length > 0) ||
       (rule.repeat === 'monthly' && monthDays.length > 0) ||
       (rule.repeat === 'yearly' && yearDates.length > 0));
@@ -541,8 +563,17 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
       >
         {error && <div className="alert" style={{ marginBottom: 12 }}>{error}</div>}
         <p className="sentence">
-          앞으로 <span className="chip">{repeatLabel(rule)}</span>{' '}
-          <span className="chip">{formatTime(rule.fire_time)}</span>마다{' '}
+          {rule.repeat === 'once' ? (
+            <>
+              <span className="chip">{repeatLabel(rule)}</span>{' '}
+              <span className="chip">{formatTime(rule.fire_time)}</span>에 한 번{' '}
+            </>
+          ) : (
+            <>
+              앞으로 <span className="chip">{repeatLabel(rule)}</span>{' '}
+              <span className="chip">{formatTime(rule.fire_time)}</span>마다{' '}
+            </>
+          )}
           <span className="chip">{fileName}</span>을(를){' '}
           <span className="chip">{targetLabel}</span>에 방송합니다.
         </p>
@@ -630,7 +661,7 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
             <div className="wizard-q__title">3. 언제 방송할까요?</div>
             <div className="wizard-q__body">
               <div className="choice-row">
-                {(['daily', 'weekly', 'monthly', 'yearly'] as Repeat[]).map((r) => (
+                {(['once', 'daily', 'weekly', 'monthly', 'yearly'] as Repeat[]).map((r) => (
                   <button
                     key={r}
                     type="button"
@@ -677,7 +708,7 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
             <div className="wizard-q__body">
               {!repeat ? (
                 <p className="hint" style={{ marginBottom: 0 }}>
-                  왼쪽 3번에서 매일·매주·매월·매년 중 하나를 고르면 여기에 상세가 나옵니다.
+                  왼쪽 3번에서 한 번·매일·매주·매월·매년 중 하나를 고르면 여기에 상세가 나옵니다.
                 </p>
               ) : (
                 <>
@@ -686,9 +717,11 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
                     weekdays={weekdays}
                     monthDays={monthDays}
                     yearDates={yearDates}
+                    onceDate={onceDate}
                     onWeekdays={setWeekdays}
                     onMonthDays={setMonthDays}
                     onYearDates={setYearDates}
+                    onOnceDate={setOnceDate}
                   />
                   <div className="wizard-q__sub">몇 시에 방송할까요?</div>
                   <TimePick

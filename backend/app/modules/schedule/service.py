@@ -27,7 +27,7 @@ from collections.abc import Sequence
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import REPEAT_LABEL, SCHEDULE_MAX, ScheduleTarget
+from app.constants import SCHEDULE_MAX, ScheduleTarget
 from app.core.orgtree import load_tree
 from app.core.scope import VillageScope
 from app.errors import (
@@ -175,7 +175,7 @@ async def schedules_targeting(
         return []
     rows = (
         await db.execute(
-            select(Schedule.repeat, Schedule.fire_time, File.filename)
+            select(Schedule.repeat, Schedule.fire_time, Schedule.once_date, File.filename)
             .join(File, File.id == Schedule.file_id)
             .where(
                 Schedule.target_scope == target_scope,
@@ -185,8 +185,8 @@ async def schedules_targeting(
         )
     ).all()
     return [
-        f"{REPEAT_LABEL.get(repeat, repeat)} {fire_time:%H:%M} {filename}"
-        for repeat, fire_time, filename in rows
+        f"{rules.schedule_when(repeat, fire_time, once_date)} {filename}"
+        for repeat, fire_time, once_date, filename in rows
     ]
 
 
@@ -499,6 +499,7 @@ async def create_schedule(
         weekdays=payload.weekdays,
         month_days=payload.month_days,
         year_dates=[d.model_dump() for d in payload.year_dates] if payload.year_dates else None,
+        once_date=payload.once_date,
         fire_time=payload.fire_time,
         file_id=payload.file_id,
         target_scope=payload.target_scope.value,
@@ -539,6 +540,7 @@ async def update_schedule(
         "weekdays": s.weekdays,
         "month_days": s.month_days,
         "year_dates": s.year_dates,
+        "once_date": s.once_date,
         "fire_time": s.fire_time,
         "file_id": s.file_id,
         "target_scope": s.target_scope,
@@ -546,7 +548,7 @@ async def update_schedule(
         "store_flash": s.store_flash,
         "enabled": s.enabled,
     }
-    clearable = {"weekdays", "month_days", "year_dates"}
+    clearable = {"weekdays", "month_days", "year_dates", "once_date"}
     merged.update({k: v for k, v in data.items() if v is not None or k in clearable})
     try:
         checked = ScheduleCreate.model_validate(merged)
@@ -575,6 +577,7 @@ async def update_schedule(
     s.weekdays = checked.weekdays
     s.month_days = checked.month_days
     s.year_dates = [d.model_dump() for d in checked.year_dates] if checked.year_dates else None
+    s.once_date = checked.once_date
     s.fire_time = checked.fire_time
     s.file_id = checked.file_id
     s.target_scope = checked.target_scope.value

@@ -2372,3 +2372,75 @@ class TestTempPassword:
         col = User.__table__.c.must_change_password
         assert not col.nullable
         assert col.server_default is not None
+
+
+# ── 한 번만 예약(2026-09-21 방송 화면 개편) ─────────────────────────────────
+class TestOnceSchedule:
+    def _rule(self, once_date, hhmm="07:00"):
+        import datetime as dt
+
+        from app.modules.schedule.rules import Rule
+
+        h, m = map(int, hhmm.split(":"))
+        return Rule(repeat="once", fire_time=dt.time(h, m), once_date=once_date)
+
+    def test_matches_only_its_date(self):
+        import datetime as dt
+
+        from app.modules.schedule.rules import matches_date
+
+        r = self._rule(dt.date(2030, 3, 5))
+        assert matches_date(r, dt.date(2030, 3, 5))
+        # 매년과 다르다 — 이듬해에 또 나가면 안 된다
+        assert not matches_date(r, dt.date(2031, 3, 5))
+        assert not matches_date(r, dt.date(2030, 3, 6))
+
+    def test_next_occurrence_then_never_again(self):
+        import datetime as dt
+
+        from app.modules.schedule.rules import KST, next_occurrence, occurrences
+
+        r = self._rule(dt.date(2030, 3, 5), "07:30")
+        before = dt.datetime(2030, 3, 5, 7, 0, tzinfo=KST)
+        after = dt.datetime(2030, 3, 5, 7, 31, tzinfo=KST)
+        assert next_occurrence(r, before) == dt.datetime(2030, 3, 5, 7, 30, tzinfo=KST)
+        assert next_occurrence(r, after) is None
+        window = occurrences(
+            r, dt.datetime(2030, 1, 1, tzinfo=KST), dt.datetime(2031, 12, 31, tzinfo=KST)
+        )
+        assert window == [dt.datetime(2030, 3, 5, 7, 30, tzinfo=KST)]
+
+    def _payload(self, **kw):
+        base = {"repeat": "once", "fire_time": "07:00", "file_id": 1,
+                "target_scope": "village", "target_ids": ["1"]}
+        return {**base, **kw}
+
+    def test_schema_requires_future_date(self):
+        import datetime as dt
+
+        import pytest
+        from pydantic import ValidationError
+
+        from app.schemas.schedule import ScheduleCreate
+
+        with pytest.raises(ValidationError, match="날짜가 필요"):
+            ScheduleCreate.model_validate(self._payload())
+        with pytest.raises(ValidationError, match="이미 지난 시각"):
+            ScheduleCreate.model_validate(self._payload(once_date="2020-01-01"))
+        future = (dt.date.today() + dt.timedelta(days=3)).isoformat()
+        ok = ScheduleCreate.model_validate(self._payload(once_date=future))
+        assert ok.once_date.isoformat() == future
+
+    def test_other_repeats_drop_once_date(self):
+        from app.schemas.schedule import ScheduleCreate
+
+        s = ScheduleCreate.model_validate(self._payload(repeat="daily", once_date="2030-01-01"))
+        assert s.once_date is None
+
+    def test_label_shows_date(self):
+        import datetime as dt
+
+        from app.modules.schedule.rules import schedule_when
+
+        assert schedule_when("once", dt.time(7, 0), dt.date(2030, 9, 22)) == "9/22 한 번 07:00"
+        assert schedule_when("daily", dt.time(7, 0)) == "매일 07:00"

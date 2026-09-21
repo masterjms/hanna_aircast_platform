@@ -32,12 +32,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.constants import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, REPEAT_LABEL, FileSource
+from app.constants import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, FileSource
 from app.core.ids import new_download_token
 from app.errors import ApiError, NotFound
 from app.models.file import DownloadToken, File
 from app.models.org import User
 from app.models.schedule import Schedule
+from app.modules.schedule.rules import schedule_when
 from app.schemas.file import FileOut
 from app.tasks.config_reconcile import load_config
 from app.tts.engine import MP3_MUXER_ARGS
@@ -406,14 +407,14 @@ async def schedules_using(db: AsyncSession, file_ids: Sequence[int]) -> dict[int
         return {}
     rows = (
         await db.execute(
-            select(Schedule.file_id, Schedule.repeat, Schedule.fire_time)
+            select(Schedule.file_id, Schedule.repeat, Schedule.fire_time, Schedule.once_date)
             .where(Schedule.file_id.in_(set(file_ids)))
             .order_by(Schedule.file_id, Schedule.fire_time)
         )
     ).all()
     out: dict[int, list[str]] = {}
-    for fid, repeat, fire_time in rows:
-        out.setdefault(fid, []).append(f"{REPEAT_LABEL.get(repeat, repeat)} {fire_time:%H:%M}")
+    for fid, repeat, fire_time, once_date in rows:
+        out.setdefault(fid, []).append(schedule_when(repeat, fire_time, once_date))
     return out
 
 

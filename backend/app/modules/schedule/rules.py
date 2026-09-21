@@ -12,6 +12,7 @@
   weekly   weekdays (0=일 … 6=토) 의 fire_time
   monthly  month_days (1~31). 그 날이 없는 달(31일이 없는 달 등)은 건너뛴다 — cron 과 같다
   yearly   year_dates [{month, day}]. 2월 29일은 윤년에만 나간다
+  once     once_date 의 fire_time 에 한 번. 지나면 다시 걸리지 않는다(2026-09-21)
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.constants import Repeat
+from app.constants import REPEAT_LABEL, Repeat
 
 KST = ZoneInfo("Asia/Seoul")
 
@@ -37,6 +38,7 @@ class Rule:
     weekdays: frozenset[int] = field(default_factory=frozenset)
     month_days: frozenset[int] = field(default_factory=frozenset)
     year_dates: frozenset[tuple[int, int]] = field(default_factory=frozenset)
+    once_date: dt.date | None = None
 
 
 def rule_of(schedule: Any) -> Rule:
@@ -50,7 +52,16 @@ def rule_of(schedule: Any) -> Rule:
         weekdays=frozenset(schedule.weekdays or []),
         month_days=frozenset(schedule.month_days or []),
         year_dates=year_dates,
+        once_date=getattr(schedule, "once_date", None),
     )
+
+
+def schedule_when(repeat: str, fire_time: dt.time, once_date: dt.date | None = None) -> str:
+    """「매일 07:00」, 한 번짜리는 「9/22 한 번 07:00」. 거절 사유에 어느 스케줄인지 대 준다."""
+    head = REPEAT_LABEL.get(repeat, repeat)
+    if once_date is not None:
+        head = f"{once_date.month}/{once_date.day} {head}"
+    return f"{head} {fire_time:%H:%M}"
 
 
 def korean_weekday(d: dt.date) -> int:
@@ -67,6 +78,8 @@ def matches_date(rule: Rule, d: dt.date) -> bool:
         return d.day in rule.month_days
     if rule.repeat == Repeat.YEARLY.value:
         return (d.month, d.day) in rule.year_dates
+    if rule.repeat == Repeat.ONCE.value:
+        return d == rule.once_date
     return False
 
 
@@ -107,6 +120,8 @@ def can_ever_match(rule: Rule) -> bool:
         return bool(rule.month_days)
     if rule.repeat == Repeat.YEARLY.value:
         return bool(rule.year_dates)
+    if rule.repeat == Repeat.ONCE.value:
+        return rule.once_date is not None
     return rule.repeat == Repeat.DAILY.value
 
 
@@ -126,6 +141,10 @@ def next_occurrence(rule: Rule, after: dt.datetime) -> dt.datetime | None:
         return None
 
     s = after.astimezone(KST)
+    if rule.repeat == Repeat.ONCE.value:
+        # 한 번짜리는 날짜를 훑을 필요가 없다 — 그 시각이 아직 안 왔는지만 본다.
+        at = dt.datetime.combine(rule.once_date, rule.fire_time, tzinfo=KST)
+        return at if at >= s else None
     day = s.date()
     last = (s + dt.timedelta(days=LOOKAHEAD_DAYS)).date()
     while day <= last:

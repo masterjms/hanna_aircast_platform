@@ -13,7 +13,7 @@ import type { ReactNode } from 'react';
 
 import type { Role } from './api/types';
 
-import { Sidebar } from './components/layout/Sidebar';
+import { MobileNav, Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
 import { useAuth } from './auth/AuthContext';
 import { DashboardPage } from './pages/DashboardPage';
@@ -30,12 +30,12 @@ import { UsersPage } from './pages/UsersPage';
 
 /** 상단바에 띄울 화면 이름. 경로가 유일한 출처라 페이지가 따로 알릴 필요가 없다. */
 const PAGE_TITLES: Record<string, [string, string]> = {
-  '/': ['전체 개요', '단말 상태와 지도'],
+  '/': ['마을 현황', '단말 상태와 지도'],
   '/devices': ['단말 관리', '등록 · 배정 · 상태'],
-  '/broadcast': ['방송 제어', '실시간 · 파일 송출'],
-  '/files': ['파일함', '업로드 · TTS'],
-  '/events': ['이력', '방송 명령과 단말 응답'],
-  '/schedules': ['스케줄', '자동방송 규칙 · 예정표'],
+  '/broadcast': ['방송하기', '말로 · 글로 · 저장된 소리로, 지금 또는 예약'],
+  '/files': ['방송 자료', '저장된 소리 · 글로 만든 음성'],
+  '/events': ['방송 기록', '지난 방송과 단말 응답'],
+  '/schedules': ['예약 방송', '예약 목록 · 예정표'],
   '/costs': ['비용', '마을별 사용량'],
   '/ota': ['OTA 관리', '펌웨어 배포'],
   '/settings': ['설정', '전 단말 공통 CONFIG'],
@@ -53,6 +53,7 @@ function AppShell({ children }: { children: ReactNode }) {
       <div className="shell">
         <TopBar title={title} subtitle={subtitle} />
         <main className="main">{children}</main>
+        <MobileNav />
       </div>
     </div>
   );

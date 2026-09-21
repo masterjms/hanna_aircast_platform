@@ -157,10 +157,7 @@ export function DashboardPage() {
 
   return (
     // 상단바가 이미 "전체 개요"를 보여주므로 제목을 반복하지 않는다.
-    <div
-      ref={rowRef}
-      style={{ display: 'flex', gap: 4, height: 'calc(100vh - 120px)', minHeight: 480 }}
-    >
+    <div ref={rowRef} className="dash">
       {/* ── 왼쪽: 요약 + 기관·마을별 단말 + 이상단말 ──
           세로 flex 로 세 구역을 쌓고, 단말 목록만 남는 높이를 차지해 안에서
           스크롤한다. 단말·마을이 늘어도 화면 전체가 길어지지 않는다 — 타일과

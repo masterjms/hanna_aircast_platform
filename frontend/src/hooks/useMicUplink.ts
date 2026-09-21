@@ -42,8 +42,12 @@ export interface MicUplink {
   bytesSent: number;
   /** 마이크가 실제로 송출을 시작한 시각(ms). 송출 전·종료 후는 null. */
   liveSince: number | null;
-  /** bitrateKbps 는 서버 설정값(16 또는 24). 생략하면 24 로 인코딩한다. */
-  start: (sessionId: number, token: string, bitrateKbps?: number) => Promise<void>;
+  /**
+   * bitrateKbps 는 서버 설정값(16 또는 24). 생략하면 24 로 인코딩한다.
+   * 마이크가 실제로 송출을 시작했으면 true, 못 했으면 false(이유는 error). 부르는 쪽이
+   * false 를 받으면 방송 세션을 되돌려야 한다 — 소리 없는 방송이 켜진 채 남으면 안 된다.
+   */
+  start: (sessionId: number, token: string, bitrateKbps?: number) => Promise<boolean>;
   stop: () => void;
 }
 
@@ -168,7 +172,7 @@ export function useMicUplink(): MicUplink {
       if (blocked) {
         setError(blocked);
         setState('error');
-        return;
+        return false;
       }
 
       try {
@@ -290,12 +294,14 @@ export function useMicUplink(): MicUplink {
 
         setLiveSince(Date.now());
         setState('live');
+        return true;
       } catch (err) {
         cleanup();
         // 위에서 이미 사람이 읽을 문장으로 바꿔 던진 것은 그대로 쓰고,
         // 그 밖(WebSocket 실패 등)은 메시지를 그대로 보여준다.
         setError(err instanceof Error ? err.message : micErrorMessage(err));
         setState('error');
+        return false;
       }
     },
     [cleanup],
