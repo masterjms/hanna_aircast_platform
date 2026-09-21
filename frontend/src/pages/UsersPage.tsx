@@ -68,6 +68,43 @@ export function UsersPage() {
   const [form, setForm] = useState<FormState | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  // 방금 발급한 임시 비밀번호. 수정 창을 닫으면 버린다 — 다시 볼 방법은 없다.
+  const [tempPw, setTempPw] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const closeForm = () => {
+    setForm(null);
+    setEditingId(null);
+    setTempPw(null);
+    setCopied(false);
+  };
+
+  /**
+   * 임시 비밀번호 발급(향후검토 10번). 비밀번호는 해시로만 저장돼 원래 값을 보여줄 수
+   * 없으므로, 새 값을 만들어 한 번만 보여주고 그 계정이 다음 로그인에서 바꾸게 한다.
+   */
+  const issueTempPassword = async () => {
+    if (editingId === null || !form) return;
+    if (
+      !window.confirm(
+        `${form.username} 의 비밀번호를 임시 비밀번호로 바꿉니다.\n` +
+          '지금 비밀번호는 바로 쓸 수 없게 되고, 그 계정은 다음 로그인에서 새 비밀번호를 정해야 합니다.\n계속할까요?',
+      )
+    )
+      return;
+    setBusy(true);
+    setError(null);
+    try {
+      const { password } = await api.users.tempPassword(editingId);
+      setTempPw(password);
+      setCopied(false);
+      await load();
+    } catch (err) {
+      fail(err, '임시 비밀번호를 발급하지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const fail = (err: unknown, fallback: string) =>
     setError(err instanceof ApiError ? err.message : fallback);
@@ -118,8 +155,7 @@ export function UsersPage() {
           valid_days: form.valid_days === '' ? null : form.valid_days,
         });
       }
-      setForm(null);
-      setEditingId(null);
+      closeForm();
       await load();
     } catch (err) {
       fail(err, '저장에 실패했습니다.');
@@ -214,6 +250,11 @@ export function UsersPage() {
                   <td className="strong">
                     {u.username}
                     {u.id === me?.id && <span className="tag">나</span>}
+                    {u.must_change_password && (
+                      <span className="tag" title="임시 비밀번호를 받고 아직 바꾸지 않았습니다">
+                        임시 비밀번호
+                      </span>
+                    )}
                   </td>
                   <td>
                     <span className={`badge badge--${u.role === 'super_admin' ? 'ok' : 'idle'}`}>
@@ -273,20 +314,10 @@ export function UsersPage() {
       {form && (
         <Modal
           title={editingId === null ? '계정 추가' : `계정 수정 · ${form.username}`}
-          onClose={() => {
-            setForm(null);
-            setEditingId(null);
-          }}
+          onClose={closeForm}
           footer={
             <>
-              <button
-                type="button"
-                className="btn"
-                onClick={() => {
-                  setForm(null);
-                  setEditingId(null);
-                }}
-              >
+              <button type="button" className="btn" onClick={closeForm}>
                 취소
               </button>
               <button
@@ -324,6 +355,45 @@ export function UsersPage() {
               onChange={(e) => setForm({ ...form, password: e.target.value })}
             />
             <p className="hint">8자 이상 64자 이하</p>
+            {editingId !== null && editingId !== me?.id && (
+              <div className="temp-pw">
+                {tempPw === null ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn--ghost btn--sm"
+                      onClick={() => void issueTempPassword()}
+                      disabled={busy}
+                    >
+                      임시 비밀번호 발급
+                    </button>
+                    <span className="hint">
+                      비밀번호는 암호화돼 저장되어 확인할 수 없습니다. 잊었다면 임시 비밀번호를
+                      발급해 전달하세요.
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <div className="temp-pw__value">
+                      <span className="mono">{tempPw}</span>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(tempPw).then(() => setCopied(true));
+                        }}
+                      >
+                        {copied ? '복사됨' : '복사'}
+                      </button>
+                    </div>
+                    <span className="hint hint--warn">
+                      이 창을 닫으면 다시 볼 수 없습니다. 담당자에게 전달하면 다음 로그인에서 새
+                      비밀번호를 정하게 됩니다.
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="field">

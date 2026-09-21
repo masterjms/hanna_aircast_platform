@@ -21,6 +21,7 @@ from app.schemas.org import (
     OrganizationCreate,
     OrganizationOut,
     OrganizationUpdate,
+    TempPasswordOut,
     UserCreate,
     UserOut,
     UserUpdate,
@@ -185,6 +186,17 @@ async def update_user(
     return await service.update_user(
         db, user_id, payload, actor=actor, org_ids=org_ids, scope=scope
     )
+
+
+@router.post("/api/users/{user_id}/temp-password", response_model=TempPasswordOut)
+async def issue_temp_password(
+    user_id: int, db: Db, actor: OrgAdmin, org_ids: OrgIds, scope: Scope
+) -> TempPasswordOut:
+    """임시 비밀번호 발급 — 응답에서 한 번만 보인다. 그 계정은 다음 로그인에서 바꿔야 한다."""
+    password = await service.issue_temp_password(
+        db, user_id, actor=actor, org_ids=org_ids, scope=scope
+    )
+    return TempPasswordOut(password=password)
 
 
 @router.delete("/api/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import secrets
 from collections.abc import Iterable, Sequence
 
 from sqlalchemy import delete, func, select
@@ -24,7 +25,7 @@ from app.core import authz
 from app.core.orgtree import load_tree, lock_tree
 from app.core.presence import online_clause, online_cutoff
 from app.core.scope import VillageScope
-from app.core.security import hash_password
+from app.core.security import hash_password, verify_password
 from app.core.village_token import next_village_code, token_for
 from app.errors import (
     ApiError,
@@ -694,6 +695,64 @@ async def update_user(
 
     await db.flush()
     return await _to_user_out(db, user)
+
+
+#: 임시 비밀번호 문자 — 전화로 불러 주거나 옮겨 적기 쉽게 헷갈리는 글자(0 O o 1 l I)를 뺀다.
+TEMP_PASSWORD_CHARSET = "ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789"
+TEMP_PASSWORD_LENGTH = 10
+
+
+def generate_temp_password() -> str:
+    return "".join(secrets.choice(TEMP_PASSWORD_CHARSET) for _ in range(TEMP_PASSWORD_LENGTH))
+
+
+async def issue_temp_password(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    actor: User,
+    org_ids: set[int] | None,
+    scope: VillageScope,
+) -> str:
+    """임시 비밀번호 발급(향후검토 10번).
+
+    비밀번호는 해시로만 저장해 원래 값을 보여줄 수 없다. 대신 새 값을 만들어 이 응답에서
+    한 번만 돌려주고, 그 계정은 다음 로그인에서 새 비밀번호를 정해야 한다
+    (must_change_password — deps.get_current_user 가 다른 API 를 막는다).
+
+    관리할 수 있는 계정에만 쓴다(_manageable). 자기 계정은 안 된다 — 자기 비밀번호는
+    알고 있으니 /api/auth/password 로 바꾼다.
+    """
+    if user_id == actor.id:
+        raise ApiError(
+            "자기 계정에는 임시 비밀번호를 발급하지 않습니다. 비밀번호 변경을 쓰세요.",
+            code="CANNOT_RESET_SELF",
+        )
+    user = await db.get(User, user_id)
+    if user is None:
+        raise UserNotFound()
+    if not await _manageable(db, user, actor, org_ids, scope):
+        raise TierTooLow(detail={"user_id": user_id})
+    password = generate_temp_password()
+    user.password_hash = hash_password(password)
+    user.must_change_password = True
+    await db.flush()
+    return password
+
+
+async def change_own_password(
+    db: AsyncSession, user: User, *, current_password: str, new_password: str
+) -> None:
+    """자기 비밀번호 변경. 임시 비밀번호 표시도 여기서 풀린다."""
+    if not verify_password(current_password, user.password_hash):
+        raise ApiError("현재 비밀번호가 맞지 않습니다.", code="WRONG_PASSWORD")
+    if verify_password(new_password, user.password_hash):
+        raise ApiError(
+            "지금 비밀번호와 다른 값으로 정해 주세요.", code="PASSWORD_UNCHANGED"
+        )
+    user.password_hash = hash_password(new_password)
+    user.must_change_password = False
+    await db.flush()
 
 
 async def delete_user(

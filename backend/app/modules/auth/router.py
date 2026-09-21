@@ -16,7 +16,14 @@ from app.core.security import create_access_token, verify_password
 from app.errors import AccountExpired, InvalidCredentials
 from app.models.device import Device
 from app.models.org import Organization, User, Village
-from app.schemas.auth import LoginRequest, LoginResponse, MeResponse, VillageBrief
+from app.modules.org import service as org_service
+from app.schemas.auth import (
+    LoginRequest,
+    LoginResponse,
+    MeResponse,
+    PasswordChangeRequest,
+    VillageBrief,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -52,6 +59,7 @@ async def _build_me(db: Db, user: User, scope: VillageScope) -> MeResponse:
         device_count=int(device_count or 0),
         organization_id=user.organization_id,
         organization_name=org_name,
+        must_change_password=user.must_change_password,
     )
 
 
@@ -87,3 +95,17 @@ async def logout() -> None:
 @router.get("/me", response_model=MeResponse)
 async def me(user: CurrentUser, db: Db, scope: Scope) -> MeResponse:
     return await _build_me(db, user, scope)
+
+
+@router.post("/password", response_model=MeResponse)
+async def change_password(
+    payload: PasswordChangeRequest, user: CurrentUser, db: Db
+) -> MeResponse:
+    """자기 비밀번호 변경. 임시 비밀번호 계정은 여기서만 풀린다(향후검토 10번)."""
+    await org_service.change_own_password(
+        db,
+        user,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    return await _build_me(db, user, await authz.resolve_scope(db, user))

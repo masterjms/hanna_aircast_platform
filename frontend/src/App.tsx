@@ -21,6 +21,7 @@ import { EventsPage } from './pages/EventsPage';
 import { BroadcastPage } from './pages/BroadcastPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { FilesPage } from './pages/FilesPage';
+import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { LoginPage } from './pages/LoginPage';
 import { RegionsPage } from './pages/RegionsPage';
 import { SchedulesPage } from './pages/SchedulesPage';
@@ -89,6 +90,11 @@ export function App() {
         <Route path="*" element={<LoginPage />} />
       </Routes>
     );
+  }
+
+  // 임시 비밀번호 계정은 새 비밀번호를 정하기 전까지 다른 화면에 못 간다(향후검토 10번).
+  if (user.must_change_password) {
+    return <ChangePasswordPage />;
   }
 
   return (

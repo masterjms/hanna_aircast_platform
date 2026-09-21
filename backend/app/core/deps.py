@@ -24,7 +24,12 @@ from app.core import authz
 from app.core.scope import VillageScope
 from app.core.security import decode_access_token
 from app.db import get_db
-from app.errors import OrgAdminRequired, SuperAdminRequired, Unauthorized
+from app.errors import (
+    OrgAdminRequired,
+    PasswordChangeRequired,
+    SuperAdminRequired,
+    Unauthorized,
+)
 from app.live.registry import LiveRegistry
 from app.models.org import User
 from app.mqtt.publisher import MqttPublisher
@@ -33,7 +38,14 @@ from app.mqtt.publisher import MqttPublisher
 _bearer = HTTPBearer(auto_error=False)
 
 
+#: 임시 비밀번호 계정도 부를 수 있는 경로 — 자기 정보 확인, 비밀번호 변경, 로그아웃.
+PASSWORD_CHANGE_ALLOWED_PATHS = frozenset(
+    {"/api/auth/me", "/api/auth/password", "/api/auth/logout"}
+)
+
+
 async def get_current_user(
+    request: Request,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
@@ -53,6 +65,10 @@ async def get_current_user(
     # 토큰 유효기간이 계정 만료보다 길 수 있다. 이미 발급된 토큰도 막는다.
     if user.is_expired():
         raise Unauthorized()
+    # 임시 비밀번호 계정은 새 비밀번호를 정하기 전까지 다른 기능을 못 쓴다(향후검토 10번).
+    # 화면만 막으면 임시 비밀번호를 아는 사람이 API 로 그냥 쓴다 — 서버에서 막는다.
+    if user.must_change_password and request.url.path not in PASSWORD_CHANGE_ALLOWED_PATHS:
+        raise PasswordChangeRequired()
     return user
 
 

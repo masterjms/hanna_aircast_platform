@@ -1083,6 +1083,26 @@ class TestServerOnlyConfig:
         # 범위를 빠뜨린 설정이 있으면 _check_range 가 KeyError 로 터진다.
         assert set(CONFIG_LIMITS) >= DEVICE_CONFIG_FIELDS
 
+    def test_resending_same_device_values_is_not_a_change(self):
+        """설정 화면은 저장 때 모든 값을 보낸다 — 같은 값이면 재발행하지 않는다(2026-09-21)."""
+        from types import SimpleNamespace
+
+        from app.modules.system.service import device_fields_changed
+
+        cur = SimpleNamespace(
+            status_interval_sec=30, live_stats_interval_sec=10, event_qos=0, file_wait_sec=30
+        )
+        full_form = {
+            "status_interval_sec": 30,
+            "live_stats_interval_sec": 10,
+            "event_qos": 0,
+            "file_wait_sec": 35,  # 서버 전용 값만 바뀜
+        }
+        assert not device_fields_changed(cur, full_form)
+        assert device_fields_changed(cur, {**full_form, "status_interval_sec": 45})
+        assert device_fields_changed(cur, {"event_qos": 1})
+        assert not device_fields_changed(cur, {})
+
 
 # ── 마을 경계 도형 변환 (지도 4단계) ─────────────────────────────────────
 def _boundary_module():
@@ -2295,3 +2315,60 @@ class TestAclBeforeConfig:
         assert "stat -c %Y" not in script
         assert "md5sum" in script
         assert "aclfile.applied" in script
+
+
+# ── 임시 비밀번호(향후검토 10번, 2026-09-21) ────────────────────────────────
+class TestTempPassword:
+    def test_generated_password_is_readable_and_long_enough(self):
+        from app.modules.org.service import (
+            TEMP_PASSWORD_CHARSET,
+            TEMP_PASSWORD_LENGTH,
+            generate_temp_password,
+        )
+
+        # 전화로 불러 주거나 옮겨 적을 때 헷갈리는 글자는 없어야 한다.
+        assert not set("0Oo1lI") & set(TEMP_PASSWORD_CHARSET)
+        seen = set()
+        for _ in range(200):
+            pw = generate_temp_password()
+            assert len(pw) == TEMP_PASSWORD_LENGTH
+            assert TEMP_PASSWORD_LENGTH >= 8, "계정 비밀번호 최소 길이 이상"
+            assert set(pw) <= set(TEMP_PASSWORD_CHARSET)
+            seen.add(pw)
+        assert len(seen) == 200
+
+    def test_only_password_routes_are_open_while_temp(self):
+        from app.core.deps import PASSWORD_CHANGE_ALLOWED_PATHS
+
+        # 임시 비밀번호로는 자기 정보·비밀번호 변경·로그아웃만 된다. 목록이 넓어지면
+        # 임시 비밀번호를 아는 사람이 API 로 그냥 쓴다.
+        allowed = {"/api/auth/me", "/api/auth/password", "/api/auth/logout"}
+        assert set(PASSWORD_CHANGE_ALLOWED_PATHS) == allowed
+
+    def test_guard_lives_in_the_shared_user_dependency(self):
+        import inspect
+
+        from app.core import deps
+
+        src = inspect.getsource(deps.get_current_user)
+        assert "must_change_password" in src and "PasswordChangeRequired" in src
+
+    def test_issue_requires_manageable_and_sets_flag(self):
+        import inspect
+
+        from app.modules.org import service
+
+        src = inspect.getsource(service.issue_temp_password)
+        assert "_manageable" in src
+        assert "must_change_password = True" in src
+        assert "CANNOT_RESET_SELF" in src
+        change = inspect.getsource(service.change_own_password)
+        assert "must_change_password = False" in change
+        assert "verify_password(current_password" in change
+
+    def test_new_column_is_non_null_false_by_default(self):
+        from app.models.org import User
+
+        col = User.__table__.c.must_change_password
+        assert not col.nullable
+        assert col.server_default is not None

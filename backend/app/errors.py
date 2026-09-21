@@ -73,6 +73,13 @@ class SuperAdminRequired(Forbidden):
     message = "최고 관리자만 사용할 수 있는 기능입니다."
 
 
+class PasswordChangeRequired(Forbidden):
+    """임시 비밀번호로 로그인한 계정 — 새 비밀번호를 정하기 전에는 다른 기능을 막는다."""
+
+    code = "PASSWORD_CHANGE_REQUIRED"
+    message = "임시 비밀번호입니다. 새 비밀번호를 먼저 정해 주세요."
+
+
 class OrgAdminRequired(Forbidden):
     code = "ORG_ADMIN_REQUIRED"
     message = "기관 관리자 이상만 할 수 있습니다."

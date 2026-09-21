@@ -8,9 +8,10 @@
  * 진행 중인 방송이 있으면 폴링을 2초로 당긴다(사양: 기본 5초, 방송 중 2초).
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { api } from '../api/client';
+import type { Organization, Village } from '../api/types';
 import { MapView } from '../components/MapView';
 import { VillageDeviceList } from '../components/VillageDeviceList';
 import { useAuth } from '../auth/AuthContext';
@@ -46,6 +47,30 @@ function Tile({
   );
 }
 
+/**
+ * 지도가 차지하는 폭(%) — 향후검토 13번. 세 단계 버튼과 끌어서 조절하는 손잡이가 같은
+ * 값을 바꾸고, 브라우저에 기억한다(다음에 열어도 그 크기). 예전 고정값은 60% 였는데
+ * 「지도가 너무 크다」는 지적이라 기본을 50% 로 낮췄다.
+ */
+const MAP_PRESETS = [
+  { label: '작게', pct: 35 },
+  { label: '보통', pct: 50 },
+  { label: '크게', pct: 65 },
+] as const;
+const MAP_PCT_KEY = 'xwifi.dashboard.mapPct';
+const MAP_PCT_MIN = 25;
+const MAP_PCT_MAX = 75;
+
+function readMapPct(): number {
+  try {
+    const v = Number(localStorage.getItem(MAP_PCT_KEY));
+    if (v >= MAP_PCT_MIN && v <= MAP_PCT_MAX) return v;
+  } catch {
+    /* 저장소를 못 쓰는 브라우저 — 기본값 */
+  }
+  return 50;
+}
+
 function formatTime(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('ko-KR', {
@@ -70,6 +95,56 @@ export function DashboardPage() {
   const broadcasting = (data?.active_broadcasts.length ?? 0) > 0;
   useEffect(() => setFastMode(broadcasting), [broadcasting]);
 
+  // 기관 트리(향후검토 6번). 구조는 자주 안 바뀌므로 열 때 한 번 읽는다.
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const [villages, setVillages] = useState<Village[]>([]);
+  useEffect(() => {
+    void Promise.all([
+      api.organizations.list().catch(() => [] as Organization[]),
+      api.villages.list().catch(() => [] as Village[]),
+    ]).then(([o, v]) => {
+      setOrgs(o);
+      setVillages(v);
+    });
+  }, []);
+
+  // ── 지도 크기(향후검토 13번) ──
+  const [mapPct, setMapPctState] = useState(readMapPct);
+  const [dragging, setDragging] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
+  const setMapPct = useCallback((pct: number) => {
+    if (!Number.isFinite(pct)) return;
+    const clamped = Math.round(Math.min(MAP_PCT_MAX, Math.max(MAP_PCT_MIN, pct)));
+    setMapPctState(clamped);
+    try {
+      localStorage.setItem(MAP_PCT_KEY, String(clamped));
+    } catch {
+      /* 기억만 못 할 뿐 크기는 바뀐다 */
+    }
+  }, []);
+
+  const onSplitDown = (e: React.PointerEvent) => {
+    e.preventDefault();
+    setDragging(true);
+    document.body.classList.add('is-resizing');
+    const onMove = (ev: PointerEvent) => {
+      const box = rowRef.current?.getBoundingClientRect();
+      // 폭이 0 이면(화면이 그려지기 전) 나눗셈이 NaN 이 되어 저장값이 깨진다.
+      if (!box || box.width <= 0 || !Number.isFinite(ev.clientX)) return;
+      setMapPct(((box.right - ev.clientX) / box.width) * 100);
+    };
+    const onUp = () => {
+      setDragging(false);
+      document.body.classList.remove('is-resizing');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  };
+
   if (loading && !data) {
     return <div className="empty">불러오는 중…</div>;
   }
@@ -82,14 +157,17 @@ export function DashboardPage() {
 
   return (
     // 상단바가 이미 "전체 개요"를 보여주므로 제목을 반복하지 않는다.
-    <div style={{ display: 'flex', gap: 14, height: 'calc(100vh - 120px)', minHeight: 480 }}>
-      {/* ── 왼쪽 4: 요약 + 마을별 단말 + 이상단말 ──
+    <div
+      ref={rowRef}
+      style={{ display: 'flex', gap: 4, height: 'calc(100vh - 120px)', minHeight: 480 }}
+    >
+      {/* ── 왼쪽: 요약 + 기관·마을별 단말 + 이상단말 ──
           세로 flex 로 세 구역을 쌓고, 단말 목록만 남는 높이를 차지해 안에서
           스크롤한다. 단말·마을이 늘어도 화면 전체가 길어지지 않는다 — 타일과
           이상단말은 항상 제자리에 있어야 한다(2026-09-03 현장 요청). */}
       <div
         style={{
-          flex: 4,
+          flex: `1 1 ${100 - mapPct}%`,
           minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
@@ -135,6 +213,8 @@ export function DashboardPage() {
           <VillageDeviceList
             pins={map.data?.pins ?? []}
             missing={map.data?.missing_location ?? []}
+            orgs={orgs}
+            villages={villages}
             selectedMac={selectedMac}
             hoveredMac={hoveredMac}
             onSelect={setSelectedMac}
@@ -183,8 +263,41 @@ export function DashboardPage() {
         </section>
       </div>
 
-      {/* ── 오른쪽 6: 지도 ── */}
-      <div className="card" style={{ flex: 6, minWidth: 0, padding: 6 }}>
+      {/* 목록과 지도 사이 손잡이 — 끌어서 지도 폭을 바꾼다. 키보드는 ←→ 로 5%씩. */}
+      <div
+        className={`dash-split${dragging ? ' is-dragging' : ''}`}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="지도 크기 조절"
+        aria-valuemin={MAP_PCT_MIN}
+        aria-valuemax={MAP_PCT_MAX}
+        aria-valuenow={mapPct}
+        tabIndex={0}
+        onPointerDown={onSplitDown}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowLeft') setMapPct(mapPct + 5);
+          if (e.key === 'ArrowRight') setMapPct(mapPct - 5);
+        }}
+        title="끌어서 지도 크기 조절"
+      />
+
+      {/* ── 오른쪽: 지도 ── */}
+      <div
+        className="card"
+        style={{ flex: `1 1 ${mapPct}%`, minWidth: 0, padding: 6, position: 'relative' }}
+      >
+        <div className="map-size" role="group" aria-label="지도 크기">
+          {MAP_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              type="button"
+              aria-pressed={mapPct === p.pct}
+              onClick={() => setMapPct(p.pct)}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
         {map.data?.kakao_js_key ? (
           <MapView
             jsKey={map.data.kakao_js_key}

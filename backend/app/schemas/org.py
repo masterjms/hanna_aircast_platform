@@ -175,3 +175,11 @@ class UserOut(ApiModel):
     village_ids: list[int] = Field(default_factory=list)
     organization_id: int | None = None
     organization_name: str | None = None
+    #: 임시 비밀번호를 받고 아직 바꾸지 않은 계정. 계정 목록에 「변경 대기」로 보인다.
+    must_change_password: bool = False
+
+
+class TempPasswordOut(ApiModel):
+    """임시 비밀번호. 이 응답에서 한 번만 나오고 서버에는 해시만 남는다."""
+
+    password: str

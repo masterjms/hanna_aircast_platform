@@ -307,16 +307,17 @@ function CredentialDialog({ device, onClose }: { device: Device; onClose: () => 
     }
   };
 
+  // 재발행은 되돌릴 수 없다 — 삭제와 같은 방식으로 MAC 끝 4자리를 입력해야 진행한다
+  // (향후검토 2번). 확인만 누르면 바뀌던 것을 막는다.
+  const [confirming, setConfirming] = useState(false);
+  const [typed, setTyped] = useState('');
+  const last4 = device.mac.replace(/:/g, '').slice(-4).toLowerCase();
+
   const reissue = () => {
-    if (
-      window.confirm(
-        '새 비밀번호를 발행하면 이전 값은 즉시 무효가 됩니다.\n' +
-          '케이블이 꽂힌 단말(라인 재작업)에만 쓰세요 — 현장 단말에 쓰면 그 단말은 접속이 끊깁니다.\n' +
-          '계속할까요?',
-      )
-    ) {
-      void load(true);
-    }
+    if (typed.trim().toLowerCase() !== last4) return;
+    setConfirming(false);
+    setTyped('');
+    void load(true);
   };
 
   return (
@@ -324,16 +325,69 @@ function CredentialDialog({ device, onClose }: { device: Device; onClose: () => 
       title="MQTT 계정"
       onClose={onClose}
       footer={
-        <>
-          <button type="button" className="btn btn--ghost" onClick={reissue} disabled={busy}>
-            재발행 (라인 전용)
-          </button>
-          <button type="button" className="btn btn--primary" onClick={onClose}>
-            닫기
-          </button>
-        </>
+        confirming ? (
+          <>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setConfirming(false);
+                setTyped('');
+              }}
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              className="btn btn--danger"
+              onClick={reissue}
+              disabled={busy || typed.trim().toLowerCase() !== last4}
+            >
+              재발행
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => setConfirming(true)}
+              disabled={busy}
+            >
+              재발행 (라인 전용)
+            </button>
+            <button type="button" className="btn btn--primary" onClick={onClose}>
+              닫기
+            </button>
+          </>
+        )
       }
     >
+      {confirming && (
+        <div className="alert" style={{ marginBottom: 14 }}>
+          <p style={{ marginTop: 0 }}>
+            새 비밀번호를 발행하면 지금 비밀번호는 즉시 무효가 됩니다. 이 단말은 케이블로 새
+            비밀번호를 다시 넣기 전까지 접속할 수 없습니다. 케이블이 꽂힌 단말(라인 재작업)에만
+            쓰세요.
+          </p>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label htmlFor="reissue-confirm">
+              확인을 위해 MAC 끝 4자리(<span className="mono">{last4}</span>)를 입력하세요
+            </label>
+            <input
+              id="reissue-confirm"
+              className="mono"
+              value={typed}
+              maxLength={4}
+              autoFocus
+              onChange={(e) => setTyped(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') reissue();
+              }}
+            />
+          </div>
+        </div>
+      )}
       <p className="mono dim" style={{ marginTop: 0 }}>
         {device.mac}
       </p>

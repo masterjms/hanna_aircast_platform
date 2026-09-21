@@ -54,6 +54,7 @@ CREATE TABLE users (
     role            VARCHAR(20) NOT NULL CHECK (role IN ('super_admin', 'org_admin', 'village_admin')),  -- 0018
     organization_id INTEGER REFERENCES organizations(id) ON DELETE RESTRICT,  -- org_admin 만
     expires_at      TIMESTAMPTZ,                                              -- 사용 기간 (0014). NULL = 무기한
+    must_change_password BOOLEAN NOT NULL DEFAULT false,                      -- 임시 비밀번호 받음 (0019)
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

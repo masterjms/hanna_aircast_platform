@@ -26,6 +26,7 @@ import type {
   Zone,
 } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
+import { HelpTip } from '../components/HelpTip';
 import {
   EMPTY_PICK,
   TargetTreePicker,
@@ -525,7 +526,14 @@ export function BroadcastPage() {
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <section className="card">
-            <h2 className="section-title">실시간 방송</h2>
+            <h2 className="section-title">
+              실시간 방송
+              <HelpTip label="실시간 방송 도움말">
+                마이크 권한을 허용해야 시작됩니다. 단말은 방송마다 다른 주소(/live/방송번호)로
+                붙으므로, 내용이 다른 방송을 마을끼리 동시에 내보낼 수 있습니다. 10분을 넘길
+                방송은 「단말에 녹음 저장」을 끄세요.
+              </HelpTip>
+            </h2>
 
             {micBlocked ? (
               <p className="hint hint--warn">{micBlocked}</p>
@@ -597,17 +605,18 @@ export function BroadcastPage() {
                   {liveId !== null ? '방송 중' : busy ? '연결 중…' : '실시간 방송 시작'}
                 </button>
 
-                <p className="hint">
-                  마이크 권한을 허용해야 시작됩니다. 단말은 방송마다 다른 주소
-                  (/live/&lt;방송번호&gt;)로 붙으므로, 내용이 다른 방송을 마을끼리 동시에
-                  내보낼 수 있습니다.
-                </p>
               </>
             )}
           </section>
 
           <section className="card">
-            <h2 className="section-title">파일 방송</h2>
+            <h2 className="section-title">
+              파일 방송
+              <HelpTip label="파일 방송 도움말">
+                단말은 MQTT 로 명령을 받고 서버에서 직접 파일을 내려받습니다. 다운로드가 끝나면
+                자동 재생됩니다.
+              </HelpTip>
+            </h2>
 
           <div className="field">
             <label htmlFor="b-file">파일</label>
@@ -643,11 +652,6 @@ export function BroadcastPage() {
           >
             {busy ? '전송 중…' : '파일 방송 시작'}
           </button>
-
-            <p className="hint">
-              단말은 MQTT 로 명령을 받고 서버에서 직접 파일을 내려받습니다. 다운로드가 끝나면
-              자동 재생됩니다.
-            </p>
           </section>
         </div>
       </div>

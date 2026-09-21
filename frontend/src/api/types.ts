@@ -76,6 +76,8 @@ export interface Me {
   /** 소속 기관. 기관 관리자만 있다 — 지역 관리 트리의 뿌리가 이 마디다. */
   organization_id: number | null;
   organization_name: string | null;
+  /** 임시 비밀번호 계정 — 새 비밀번호를 정하기 전까지 변경 화면만 쓴다(향후검토 10번). */
+  must_change_password: boolean;
 }
 
 export interface LoginResponse {
@@ -269,6 +271,8 @@ export interface User {
   /** 기관 관리자의 소속 기관. 다른 역할은 null. */
   organization_id: number | null;
   organization_name: string | null;
+  /** 임시 비밀번호를 받고 아직 바꾸지 않았다. */
+  must_change_password: boolean;
 }
 
 export interface UserCreate {

@@ -44,6 +44,14 @@ def _check_value(field: str, value: int) -> None:
         )
 
 
+def device_fields_changed(current: object, data: dict[str, int]) -> bool:
+    """단말 CONFIG 필드 중 값이 달라진 것이 있는가. 같은 값을 다시 보낸 것은 변경이 아니다."""
+    return any(
+        field in DEVICE_CONFIG_FIELDS and getattr(current, field) != value
+        for field, value in data.items()
+    )
+
+
 async def update_config(
     db: AsyncSession, payload: ConfigUpdate, publisher: MqttPublisher
 ) -> ConfigOut:
@@ -60,11 +68,16 @@ async def update_config(
 
     for field, value in data.items():
         _check_value(field, value)
-        setattr(config, field, value)
 
-    # 단말로 나가지 않는 설정(중지 응답 대기 시간)만 바뀌었으면 버전을 올리지 않는다.
-    # 올리면 전 단말이 내용상 같은 CONFIG 를 다시 받고, 적용 확인까지 오간다.
-    device_changed = any(field in DEVICE_CONFIG_FIELDS for field in data)
+    # 단말로 나가는 값이 **실제로 바뀌었을 때만** 버전을 올린다. 올리면 전 단말이 CONFIG 를
+    # 다시 받고 적용 확인까지 오간다.
+    #
+    # 예전에는 "요청에 단말 필드가 들어 있는가"로 봤다. 설정 화면은 저장할 때 모든 값을
+    # 보내므로, 응답 대기 시간만 바꿔도 매번 전 단말에 재발행됐다(2026-09-21 로컬 시험
+    # 에서 발견 — 화면의 "단말 재발행 없음" 안내가 한 번도 나오지 않았다).
+    device_changed = device_fields_changed(config, data)
+    for field, value in data.items():
+        setattr(config, field, value)
     if device_changed:
         config.config_version += 1
     await db.flush()

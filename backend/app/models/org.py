@@ -6,12 +6,14 @@ import datetime as dt
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
     Integer,
     String,
+    false,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -132,6 +134,10 @@ class User(Base):
     #: 이 시각이 지나면 계정을 쓸 수 없고 정리 작업이 지운다(문제점 26번).
     #: NULL 이면 무기한 — 운영을 책임지는 상시 계정에만 쓴다.
     expires_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    #: 임시 비밀번호로 바뀐 계정. 새 비밀번호를 정하기 전까지 다른 API 를 막는다(0019).
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -129,6 +129,11 @@ export const api = {
       }),
     logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
     me: () => request<Me>('/api/auth/me'),
+    changePassword: (currentPassword: string, newPassword: string) =>
+      request<Me>('/api/auth/password', {
+        method: 'POST',
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      }),
   },
 
   organizations: {
@@ -170,6 +175,9 @@ export const api = {
     update: (id: number, body: UserUpdate) =>
       request<User>(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: number) => request<void>(`/api/users/${id}`, { method: 'DELETE' }),
+    /** 임시 비밀번호 발급 — 응답에서 한 번만 나온다. */
+    tempPassword: (id: number) =>
+      request<{ password: string }>(`/api/users/${id}/temp-password`, { method: 'POST' }),
   },
 
   schedules: {

@@ -75,7 +75,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 |---:|---|
 | 400 | `BAD_REQUEST`, `NO_TARGET_DEVICE`, `NO_ONLINE_TARGET`, `CONFIG_OUT_OF_RANGE`, `FILE_TOO_LARGE`, `FILE_TOO_LONG`, `UNSUPPORTED_FILE_TYPE`, `EMPTY_FILE`, `STREAM_URL_TOO_LONG`, `STREAM_URL_MUST_BE_HTTPS`, `ICECAST_UNAVAILABLE` |
 | 401 | `UNAUTHORIZED`, `INVALID_CREDENTIALS` |
-| 403 | `FORBIDDEN`, `SUPER_ADMIN_REQUIRED`, `VILLAGE_OUT_OF_SCOPE` |
+| 403 | `FORBIDDEN`, `SUPER_ADMIN_REQUIRED`, `VILLAGE_OUT_OF_SCOPE`, `PASSWORD_CHANGE_REQUIRED` |
 | 404 | `DEVICE_NOT_FOUND`, `VILLAGE_NOT_FOUND`, `ZONE_NOT_FOUND`, `USER_NOT_FOUND`, `FILE_NOT_FOUND`, `BROADCAST_NOT_FOUND` |
 | 409 | `DUPLICATE_USERNAME`, `DEVICE_ALREADY_EXISTS`, `BROADCAST_OVERLAP`, `FILE_IN_USE`, `SCHEDULE_TARGET_IN_USE`, `ORGANIZATION_IN_USE`, `BROADCAST_ALREADY_ENDED`, `BROADCAST_STOP_PENDING` |
 | 422 | `VALIDATION_FAILED` |
@@ -124,7 +124,15 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 `GET /api/auth/me` — 로그인
 
-로그인 응답의 `user`와 같은 구조를 최신 DB 기준으로 반환한다. 상단 담당 범위와 권한 복구에 사용한다.
+로그인 응답의 `user`와 같은 구조를 최신 DB 기준으로 반환한다. 상단 담당 범위와 권한 복구에 사용한다. `must_change_password`가 true면 화면은 비밀번호 변경 화면만 보여준다.
+
+### 2.2a 자기 비밀번호 변경
+
+`POST /api/auth/password` — 로그인, `{current_password, new_password}` → 갱신된 `me`
+
+새 비밀번호는 8~64자. 현재 비밀번호가 틀리면 `WRONG_PASSWORD`, 같은 값이면 `PASSWORD_UNCHANGED`. 성공하면 `must_change_password`가 풀린다.
+
+**임시 비밀번호 계정(향후검토 10번, 2026-09-21).** 관리자가 임시 비밀번호를 발급하면 그 계정은 새 비밀번호를 정하기 전까지 `/api/auth/me`·`/api/auth/password`·`/api/auth/logout` 외 모든 API가 `403 PASSWORD_CHANGE_REQUIRED`다. 화면만이 아니라 서버가 막는다(`deps.get_current_user`). 비밀번호는 bcrypt 해시로만 저장하므로 원래 값을 「확인」하는 기능은 두지 않는다.
 
 ### 2.3 로그아웃
 
@@ -192,7 +200,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | `live_bitrate_kbps` | 16 또는 24 | 아니오 |
 | `file_bitrate_kbps` | 16 또는 24 | 아니오 |
 
-단말 CONFIG 필드가 변경될 때만 `config_version`을 올리고 retained CONFIG를 재발행한다.
+단말 CONFIG 필드의 **값이 실제로 달라졌을 때만** `config_version`을 올리고 retained CONFIG를 재발행한다. 같은 값을 다시 보낸 것은 변경이 아니다. (~2026-09-20에는 요청에 단말 필드가 「들어 있기만」 해도 올렸다 — 화면은 저장 때 모든 값을 보내므로 응답 대기 시간만 바꿔도 매번 전 단말에 재발행됐다. 2026-09-21 로컬 시험에서 발견해 고쳤다.)
 
 생성되는 mp3는 **모든 프레임이 설정 비트레이트**다. 합성 후 `ffprobe`로 다시 재서 다르면 실패로 처리하고, ffmpeg이 없거나 변환이 실패하면 엔진 출력을 그대로 쓰지 않고 `TTS_UNAVAILABLE`로 거절한다. mp3를 만드는 방식이 바뀌면 `MP3_FORMAT_VERSION`을 올려 TTS 캐시를 무효화한다 — 안 올리면 고친 뒤에도 캐시에 있던 옛 파일이 계속 나간다. TTS 합성과 업로드 재인코딩 모두 `-write_xing 0 -id3v2_version 0`을 붙인다 — LAME이 Xing 태그를 담으려고 첫 프레임만 40kbps로 올리는 탓에, 첫 프레임을 읽는 도구가 파일 전체를 40kbps로 보고했다(문제점 30번).
 
@@ -274,6 +282,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | POST | `/api/users` | 계정 생성 |
 | PATCH | `/api/users/{id}` | 비밀번호·역할·기관·담당 마을·사용 기간 수정 |
 | DELETE | `/api/users/{id}` | 계정 삭제 |
+| POST | `/api/users/{id}/temp-password` | 임시 비밀번호 발급 → `{password}`(10자, 헷갈리는 글자 0 O o 1 l I 제외). **응답에서 한 번만** 나오고 그 계정은 `must_change_password=true`. 관리할 수 있는 계정에만(같은 마디 동료·관할 밖은 `TIER_TOO_LOW`), 자기 계정은 `CANNOT_RESET_SELF` |
 
 생성 body:
 

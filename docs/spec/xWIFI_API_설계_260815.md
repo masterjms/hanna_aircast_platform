@@ -12,8 +12,12 @@ DB 스키마(`xWIFI_DB_스키마_260815.md`) 위에서 REST API를 뽑는다. �
 ```
 POST /api/auth/login       {username, password} -> {token}
 POST /api/auth/logout
-GET  /api/auth/me          -> {username, role, villages: [...]}
+GET  /api/auth/me          -> {username, role, villages: [...], must_change_password}
+POST /api/auth/password    {current_password, new_password} -> me   자기 비밀번호 변경
+POST /api/users/:id/temp-password  -> {password}   임시 비밀번호(한 번만 표시)
 ```
+
+**임시 비밀번호 (2026-09-21, 향후검토 10번)**: 비밀번호는 bcrypt 해시로만 저장해 「확인」할 수 없다. 관리자가 관리하는 계정에 임시 비밀번호를 발급하면 응답에서 한 번만 나오고, 그 계정은 새 비밀번호를 정하기 전까지 me·password·logout 외 모든 API가 403 `PASSWORD_CHANGE_REQUIRED` 다(서버가 막는다). 자기 계정은 `CANNOT_RESET_SELF`, 같은 마디 동료·관할 밖은 `TIER_TOO_LOW`.
 
 **계정 사용 기간 (2026-09-07, 문제점 26번)**: `users.expires_at` 이 지난 계정은 로그인이 401 `ACCOUNT_EXPIRED` 로 막히고, 이미 발급된 토큰도 그 시점부터 거절된다(`get_current_user`). 정리 작업이 매시간 돌며 만료된 계정을 지운다. `expires_at` 이 NULL 이면 무기한이다. 만료된 `super_admin` 이 마지막 한 명이면 지우지 않고 로그인만 막는다 — 기간을 잘못 걸어 관리자가 사라지는 상황을 만들지 않는다.
 

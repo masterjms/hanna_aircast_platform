@@ -15,6 +15,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { SystemConfig } from '../api/types';
+import { HelpTip } from '../components/HelpTip';
+import { Modal } from '../components/Modal';
 
 /**
  * 설정은 두 묶음이다(문제점 리스트 7번). 섞어 두면 "저장하면 전 단말에 발행된다"는
@@ -142,6 +144,14 @@ export function SettingsPage() {
   });
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  // 저장 확인(향후검토 1번). 단말 CONFIG 가 바뀌면 전 단말에 재발행되므로 화면에 뜬 임의
+  // 네 자리를 그대로 입력해야 저장한다. 서버 안에서만 쓰는 값만 바뀌면 묻지 않는다.
+  const [confirmCode, setConfirmCode] = useState<string | null>(null);
+  const [typed, setTyped] = useState('');
+
+  const deviceChanged =
+    config !== null &&
+    FIELDS.some((f) => f.group === 'device' && form[f.key] !== config[f.key as keyof SystemConfig]);
 
   useEffect(() => {
     void (async () => {
@@ -167,8 +177,31 @@ export function SettingsPage() {
     })();
   }, []);
 
-  const onSubmit = async (e: FormEvent) => {
+  const onSubmit = (e: FormEvent) => {
     e.preventDefault();
+    setMessage(null);
+    if (deviceChanged) {
+      const n = crypto.getRandomValues(new Uint16Array(1))[0] % 10000;
+      setConfirmCode(String(n).padStart(4, '0'));
+      setTyped('');
+      return;
+    }
+    void save();
+  };
+
+  const onConfirm = () => {
+    const ok = typed.trim() === confirmCode;
+    setConfirmCode(null);
+    setTyped('');
+    if (!ok) {
+      // 틀리면 알리고 반영하지 않은 채 빠져나온다(향후검토 1번 대책 그대로).
+      setMessage({ tone: 'error', text: '확인 숫자가 틀려 저장하지 않았습니다.' });
+      return;
+    }
+    void save();
+  };
+
+  const save = async () => {
     setBusy(true);
     setMessage(null);
     try {
@@ -196,10 +229,23 @@ export function SettingsPage() {
   return (
     <>
       <div className="page-head">
-        <h1>설정</h1>
+        <h1>
+          설정
+          <HelpTip label="저장하면 어떻게 되나요">
+            <strong>단말 공통 CONFIG</strong>를 바꾸면 config_version 이 올라가고 서버가 MQTT
+            CONFIG(retain)를 다시 발행합니다. 단말은 버전이 바뀔 때만 값을 적용하고 STATUS 로
+            알려 줍니다. 반영 여부는 단말 관리의 CFG 열에서 봅니다. 이때는 저장 전에 네 자리
+            확인 숫자를 입력합니다.
+            <br />
+            <br />
+            <strong>방송 응답 시간</strong>과 <strong>오디오 품질</strong>은 서버 안에서만 쓰여
+            단말에 발행되지 않습니다(라이브 준비 제한만 방송 시작 명령에 실려 나갑니다). 오디오
+            품질은 다음 방송·이후 올리는 파일부터 적용됩니다.
+          </HelpTip>
+        </h1>
         <p>
-          단말 공통 CONFIG · 방송 응답 시간 · 오디오 품질.
-          {config && ` 현재 config_version ${config.config_version}`}
+          {config &&
+            `현재 config_version ${config.config_version} · 마지막 저장 ${new Date(config.updated_at).toLocaleString('ko-KR')}`}
         </p>
       </div>
 
@@ -217,13 +263,17 @@ export function SettingsPage() {
         <form className="settings-card" onSubmit={onSubmit}>
           {GROUPS.map((g) => (
             <section key={g.key} className="settings-group">
-              <h2 className="settings-group__title">{g.title}</h2>
-              <p className="settings-group__hint">{g.hint}</p>
+              <h2 className="settings-group__title">
+                {g.title}
+                <HelpTip label={`${g.title} 도움말`}>{g.hint}</HelpTip>
+              </h2>
               {FIELDS.filter((f) => f.group === g.key).map((f) => (
                 <div className="settings-row" key={f.key}>
                   <div className="settings-row__text">
-                    <div className="settings-row__label">{f.label}</div>
-                    <div className="settings-row__hint">{f.hint}</div>
+                    <div className="settings-row__label">
+                      {f.label}
+                      <HelpTip label={`${f.label} 도움말`}>{f.hint}</HelpTip>
+                    </div>
                   </div>
                   {'choices' in f ? (
                     <select
@@ -263,31 +313,61 @@ export function SettingsPage() {
             {busy ? '저장 중…' : '저장'}
           </button>
         </form>
-
-        <aside className="settings-aside">
-          <h2>저장하면 어떻게 되나요</h2>
-          <p>
-            <strong>단말 공통 CONFIG</strong>를 바꾸면 config_version 이 올라가고 서버가 MQTT
-            CONFIG(retain)를 다시 발행합니다. 단말은 버전이 바뀔 때만 값을 적용하고, 적용 직후
-            STATUS 로 echo 합니다. 반영 여부는 단말 관리 화면의 CFG 열에서 확인하세요.
-          </p>
-          <p>
-            <strong>방송 응답 시간</strong>은 서버 안에서만 쓰이는 값이라 단말에 발행되지
-            않습니다. 라이브 준비 제한만 방송을 시작할 때 LIVE_START 명령에 실려 나갑니다.
-          </p>
-          <p>
-            <strong>오디오 품질</strong>도 단말에 발행되지 않습니다. 라이브는 다음 방송부터,
-            MP3 는 이후에 올리거나 합성하는 파일부터 적용됩니다. 이미 파일함에 있는 파일은
-            그대로 둡니다.
-          </p>
-          {config && (
-            <div className="settings-aside__meta">
-              마지막 저장 {new Date(config.updated_at).toLocaleString('ko-KR')} · v
-              {config.config_version}
-            </div>
-          )}
-        </aside>
       </div>
+
+      {confirmCode !== null && (
+        <Modal
+          title="저장 확인"
+          onClose={() => {
+            setConfirmCode(null);
+            setTyped('');
+          }}
+          footer={
+            <>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setConfirmCode(null);
+                  setTyped('');
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={onConfirm}
+                disabled={typed.trim().length !== 4}
+              >
+                저장
+              </button>
+            </>
+          }
+        >
+          <p style={{ marginTop: 0 }}>
+            단말 공통 CONFIG 가 바뀌어 <strong>전 단말에 다시 발행</strong>됩니다. 아래 네 자리를
+            그대로 입력하세요.
+          </p>
+          <div className="confirm-code mono" aria-label={`확인 숫자 ${confirmCode.split('').join(' ')}`}>
+            {confirmCode}
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label htmlFor="settings-confirm">확인 숫자</label>
+            <input
+              id="settings-confirm"
+              className="mono"
+              inputMode="numeric"
+              maxLength={4}
+              value={typed}
+              onChange={(e) => setTyped(e.target.value.replace(/\D/g, ''))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && typed.trim().length === 4) onConfirm();
+              }}
+            />
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
