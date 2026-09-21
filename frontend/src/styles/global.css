@@ -2621,17 +2621,22 @@ input.masked {
 .bc-alert__detail { margin-top: 6px; font-size: 13px; opacity: 0.75; word-break: break-all; }
 
 /* ── 방송하기: 시선 안내(2026-09-21) ─────────────────────────────────────
-   아직 안 끝난 첫 단계의 테두리가 은은하게 숨쉰다. 끝나면 번호가 ✓ 로 바뀌고 빛은
+   아직 안 끝난 첫 단계의 테두리가 파랗게 깜빡인다(1.2초 주기). 끝나면 번호가 ✓ 로 바뀌고 빛은
    다음 단계로 넘어간다. 움직임을 줄인 환경에서는 파란 테두리만 남는다. */
 .bc-step, .bc-go { transition: border-color 0.25s ease; }
 .bc-step.is-guide, .bc-go.is-guide {
   border-color: var(--accent);
-  animation: bc-guide 2s ease-in-out infinite;
+  /* 테두리 굵기를 바꾸면 칸이 1px 씩 흔들린다 — 바깥선(outline)을 겹쳐 깜빡인다 */
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  animation: bc-guide 1.2s ease-in-out infinite;
 }
 @keyframes bc-guide {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(49, 130, 246, 0); }
-  50% { box-shadow: 0 0 0 4px rgba(49, 130, 246, 0.28); }
+  0%, 100% { outline-color: var(--accent); box-shadow: 0 0 0 5px rgba(49, 130, 246, 0.32); }
+  50% { outline-color: rgba(49, 130, 246, 0.12); box-shadow: 0 0 0 0 rgba(49, 130, 246, 0); }
 }
+.bc-wait { margin: 0; font-size: 18px; color: var(--text-3); }
+.bc-step--wait { opacity: 0.7; }
 .bc-step__num.is-done { background: var(--ok-tint); color: var(--ok-text); }
 .bc-howto { margin: 0; padding-left: 26px; font-size: 19px; line-height: 2; color: var(--text-2); }
 .bc-howto strong { color: var(--text); }
