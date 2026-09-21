@@ -109,12 +109,10 @@ export function FilesPage() {
 
   return (
     <>
-      <div className="page-head page-head--row">
-        <div>
-          <h1>파일함</h1>
-          <p>방송용 오디오 {files.length}개 · mp3 업로드 또는 TTS 로 만듭니다.</p>
-        </div>
-        <div style={{ display: 'flex', gap: 8 }}>
+      <div className="page-head">
+        {/* 버튼은 제목 바로 옆 — 오른쪽 끝에 두면 넓은 화면에서 눈에 안 띈다(2026-09-21). */}
+        <div className="page-head__titlerow">
+          <h1>방송 자료</h1>
           <input
             ref={inputRef}
             type="file"
@@ -123,18 +121,19 @@ export function FilesPage() {
             hidden
             onChange={(e) => void upload(e.target.files)}
           />
-          <button type="button" className="btn" onClick={() => setTtsOpen(true)}>
-            TTS 만들기
+          <button type="button" className="btn btn--lg" onClick={() => setTtsOpen(true)}>
+            ✎ 글로 음성 만들기
           </button>
           <button
             type="button"
-            className="btn btn--primary"
+            className="btn btn--primary btn--lg"
             onClick={() => inputRef.current?.click()}
             disabled={uploading}
           >
-            {uploading ? '업로드 중…' : '파일 업로드'}
+            {uploading ? '올리는 중…' : '＋ 소리 파일 올리기'}
           </button>
         </div>
+        <p>방송용 소리 {files.length}개 · mp3 파일을 올리거나, 글을 적어 음성(TTS)으로 만듭니다.</p>
       </div>
 
       {error && (

@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { ApiError } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { Logo } from '../components/Logo';
+import { LegalLinks } from './legal/LegalLayout';
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -72,6 +73,7 @@ export function LoginPage() {
 
           <div className="login__foot">HANNA ELECTRONICS · 마을방송 운영서버</div>
         </form>
+        <LegalLinks className="legal-links--login" />
       </div>
     </div>
   );

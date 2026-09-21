@@ -12,6 +12,7 @@ import { NavLink } from 'react-router-dom';
 import type { Role } from '../../api/types';
 import { useAuth } from '../../auth/AuthContext';
 import { ROLE_LABEL } from '../../lib/roles';
+import { LegalLinks } from '../../pages/legal/LegalLayout';
 import { Logo } from '../Logo';
 
 interface MenuItem {
@@ -115,6 +116,9 @@ export function Sidebar() {
           로그아웃
         </button>
       </div>
+
+      {/* 저작권·약관 — 본문 아래에 띠를 두면 「화면에 맞추기」 높이를 먹는다. 메뉴 맨 아래 빈자리에 둔다. */}
+      <LegalLinks className="legal-links--sidebar" />
     </aside>
   );
 }
@@ -146,6 +150,12 @@ export function MobileNav() {
       <button type="button" className="tabbar__item" onClick={() => void logout()}>
         로그아웃
       </button>
+      <NavLink to="/terms" className="tabbar__item tabbar__item--minor">
+        약관
+      </NavLink>
+      <NavLink to="/privacy" className="tabbar__item tabbar__item--minor">
+        개인정보
+      </NavLink>
     </nav>
   );
 }

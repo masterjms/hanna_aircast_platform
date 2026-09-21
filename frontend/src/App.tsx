@@ -23,6 +23,8 @@ import { DevicesPage } from './pages/DevicesPage';
 import { FilesPage } from './pages/FilesPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
 import { LoginPage } from './pages/LoginPage';
+import { PrivacyPage } from './pages/legal/PrivacyPage';
+import { TermsPage } from './pages/legal/TermsPage';
 import { RegionsPage } from './pages/RegionsPage';
 import { SchedulesPage } from './pages/SchedulesPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -79,6 +81,11 @@ function ComingSoon({ title, phase }: { title: string; phase: string }) {
 
 export function App() {
   const { user, loading } = useAuth();
+  const { pathname } = useLocation();
+
+  // 약관·개인정보 처리방침은 로그인 여부와 상관없이 열린다(처리방침은 첫 화면에서 갈 수 있어야 한다).
+  if (pathname === '/terms') return <TermsPage />;
+  if (pathname === '/privacy') return <PrivacyPage />;
 
   // 저장된 토큰으로 세션을 복구하는 동안 로그인 화면을 깜빡이지 않게 한다.
   if (loading) {
