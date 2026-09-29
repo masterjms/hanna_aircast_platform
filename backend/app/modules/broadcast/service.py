@@ -27,7 +27,7 @@ from app.core.ids import next_job_id
 from app.core.scope import VillageScope
 from app.core.village_token import village_tokens
 from app.db import session_scope
-from app.errors import ApiError, BroadcastOverlap, NotFound
+from app.errors import ApiError, BroadcastOverlap, MqttUnavailable, NotFound
 from app.live.icecast import IcecastSource
 from app.live.mount import mount_path, stream_url
 from app.live.registry import LiveRegistry, LiveSession
@@ -106,6 +106,34 @@ async def _active_events(db: AsyncSession) -> list[BroadcastEvent]:
         .order_by(BroadcastEvent.triggered_at)
     )
     return list(rows.all())
+
+
+def _ensure_mqtt(publisher: MqttPublisher) -> None:
+    """브로커가 끊겨 있으면 아무것도 만들기 전에 503 으로 끝낸다.
+
+    발행 직전 커밋(_commit_before_publish) 뒤에 실패하면 방송 기록이 「발행 실패」로 남고
+    화면에도 잠깐 보인다. 가장 흔한 실패(브로커 끊김)는 그 전에 걸러 흔적을 남기지 않는다.
+    """
+    if not publisher.connection.is_connected:
+        raise MqttUnavailable()
+
+
+async def _commit_before_publish(db: AsyncSession) -> None:
+    """명령을 보내기 **전에** 방송 기록·다운로드 토큰·중지 표시를 커밋한다(부하 검토 P0-1).
+
+    예전에는 flush → 발행 → (응답 직전) 커밋 순이었다. 단말은 명령을 받자마자 움직이는데
+    결과는 MQTT 수신 쪽의 다른 세션이 처리하므로 커밋 전 행이 안 보인다:
+      · FILE_START 를 받은 단말이 /dl/<token> 을 바로 두드리면 토큰이 없어 404.
+      · 즉시 거절(BUSY 등) 결과가 방송을 못 찾아 event_id 없이 저장되고, QoS1 재전송은
+        중복 키에 걸려 버려져 끝내 방송에 붙지 않는다 — 응답 집계가 모자라 방송이 안 끝난다.
+    로컬 실측(2026-09-29, 단말 지정 200대 · 즉시 응답): 404 195건, 고아 결과 26건.
+
+    커밋하면 방송 시작 잠금(어드바이저리 xact 락)도 풀린다. 겹침 검사는 이미 끝났고 이
+    방송은 커밋돼 다음 요청의 겹침 검사에 보이므로, 긴 발행 동안 다른 방송을 막지 않게 된다.
+
+    호출부 세션은 중첩 트랜잭션(SAVEPOINT) 안이면 안 된다 — commit() 이 바깥까지 커밋한다.
+    """
+    await db.commit()
 
 
 async def _lock_broadcast_start(db: AsyncSession) -> None:
@@ -673,6 +701,7 @@ async def start_file_broadcast(
             code="FILE_MISSING_ON_DISK",
         )
 
+    _ensure_mqtt(publisher)
     # 검사부터 이벤트 생성까지를 한 덩어리로 묶는다(아래 함수 주석 참고).
     await _lock_broadcast_start(db)
 
@@ -719,14 +748,24 @@ async def start_file_broadcast(
     )
     db.add(event)
     await db.flush()
+    village_kw = await _village_kw(db, payload.target_scope, payload.target_ids)
+    # 토큰·이력이 다른 세션에 보인 뒤에 보낸다(함수 주석).
+    await _commit_before_publish(db)
 
-    await publisher.publish_command(
-        payload=cmd,
-        target_scope=payload.target_scope,
-        scope=scope,
-        **await _village_kw(db, payload.target_scope, payload.target_ids),
-        macs=macs,
-    )
+    try:
+        await publisher.publish_command(
+            payload=cmd,
+            target_scope=payload.target_scope,
+            scope=scope,
+            **village_kw,
+            macs=macs,
+        )
+    except Exception:
+        # 이미 일부 단말은 받았을 수 있다. 이력은 「발행 실패」로 끝내 남긴다 — 겹침 검사가
+        # 이 방송에 계속 걸리면 안 되고, 받은 단말의 늦은 결과도 붙을 자리가 있어야 한다.
+        await end_event(db, event, reason="발행 실패")
+        await db.commit()
+        raise
     log.info("파일 방송 시작 job_id=%s 대상 %d대 file=%s", job_id, len(macs), audio.filename)
 
     # 단말은 파일을 다 받아 무결성 검증을 마치면 FILE_RESULT ok=true 를 보내고 그때
@@ -779,6 +818,17 @@ async def stop_file_broadcast(
         online_only=True,
     )
 
+    # 예전에는 여기서 바로 ended_at 을 찍었다. 단말이 실제로 멈췄는지 확인하지 않고
+    # 화면만 "중지됨"이 되는 게 문제였다(문제점 4번). 이제 중지 요청 시각만 남기고
+    # 단말의 FILE_RESULT 를 기다린다 — 다 오면 그 순간, 안 오면 대기 시간 뒤에 끝난다.
+    # 중지 표시는 보내기 전에 커밋한다 — 단말 응답이 먼저 오면 수신 쪽이 이 표시를 못 봐
+    # "전원 응답 = 끝"으로 닫지 못하고 대기 시간을 다 채운다(_commit_before_publish).
+    wait_sec = await _config_int(db, "file_wait_sec", 30)
+    event.stop_requested_at = dt.datetime.now(dt.timezone.utc)
+    await db.flush()
+    village_kw = await _village_kw(db, TargetScope(event.target_scope), event.target_ids)
+    await _commit_before_publish(db)
+
     if macs and event.job_id is not None and event.file_id is not None:
         cmd = publisher.file_stop_payload(job_id=event.job_id)
         try:
@@ -786,7 +836,7 @@ async def stop_file_broadcast(
                 payload=cmd,
                 target_scope=TargetScope(event.target_scope),
                 scope=scope,
-                **await _village_kw(db, TargetScope(event.target_scope), event.target_ids),
+                **village_kw,
                 macs=macs,
             )
         except Exception:  # noqa: BLE001
@@ -794,12 +844,6 @@ async def stop_file_broadcast(
             # 죽은 방송에 계속 걸려서 다음 방송을 못 하게 된다.
             log.exception("FILE_STOP 발행 실패 (이력은 종료 처리): event=%d", event_id)
 
-    # 예전에는 여기서 바로 ended_at 을 찍었다. 단말이 실제로 멈췄는지 확인하지 않고
-    # 화면만 "중지됨"이 되는 게 문제였다(문제점 4번). 이제 중지 요청 시각만 남기고
-    # 단말의 FILE_RESULT 를 기다린다 — 다 오면 그 순간, 안 오면 대기 시간 뒤에 끝난다.
-    wait_sec = await _config_int(db, "file_wait_sec", 30)
-    event.stop_requested_at = dt.datetime.now(dt.timezone.utc)
-    await db.flush()
     log.info("파일 방송 중지 요청 job_id=%s — 단말 응답 %d초 대기", event.job_id, wait_sec)
     asyncio.create_task(
         _force_end_after(event.id, wait_sec, reason="중지 응답 대기 시간 초과"),
@@ -844,6 +888,8 @@ async def start_live_broadcast(
     단말마다 재시도 로직이 돌아간다. 소스를 먼저 세워두면 단말은 붙는 즉시
     (무음이라도) 스트림을 받는다.
     """
+    # Icecast 소스를 세우기 전에 — 브로커가 없으면 세워 봐야 곧바로 걷어야 한다.
+    _ensure_mqtt(publisher)
     await _lock_broadcast_start(db)
 
     macs = await _resolve_targets(
@@ -888,26 +934,32 @@ async def start_live_broadcast(
         )
     )
 
+    start_cmd = publisher.live_start_payload(
+        job_id=session_id,
+        stream_url=url,
+        record_flash=payload.record_flash,
+        # 단말은 이 값 + 5초까지 기다렸다가 LIVE_READY 를 보낸다(§3.1).
+        # 화면의 "준비 지연" 기준도 같은 설정에서 +5 로 계산한다.
+        ready_timeout_sec=await _config_int(db, "live_ready_timeout_sec", 30),
+    )
+    village_kw = await _village_kw(db, payload.target_scope, payload.target_ids)
+    # 즉시 거절(BUSY 등)한 단말의 LIVE_READY 가 방송에 붙도록 먼저 커밋한다.
+    await _commit_before_publish(db)
+
     try:
         await publisher.publish_command(
-            payload=publisher.live_start_payload(
-                job_id=session_id,
-                stream_url=url,
-                record_flash=payload.record_flash,
-                # 단말은 이 값 + 5초까지 기다렸다가 LIVE_READY 를 보낸다(§3.1).
-                # 화면의 "준비 지연" 기준도 같은 설정에서 +5 로 계산한다.
-                ready_timeout_sec=await _config_int(db, "live_ready_timeout_sec", 30),
-            ),
+            payload=start_cmd,
             target_scope=payload.target_scope,
             scope=scope,
-            **await _village_kw(db, payload.target_scope, payload.target_ids),
+            **village_kw,
             macs=macs,
         )
     except Exception:
-        # 발행이 실패하면 아무 단말도 못 붙는다. 세워둔 소스를 정리하고
-        # 이력도 끝난 것으로 표시한다 — 유령 세션이 겹침 검사를 막으면 안 된다.
-        # end_event 가 레지스트리에서 세션을 빼고 소스를 닫는다.
+        # 발행이 실패하면(일부만 받았을 수 있다) 세워둔 소스를 정리하고 이력도 끝난 것으로
+        # 남긴다 — 유령 세션이 겹침 검사를 막으면 안 된다. end_event 가 레지스트리에서
+        # 세션을 빼고 소스를 닫는다. 예전에는 뒤이은 롤백이 이 종료 기록까지 지웠다.
         await end_event(db, event, reason="발행 실패")
+        await db.commit()
         raise
 
     log.info("실시간 방송 시작 session=%d mount=%s 대상 %d대", session_id, mount, len(macs))
@@ -1020,18 +1072,6 @@ async def stop_live_broadcast(
         online_only=True,
     )
 
-    if macs and session_id is not None:
-        try:
-            await publisher.publish_command(
-                payload=publisher.live_stop_payload(job_id=session_id),
-                target_scope=TargetScope(event.target_scope),
-                scope=scope,
-                **await _village_kw(db, TargetScope(event.target_scope), event.target_ids),
-                macs=macs,
-            )
-        except Exception:  # noqa: BLE001
-            log.exception("LIVE_STOP 발행 실패 (이력은 종료 처리): event=%d", event_id)
-
     # 스트림은 아직 닫지 않는다. 세션에 "중지 중" 표시만 해 두면 무음 워치독이
     # 비켜 준다(마이크가 끊겨 무음이 쌓여도 정지 절차의 일부다).
     if session_id is not None:
@@ -1042,9 +1082,25 @@ async def stop_live_broadcast(
     # 단말의 LIVE_RESULT 를 기다린다(문제점 5번). 다 오면 그 순간 끝나고,
     # 못 받은 단말이 있어도 대기 시간이 지나면 종료로 확정한다. 실측 1.5초라
     # 10초는 여유가 크지만, 타임아웃은 상한이지 고정 대기가 아니다.
+    # 중지 표시는 보내기 전에 커밋한다(stop_file_broadcast 와 같은 이유).
     wait_sec = await _config_int(db, "live_stop_wait_sec", 10)
     event.stop_requested_at = dt.datetime.now(dt.timezone.utc)
     await db.flush()
+    village_kw = await _village_kw(db, TargetScope(event.target_scope), event.target_ids)
+    await _commit_before_publish(db)
+
+    if macs and session_id is not None:
+        try:
+            await publisher.publish_command(
+                payload=publisher.live_stop_payload(job_id=session_id),
+                target_scope=TargetScope(event.target_scope),
+                scope=scope,
+                **village_kw,
+                macs=macs,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("LIVE_STOP 발행 실패 (이력은 종료 처리): event=%d", event_id)
+
     log.info("실시간 방송 중지 요청 session=%s — 단말 응답 %d초 대기", session_id, wait_sec)
     asyncio.create_task(
         _force_end_after(event.id, wait_sec, reason="중지 응답 대기 시간 초과"),

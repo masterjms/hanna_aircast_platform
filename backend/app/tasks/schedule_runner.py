@@ -17,6 +17,11 @@ INSERT 를 방송보다 **먼저** 하므로 서버가 재시작해도, 같은 �
 
 재시도는 하지 않는다. 늦은 마을방송은 사고다.
 
+트랜잭션은 둘로 나눈다(부하 검토 P0-1, 2026-09-29). ① 회차 잡기(claim)·늦음 판정을 한
+트랜잭션에서 커밋하고, ② 걸 회차마다 새 세션을 열어 방송을 건다. start_file_broadcast 가
+명령을 보내기 전에 스스로 커밋하므로(단말이 곧바로 /dl 을 두드리고 결과를 보낸다) SAVEPOINT
+안에서 부를 수 없다 — commit() 이 바깥 트랜잭션까지 커밋해 버린다.
+
 창에 유예만큼 과거를 포함하는 이유: tick 이 밀려 한 분을 건너뛰어도 그 회차가 다음
 tick 의 창에 들어온다. 이미 처리한 회차는 유니크가 걸러 준다.
 """
@@ -61,7 +66,13 @@ async def _claim(db, schedule_id: int, fire_at: dt.datetime) -> ScheduleRun | No
     return run
 
 
-async def _fire(db, publisher: MqttPublisher, s: Schedule, run: ScheduleRun) -> None:
+async def _fire(db, publisher: MqttPublisher, schedule_id: int, run_id: int) -> str:
+    """회차 하나를 방송으로 건다. 자기 세션(db)을 받아 결과를 run 에 적고 상태를 돌려준다."""
+    s = await db.get(Schedule, schedule_id)
+    run = await db.get(ScheduleRun, run_id)
+    if s is None or run is None:
+        return "skipped"  # 그 사이 규칙이 지워졌다(runs 는 CASCADE 로 같이 사라진다)
+
     target_scope = s.target_scope
     target_ids = [str(t) for t in s.target_ids]
     if target_scope == ScheduleTarget.ORGANIZATION.value:
@@ -70,7 +81,7 @@ async def _fire(db, publisher: MqttPublisher, s: Schedule, run: ScheduleRun) -> 
         )
         if not villages:
             run.status, run.reason = "skipped", "관할에 마을이 없음"
-            return
+            return run.status
         target_scope, target_ids = TargetScope.VILLAGE.value, [str(v) for v in villages]
 
     payload = FileBroadcastRequest(
@@ -80,27 +91,34 @@ async def _fire(db, publisher: MqttPublisher, s: Schedule, run: ScheduleRun) -> 
         store_flash=s.store_flash,
         autoplay=True,
     )
+    fire_at = run.fire_at
     try:
-        async with db.begin_nested():
-            out = await broadcast_service.start_file_broadcast(
-                db,
-                payload,
-                VillageScope.for_super_admin(),
-                publisher,
-                user_id=None,
-                schedule_id=s.id,
-            )
-    except ApiError as exc:
-        # 겹침·온라인 단말 없음·파일 문제 — 규칙은 정상이고 이번 회차만 못 나간 것.
-        run.status, run.reason = "skipped", f"{exc.code}: {exc.message}"[:200]
-        log.info("스케줄 #%d %s 건너뜀: %s", s.id, run.fire_at, run.reason)
-        return
+        out = await broadcast_service.start_file_broadcast(
+            db,
+            payload,
+            VillageScope.for_super_admin(),
+            publisher,
+            user_id=None,
+            schedule_id=s.id,
+        )
     except Exception as exc:  # noqa: BLE001 - 한 규칙의 실패가 다음 규칙을 막으면 안 된다
-        run.status, run.reason = "failed", str(exc)[:200]
-        log.exception("스케줄 #%d %s 실패", s.id, run.fire_at)
-        return
+        # 발행 전 실패면 잠금·반쯤 쓴 행이 남아 있다 — 버리고 run 을 새로 읽어 적는다.
+        # (발행 뒤 실패는 start_file_broadcast 가 이미 「발행 실패」로 끝내 커밋했다.)
+        await db.rollback()
+        run = await db.get(ScheduleRun, run_id)
+        if run is None:
+            return "failed"
+        if isinstance(exc, ApiError):
+            # 겹침·온라인 단말 없음·파일 문제 — 규칙은 정상이고 이번 회차만 못 나간 것.
+            run.status, run.reason = "skipped", f"{exc.code}: {exc.message}"[:200]
+            log.info("스케줄 #%d %s 건너뜀: %s", schedule_id, fire_at, run.reason)
+        else:
+            run.status, run.reason = "failed", str(exc)[:200]
+            log.exception("스케줄 #%d %s 실패", schedule_id, fire_at)
+        return run.status
     run.status, run.event_id = "started", out.id
-    log.info("스케줄 #%d %s → 방송 #%d", s.id, run.fire_at, out.id)
+    log.info("스케줄 #%d %s → 방송 #%d", schedule_id, fire_at, out.id)
+    return run.status
 
 
 async def tick(publisher: MqttPublisher, now: dt.datetime | None = None) -> dict[str, int]:
@@ -109,6 +127,8 @@ async def tick(publisher: MqttPublisher, now: dt.datetime | None = None) -> dict
     start, end = tick_window(now)
     counts = {"started": 0, "skipped": 0, "failed": 0, "claimed_elsewhere": 0}
 
+    # ① 회차 잡기 — 여기서 커밋해 둬야 ② 가 도중에 실패해도 같은 회차가 다시 걸리지 않는다.
+    due: list[tuple[int, int]] = []  # (schedule_id, run_id)
     async with session_scope() as db:
         schedules = (
             await db.scalars(select(Schedule).where(Schedule.enabled.is_(True)))
@@ -125,10 +145,19 @@ async def tick(publisher: MqttPublisher, now: dt.datetime | None = None) -> dict
                 if late > SCHEDULE_GRACE_SEC:
                     run.status, run.reason = "skipped", f"{int(late)}초 늦어 건너뜀"
                     log.warning("스케줄 #%d %s 늦어 건너뜀 (%d초)", s.id, at, int(late))
+                    counts["skipped"] += 1
                 else:
-                    await _fire(db, publisher, s, run)
-                counts[run.status] += 1
+                    due.append((s.id, run.id))
                 await db.flush()
+
+    # ② 회차마다 자기 트랜잭션 — 방송 시작이 명령 전에 스스로 커밋한다.
+    for schedule_id, run_id in due:
+        try:
+            async with session_scope() as db:
+                counts[await _fire(db, publisher, schedule_id, run_id)] += 1
+        except Exception:  # noqa: BLE001 - 결과 기록 실패도 다음 회차를 막지 않는다
+            counts["failed"] += 1
+            log.exception("스케줄 #%d 회차 기록 실패 (run=%d)", schedule_id, run_id)
     return counts
 
 
