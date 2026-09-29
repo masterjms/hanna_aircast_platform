@@ -65,7 +65,10 @@ class BroadcastEvent(Base):
     #: 하므로 조회 때 files 에서 찾지 않고 여기에 박아둔다(0017).
     file_name: Mapped[str | None] = mapped_column(String(255))
     #: 스케줄에 의한 자동 실행이면 채우고, 수동이면 NULL.
-    schedule_id: Mapped[int | None] = mapped_column(ForeignKey("schedules.id"))
+    #: 스케줄이 지워져도 기록은 남고 어느 스케줄이었는지만 비워진다(0021, 문제점 43번).
+    schedule_id: Mapped[int | None] = mapped_column(
+        ForeignKey("schedules.id", ondelete="SET NULL")
+    )
     #: 수동이면 채우고, 스케줄이면 NULL.
     #: 이력은 불변 로그다. 계정이 지워져도 행은 남고 실행자만 비워진다(0014).
     triggered_by: Mapped[int | None] = mapped_column(

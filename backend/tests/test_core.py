@@ -1835,6 +1835,17 @@ class TestFileDeleteConstraints:
         fk = next(iter(File.__table__.c.uploaded_by.foreign_keys))
         assert fk.ondelete == "SET NULL"
 
+    def test_history_does_not_block_schedule_deletion(self):
+        """문제점 43번 — 한 번 실행된 스케줄이 기록에 묶여 안 지워지면, 그 스케줄이 대상으로
+        잡은 단말·마을·파일도 (SCHEDULE_TARGET_IN_USE 로) 영영 못 지운다(0021)."""
+        from app.models.event import BroadcastEvent
+        from app.models.schedule import ScheduleRun
+
+        fk = next(iter(BroadcastEvent.__table__.c.schedule_id.foreign_keys))
+        assert fk.ondelete == "SET NULL"
+        fk = next(iter(ScheduleRun.__table__.c.schedule_id.foreign_keys))
+        assert fk.ondelete == "CASCADE"
+
 
 class TestRepeatLabel:
     def test_covers_every_repeat(self):

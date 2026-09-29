@@ -303,6 +303,12 @@ export function BroadcastPage() {
   const [overlap, setOverlap] = useState<BroadcastOverlapDetail | null>(null);
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  // 예약 완료 알림은 잠깐만 — 남아 있으면 다음 방송 때 무슨 알림인지 헷갈린다.
+  useEffect(() => {
+    if (!done) return;
+    const t = window.setTimeout(() => setDone(null), 15000);
+    return () => window.clearTimeout(t);
+  }, [done]);
   const [busy, setBusy] = useState(false);
   const [busyText, setBusyText] = useState('');
 
@@ -540,9 +546,8 @@ export function BroadcastPage() {
     try {
       if (method === 'mic') {
         setBusyText('마이크를 연결하는 중…');
-        if (await startLive()) {
-          setDone('마이크 방송을 시작했습니다. 말씀하세요. 끝나면 위의 「방송 끄기」를 누르세요.');
-        }
+        // 성공 알림은 따로 띄우지 않는다 — 맨 위 빨간 띠와 ③ 의 소리 막대가 곧 결과다.
+        await startLive();
         return;
       }
       let file: AudioFile | undefined = selectedFile;
@@ -562,8 +567,9 @@ export function BroadcastPage() {
           autoplay: true,
         });
         unused.current = null; // 방송에 썼다 — 지우지 않는다
+        // 성공 알림은 따로 띄우지 않는다 — 맨 위 빨간 띠(진행·방송 끄기)가 곧 결과다.
+        // 예전에는 방송 중에 가려 두었다가 방송이 끝난 뒤에야 뒤늦게 떠서 남았다(문제점 42번).
         active.reload();
-        setDone(`방송을 시작했습니다 — ${targetText || '모든 마을'}. 위에서 진행 상황을 볼 수 있습니다.`);
       } else {
         setBusyText('예약하는 중…');
         const body: ScheduleInput = {
@@ -692,8 +698,8 @@ export function BroadcastPage() {
             )}
           </div>
         )}
-        {/* 지금 방송은 빨간 띠가 곧 결과다 — 같은 말을 두 번 띄워 자리를 먹지 않는다. */}
-      {done && (done.startsWith('예약') || running.length === 0) && (
+        {/* 알림은 예약에만 쓴다. 지금 방송은 빨간 띠가 곧 결과다. */}
+      {done && (
           <div className="bc-done" role="status">
             {done}
             {done.startsWith('예약') && (

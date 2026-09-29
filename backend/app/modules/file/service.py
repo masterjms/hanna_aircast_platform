@@ -437,9 +437,9 @@ async def delete_file(db: AsyncSession, file_id: int) -> None:
     used = (await schedules_using(db, [file_id])).get(file_id, [])
     if used:
         raise ApiError(
-            f"이 파일을 쓰는 스케줄이 {len(used)}건 있습니다 ({', '.join(used[:3])}"
+            f"이 파일을 쓰는 예약 방송이 {len(used)}건 있습니다 ({', '.join(used[:3])}"
             f"{' 외' if len(used) > 3 else ''}). "
-            "스케줄을 먼저 지우거나 다른 파일로 바꿔 주세요.",
+            "「예약 방송」 화면에서 그 예약을 먼저 지우거나 다른 파일로 바꿔 주세요.",
             code="FILE_IN_USE",
             detail={"schedules": used},
         )

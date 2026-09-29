@@ -198,9 +198,9 @@ async def ensure_not_schedule_target(
     if not used:
         return
     raise ScheduleTargetInUse(
-        f"이 {what}을 대상으로 하는 자동방송이 {len(used)}건 있습니다 ({', '.join(used[:3])}"
+        f"이 {what}을 대상으로 하는 예약 방송이 {len(used)}건 있습니다 ({', '.join(used[:3])}"
         f"{' 외' if len(used) > 3 else ''}). "
-        "자동방송 화면에서 그 스케줄을 먼저 지우거나 대상을 바꿔 주세요.",
+        "「예약 방송」 화면에서 그 예약을 먼저 지우거나 대상을 바꿔 주세요.",
         detail={"schedules": used},
     )
 

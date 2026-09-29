@@ -154,7 +154,7 @@ class ScheduleTargetInUse(Conflict):
     """
 
     code = "SCHEDULE_TARGET_IN_USE"
-    message = "자동방송 스케줄이 대상으로 쓰고 있어 삭제할 수 없습니다."
+    message = "예약 방송이 대상으로 쓰고 있어 삭제할 수 없습니다."
 
 
 class DuplicateUsername(Conflict):
