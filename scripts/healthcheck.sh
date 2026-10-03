@@ -3,8 +3,15 @@
 # 서버 내부 점검 → Slack (cron 으로 매일 실행)
 #
 #   bash scripts/healthcheck.sh          이상이 있을 때만 Slack 으로 보낸다
-#   bash scripts/healthcheck.sh --always 정상이어도 보낸다 (일일 요약용)
+#   bash scripts/healthcheck.sh --always 정상이어도 한 줄 요약을 보낸다 (매일 cron 에 권장 —
+#                                        "조용함 = 정상" 과 "cron 이 안 돌아 조용함" 을 구분한다)
 #   bash scripts/healthcheck.sh --dry    화면에만 출력
+#
+# cron 등록 예 (매일 08:05 KST = 23:05 UTC, EC2 기본 시간대가 UTC 일 때):
+#   5 23 * * *  cd ~/xwifi-server && bash scripts/healthcheck.sh --always >> ~/healthcheck.log 2>&1
+#
+# DB 가 RDS 면(.env DATABASE_URL 호스트가 compose 의 postgres 가 아니면) postgres 컨테이너와
+# 로컬 백업 파일은 점검하지 않는다 — 백업은 RDS 자동 백업이 맡는다(docs/current/06 §13).
 #
 # CloudWatch 가 못 보는 것들을 본다:
 #   · 디스크·메모리    에이전트를 깔아야 CloudWatch 로 보이는 항목이다
@@ -29,6 +36,15 @@ BACKUP_DIR="${BACKUP_DIR:-$HOME/db-backups}"
 
 PROBLEMS=()
 LINES=()
+SUMMARY=()               # 정상일 때 한 줄 요약에 넣을 짧은 값들
+
+# DB 가 어디 있나 — compose 의 postgres 컨테이너(local-db 프로파일)인지, RDS 인지.
+DB_HOST="$(grep -E '^DATABASE_URL=' .env 2>/dev/null | sed -E 's#.*@([^:/?]+).*#\1#' || true)"
+if [ -z "$DB_HOST" ] || [ "$DB_HOST" = "postgres" ] || [ "$DB_HOST" = "localhost" ] || [ "$DB_HOST" = "127.0.0.1" ]; then
+    LOCAL_DB=1
+else
+    LOCAL_DB=0
+fi
 
 add_ok()   { LINES+=("  ✅ $1"); }
 add_bad()  { LINES+=("  🔴 $1"); PROBLEMS+=("$1"); }
@@ -42,6 +58,7 @@ if [ "${DISK_PCT:-0}" -ge "$DISK_WARN" ]; then
 else
     add_ok "디스크 ${DISK_PCT}% (여유 ${DISK_FREE})"
 fi
+SUMMARY+=("디스크 ${DISK_PCT:-?}%")
 
 # ── 메모리 ──────────────────────────────────────────────────────────
 MEM_PCT="$(free 2>/dev/null | awk '/^Mem:/ {printf "%d", $3/$2*100}')"
@@ -52,10 +69,12 @@ elif [ "$MEM_PCT" -ge "$MEM_WARN" ]; then
 else
     add_ok "메모리 ${MEM_PCT}%"
 fi
+SUMMARY+=("메모리 ${MEM_PCT:-?}%")
 
 # ── 컨테이너 ────────────────────────────────────────────────────────
-# 떠 있어야 할 것들. postgres 는 local-db 프로파일이라 이름으로 직접 확인한다.
-EXPECTED=(xwifi-backend xwifi-nginx xwifi-mosquitto xwifi-icecast xwifi-postgres)
+# 떠 있어야 할 것들. postgres 는 local-db 프로파일일 때만(RDS 면 컨테이너가 없다).
+EXPECTED=(xwifi-backend xwifi-nginx xwifi-mosquitto xwifi-icecast)
+[ "$LOCAL_DB" = 1 ] && EXPECTED+=(xwifi-postgres)
 DOWN=()
 for name in "${EXPECTED[@]}"; do
     # tr 로 개행을 턴다 — 실패 경로에서 빈 줄이 섞여 메시지가 깨진다.
@@ -72,23 +91,30 @@ fi
 # ── 앱 health ───────────────────────────────────────────────────────
 HEALTH="$(curl -sk --max-time 10 https://localhost/health || echo '')"
 case "$HEALTH" in
-    *'"status":"ok"'*) add_ok "앱 health ok" ;;
+    *'"status":"ok"'*) add_ok "앱 health ok"; SUMMARY+=("앱 ok") ;;
     *'"status"'*)      add_bad "앱 health: $HEALTH" ;;
     *)                 add_bad "앱 health 응답 없음" ;;
 esac
 
 # ── 백업 최신성 ─────────────────────────────────────────────────────
-LATEST="$(ls -t "$BACKUP_DIR"/xwifi-*.sql.gz 2>/dev/null | head -1 || true)"
-if [ -z "$LATEST" ]; then
-    add_bad "DB 백업이 하나도 없다"
-else
-    AGE_H=$(( ( $(date +%s) - $(stat -c %Y "$LATEST") ) / 3600 ))
-    SIZE="$(du -h "$LATEST" | cut -f1)"
-    if [ "$AGE_H" -gt "$BACKUP_MAX_AGE_H" ]; then
-        add_bad "최근 백업이 ${AGE_H}시간 전 — cron 이 멈췄을 수 있다"
+# 로컬 pg_dump(backup-db.sh)가 도는 구성에서만. RDS 는 자동 백업·PITR 이 맡는다.
+if [ "$LOCAL_DB" = 1 ]; then
+    LATEST="$(ls -t "$BACKUP_DIR"/xwifi-*.sql.gz 2>/dev/null | head -1 || true)"
+    if [ -z "$LATEST" ]; then
+        add_bad "DB 백업이 하나도 없다"
     else
-        add_ok "백업 ${AGE_H}시간 전 ($SIZE)"
+        AGE_H=$(( ( $(date +%s) - $(stat -c %Y "$LATEST") ) / 3600 ))
+        SIZE="$(du -h "$LATEST" | cut -f1)"
+        if [ "$AGE_H" -gt "$BACKUP_MAX_AGE_H" ]; then
+            add_bad "최근 백업이 ${AGE_H}시간 전 — cron 이 멈췄을 수 있다"
+        else
+            add_ok "백업 ${AGE_H}시간 전 ($SIZE)"
+            SUMMARY+=("백업 ${AGE_H}h 전")
+        fi
     fi
+else
+    add_ok "DB: RDS (${DB_HOST%%.*}…) — 백업은 RDS 자동 백업"
+    SUMMARY+=("DB RDS")
 fi
 
 # ── 인증서 만료 ─────────────────────────────────────────────────────
@@ -101,6 +127,7 @@ if [ -f "$CERT" ]; then
             add_bad "TLS 인증서 만료까지 ${DAYS}일 — 자동 갱신을 확인할 것"
         else
             add_ok "TLS 인증서 ${DAYS}일 남음"
+            SUMMARY+=("인증서 ${DAYS}일")
         fi
     fi
 else
@@ -110,10 +137,14 @@ fi
 # ── 출력 ────────────────────────────────────────────────────────────
 if [ ${#PROBLEMS[@]} -gt 0 ]; then
     HEAD="🔴 *서버 점검* — 확인 필요 ${#PROBLEMS[@]}건"
+    TEXT="$HEAD"$'\n'"$(printf '%s\n' "${LINES[@]}")"
 else
+    # 정상은 한 줄로 — 매일 오는 글이 길면 안 읽게 된다. 세부는 --dry 로 본다.
     HEAD="✅ *서버 점검* — 모두 정상"
+    TEXT="$HEAD"
+    for item in "${SUMMARY[@]}"; do TEXT+=" · $item"; done
+    [ "$MODE" = "--dry" ] && TEXT="$TEXT"$'\n'"$(printf '%s\n' "${LINES[@]}")"
 fi
-TEXT="$HEAD"$'\n'"$(printf '%s\n' "${LINES[@]}")"
 
 if [ "$MODE" = "--dry" ]; then
     echo "$TEXT"
