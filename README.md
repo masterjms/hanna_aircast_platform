@@ -1,459 +1,328 @@
-# xWIFI 운영서버
+# HANNA AirCast — 마을 방송 운영 플랫폼
 
-ESP32(P4+C6) 마을방송 단말을 **MQTT + Icecast + HTTP** 로 제어하는 운영서버.
-백엔드·프론트·인프라를 한 리포지토리에 둔다.
+마을 곳곳에 설치된 **IoT 방송 스피커(ESP32-P4/C6)** 를 웹에서 한 번에 관리하고 방송하는 서비스입니다.
+이장·면사무소·시군청 담당자가 브라우저에서 **마이크로 바로 말하거나, 글을 적어 음성으로 만들거나, 저장된 음원을 골라**
+원하는 마을·구역·단말에 지금 또는 예약으로 내보냅니다.
 
-현재 서버 구조와 DB는 다음 문서를 기준으로 한다.
+- **방송 3가지**: 실시간 마이크 방송, 글 → 음성(TTS) 방송, 저장된 음원 방송
+- **대상 선택**: 기관 · 마을 · 구역 · 단말 하나하나를 한 트리에서 고르기
+- **예약 방송**: 한 번 · 매일 · 매주 · 매월 · 매년 규칙, 7일 예정표
+- **현장 관리**: 단말 등록(QR · 수동 · USB 주입), 온라인 상태, 이상 단말, 지도
+- **권한**: 최고 · 시도 · 시군 · 마을 4계층, 맡은 범위만 보고 방송
 
-- [운영서버 아키텍처](docs/spec/xWIFI_운영서버_아키텍처_260902.md) · [다이어그램](docs/xWIFI_아키텍처_다이어그램_260902.png)
-- [DB 스키마](docs/spec/xWIFI_DB_스키마_260902.md) · [ERD](docs/xWIFI_ERD_260902.png)
-- 단말 프로토콜은 [ESP32 문서 목록](docs/spec/ESP32_문서목록_README.md)에서 지정한 최신 문서를 따른다.
-
-날짜가 오래된 설계 문서는 구현 이력으로 보존하며, 충돌하면 위 최신 문서와 현재 Alembic/모델을 우선한다.
+> 백엔드(FastAPI) · 관리자 웹(React) · 인프라(Docker, Mosquitto, Icecast, nginx)를 한 저장소에서 개발·운영합니다.
 
 ---
 
-## 지금 구현된 범위
+## 목차
 
-| Phase | 내용 | 상태 |
+1. [화면](#1-화면)
+2. [주요 기능](#2-주요-기능)
+3. [시스템 구성](#3-시스템-구성)
+4. [방송이 단말까지 가는 길](#4-방송이-단말까지-가는-길)
+5. [데이터 모델](#5-데이터-모델)
+6. [기술 스택](#6-기술-스택)
+7. [설계에서 신경 쓴 점](#7-설계에서-신경-쓴-점)
+8. [문서 안내 — 무엇을 어디서 읽나](#8-문서-안내--무엇을-어디서-읽나)
+9. [저장소 구조](#9-저장소-구조)
+10. [로컬 실행](#10-로컬-실행)
+11. [구현 현황](#11-구현-현황)
+
+---
+
+## 1. 화면
+
+> 로컬 개발 환경에서 가상 단말 6대로 찍은 화면입니다.
+
+### 방송하기 — 방법 · 대상 · 내용 · 시각을 한 화면에서
+번호(①~④) 순서대로 고르면 되도록 만든 핵심 화면입니다. 대상은 마을·구역·단말·모든 마을 탭으로 고르고, 켜진 단말 수가 바로 보입니다.
+
+![방송하기](docs/images/broadcast.png)
+
+<table>
+<tr>
+<td width="50%"><b>마을 현황</b> — 온라인·오프라인·방송 중·미배정, 기관 → 시군 → 마을 트리별 상태, 이상 단말<br><img src="docs/images/dashboard.png" alt="마을 현황"></td>
+<td width="50%"><b>예약 방송</b> — 반복 규칙 목록, 오늘 일정, 7일 예정표<br><img src="docs/images/schedules.png" alt="예약 방송"></td>
+</tr>
+<tr>
+<td><b>방송 자료</b> — mp3 올리기, 글로 음성 만들기(TTS), 미리듣기<br><img src="docs/images/files.png" alt="방송 자료"></td>
+<td><b>단말 관리</b> — 등록·배정·상태, 신호 세기(RSSI), 설정 반영 버전(CFG)<br><img src="docs/images/devices.png" alt="단말 관리"></td>
+</tr>
+<tr>
+<td><b>지역 관리</b> — 폴더처럼 다루는 기관 트리, 마을 주소·좌표·구역<br><img src="docs/images/regions.png" alt="지역 관리"></td>
+<td><b>설정</b> — 단말 공통 설정, 방송 응답 시간, 오디오 품질<br><img src="docs/images/settings.png" alt="설정"></td>
+</tr>
+</table>
+
+---
+
+## 2. 주요 기능
+
+### 방송
+| 기능 | 설명 |
+|---|---|
+| 실시간 방송 | 브라우저 마이크 → 서버 → 스피커. 방송마다 별도 스트림을 열어 여러 마을이 동시에 방송할 수 있음 |
+| 글로 써서 방송 | 적은 글을 Google Cloud TTS 로 음성 합성 → 파일함에 저장 → 미리 듣고 방송. 같은 문구는 다시 합성하지 않음(캐시) |
+| 저장된 소리 방송 | mp3 업로드 시 규격 검사·재인코딩, 단말은 짧게 유효한 주소로 내려받고 무결성(sha256) 확인 |
+| 대상 선택 | 기관·마을·구역·단말을 한 트리에서. 실제 대상은 방송 시작 순간 온라인인 단말 |
+| 겹침 방지 | 같은 단말에 방송이 겹치면 시작을 막고 이유를 알려 줌. 기존 방송을 몰래 끊지 않음 |
+| 방송 결과 | 단말별 준비·재생·종료 결과를 모아 진행 중 방송 카드와 기록에 표시 |
+
+### 예약 방송
+- 한 번 · 매일 · 매주(요일) · 매월(날짜) · 매년(월·일) 규칙 하나만 저장하고 실행 날짜는 서버가 계산
+- 1분마다 도는 실행기, 회차별 실행 결과(시작 · 건너뜀 · 실패와 이유) 기록
+- 마을 · 단말 · 기관(실행 시점에 소속 마을로 펼침) 대상
+
+### 단말 · 현장
+- **등록**: QR 또는 수동 입력, 브라우저 Web Serial 로 USB 연결된 단말에 접속 정보를 바로 주입
+- **보안 접속**: 단말마다 별도 MQTT 계정과 권한(ACL), 전송 구간 TLS(MQTTS)
+- **상태**: 주기 보고(STATUS)와 브로커의 연결 끊김 알림(LWT)으로 온라인 판정, 이상 단말 목록
+- **설정 배포**: 공통 설정과 단말별 마을 배정을 보관 메시지(retained)로 내리고, 서버 기동 때와 주기적으로 다시 맞춤
+- **지도**: 카카오 지도에 단말 위치·마을 경계·클러스터 표시, 주소 검색으로 좌표·법정동코드 자동 입력
+
+### 조직 · 권한
+- 최고 관리자 · 시도 · 시군 · 마을(이장) 4계층, 기관 트리는 깊이 제한 없음
+- **모든 조회와 제어에서 백엔드가 범위를 강제**(화면 메뉴 숨김에 의존하지 않음)
+- 계정 사용 기간과 만료 계정 자동 정리, 임시 비밀번호 발급과 첫 로그인 비밀번호 변경
+
+### 운영
+- Docker Compose 한 벌로 배포, 상태 점검·백업·복구 스크립트, AWS 비용 보고
+- CI: 린트·단위 시험·마이그레이션 왕복(upgrade → downgrade → upgrade)·프런트 빌드
+- 서비스 KPI·SLO 정의(방송 도달률, 시작 지연, 단말 온라인율 등)
+
+---
+
+## 3. 시스템 구성
+
+```mermaid
+flowchart LR
+    A[관리자 브라우저<br/>React] -->|HTTPS REST| N[nginx]
+    A -->|WSS 마이크 업링크<br/>Ogg/Opus| N
+    N -->|/api · /ingest| B[FastAPI<br/>모듈러 모놀리스]
+    N -->|/live/*| I[Icecast]
+    N -->|/dl/* 파일 전송| F[(파일 저장소)]
+
+    B -->|SQL| P[(PostgreSQL 18)]
+    B <-->|MQTT| M[Mosquitto]
+    B -->|오디오 source| I
+    B -->|음성 합성| T[Google Cloud TTS]
+    B -->|주소·좌표| K[Kakao Local]
+
+    D[방송 스피커<br/>ESP32-P4 + C6] <-->|MQTTS 8883<br/>명령·상태| M
+    D -->|HTTPS 실시간 스트림| N
+    D -->|HTTPS 음원 다운로드| N
+```
+
+| 구성요소 | 맡은 일 |
+|---|---|
+| 관리자 웹 (React) | 로그인, 현황·지도, 단말 등록, 방송 제어, 파일·TTS, 예약, 계정·지역 관리 |
+| nginx | TLS 종료, 웹 화면 제공, API·WebSocket·스트림 프록시, 파일 전송 |
+| FastAPI (단일 프로세스) | REST API, 권한, 방송 수명주기, **MQTT 워커**, **스케줄러**(설정 재조정·예약 실행·계정 정리) |
+| Mosquitto | 단말과 명령·설정·상태를 주고받는 MQTT 브로커, 단말별 계정·ACL |
+| Icecast | 실시간 방송 오디오를 여러 스피커로 동시 전달 |
+| PostgreSQL | 조직·권한·단말·파일·예약·방송 이력·설정 |
+
+---
+
+## 4. 방송이 단말까지 가는 길
+
+### 저장된 소리 / 글로 만든 음성
+```mermaid
+sequenceDiagram
+    participant U as 관리자
+    participant S as 서버
+    participant M as MQTT 브로커
+    participant D as 스피커
+    U->>S: 방송 시작 (대상 + 파일)
+    S->>S: 대상 해석 · 겹침 검사 · 작업 번호 발급 · 단기 토큰
+    S->>S: 방송 기록 커밋
+    S->>M: FILE_START (마을 토픽)
+    M->>D: FILE_START
+    D->>S: GET /dl/{token} (HTTPS, 이어받기 지원)
+    D->>D: sha256 검증 · 재생
+    D->>M: FILE_END (결과)
+    M->>S: 결과 수집 → 화면에 단말별 완료 표시
+```
+
+### 실시간 마이크 방송
+```mermaid
+sequenceDiagram
+    participant U as 관리자 브라우저
+    participant S as 서버
+    participant I as Icecast
+    participant M as MQTT 브로커
+    participant D as 스피커
+    U->>S: 실시간 방송 시작
+    S->>I: 방송 전용 스트림(mount) 열기
+    S->>M: LIVE_START (stream_url · 코덱 · 프레임)
+    M->>D: LIVE_START
+    D->>I: 스트림 접속
+    D->>M: LIVE_READY (출력 준비 완료)
+    U->>S: WSS 로 Opus 오디오 전송
+    S->>I: 받은 그대로 전달 (재인코딩 없음)
+    I->>D: 오디오
+    U->>S: 종료
+    S->>M: LIVE_STOP → 결과 대기 → 스트림 닫기
+```
+
+---
+
+## 5. 데이터 모델
+
+PostgreSQL 18, Alembic 마이그레이션 21단계. 테이블별 컬럼·제약·삭제 정책은 [데이터 모델 문서](docs/current/04_데이터_모델.md)에 있습니다.
+
+```mermaid
+erDiagram
+    ORGANIZATIONS o|--o{ ORGANIZATIONS : parent
+    ORGANIZATIONS o|--o{ VILLAGES : manages
+    ORGANIZATIONS o|--o{ USERS : belongs
+    USERS ||--o{ USER_VILLAGES : assigned
+    VILLAGES ||--o{ USER_VILLAGES : scoped
+    VILLAGES ||--o{ ZONES : contains
+    VILLAGES o|--o{ DEVICES : assigned
+    ZONES o|--o{ DEVICES : groups
+    USERS o|--o{ FILES : uploads
+    FILES ||--o{ DOWNLOAD_TOKENS : issues
+    FILES ||--o{ SCHEDULES : plays
+    USERS o|--o{ SCHEDULES : creates
+    FILES o|--o{ BROADCAST_EVENTS : uses
+    SCHEDULES o|--o{ BROADCAST_EVENTS : triggers
+    SCHEDULES ||--o{ SCHEDULE_RUNS : fires
+    BROADCAST_EVENTS o|--o{ SCHEDULE_RUNS : records
+    USERS o|--o{ BROADCAST_EVENTS : triggers
+    BROADCAST_EVENTS o|--o{ DEVICE_EVENTS : receives
+    VILLAGES o|--o{ DAILY_COST_SUMMARY : aggregates
+```
+
+| 영역 | 테이블 | 내용 |
 |---|---|---|
-| 0 | 리포지토리 · Docker Compose 골격 · mock 단말 스크립트 | 완료 |
-| 1 | DDL + Alembic · 인증 · 권한 의존성 · MQTT 워커 · CONFIG 재조정 · `/health` | 완료 |
-| 2 | 조회계 API · 프론트 전체(로그인 · 대시보드 · 단말 · 마을 · 계정 · 설정) | 완료 |
-| 3 | 파일 업로드 · `/dl` 토큰 서빙 · `FILE_START` 발행 · 겹침 검사 409 · 파일함 · 방송 제어 | 완료 |
-| 4 | WSS `/ingest` · Icecast 세션별 마운트 · `LIVE_START` 발행 · 마이크 업링크 | 완료 |
-| 5 | Google Cloud TTS · 캐시 · 파일함 통합 | 완료 |
-| 6~8 | 스케줄 · OTA · 비용 | 미착수 |
-
-프론트 사이드바에서 `준비` 로 표시된 메뉴가 아직 구현 전이다.
-
-### TTS 흐름 (Phase 5)
-
-```
-[브라우저] --POST /api/files/tts {text, language, voice}--> [백엔드]
-                                        │ 캐시 확인 sha256(text|lang|voice)
-                                        │ 없으면 Google TTS 호출 → mp3 → 정규화
-                                        │ 디스크 저장 + files 행 생성
-                          ◄─────────────┘
-[브라우저] <audio src=/api/files/<id>/audio>   미리듣기
-[관리자]   방송 제어에서 이 파일을 골라 송출  → 기존 FILE_START 경로
-```
-
-**합성과 방송을 나눈다.** 합성이 곧바로 방송으로 이어지면 오타가 마을 스피커
-300대로 그대로 나간다. 파일함에 먼저 넣고 들어본 뒤, 방송 제어에서 고른다.
-같은 이유로 만든 문구를 재방송하거나 스케줄에 걸 수 있고, 겹침 검사·권한·이력이
-붙어 있는 방송 경로를 그대로 재사용한다.
-
-브라우저가 Google TTS 를 직접 부르지 않는다 — 자격증명이 노출되고, 미리듣기와 송출본이
-별개 합성이 되어 요금이 두 배 나가면서 내용까지 달라질 수 있다.
-
-### 실시간 방송 흐름 (Phase 4)
-
-```
-[관리자] 방송 제어 화면에서 대상 선택 → 실시간 방송 시작
-   → 서버: 겹침 검사 → job_id 발번 → Icecast source 연결(HTTP PUT)
-   → MQTT: LIVE_START { job_id, stream_url, codec, frame_ms, sample_rate }
-   → 브라우저: opus-recorder(WASM) → WSS /ingest?session=<id>
-   → 서버: 받은 Ogg 페이지를 그대로 Icecast 로 흘려보냄 (파싱·재인코딩 없음)
-   → 단말: GET https://<host>/live/43 → LIVE_READY status=0
-```
-
-**마운트는 세션마다 갈라진다.**
-
-```
-https://<서버>/live/43
-                      ↑
-                   job_id
-```
-
-마운트가 하나뿐이면 나중 방송이 앞 방송을 덮어써서 동시 방송이 안 된다.
-그래서 전역 유일한 `job_id`마다 mount를 만든다. 어느 마을 방송인지는 URL이 아니라
-`broadcast_events.target_ids`가 답하며, 단일·다중 마을·전체 방송이 같은 규칙을 쓴다.
-
-### 파일 방송 흐름 (Phase 3)
-
-3채널이 전부 맞물려 돌아가는 것을 목 단말로 확인했다:
-
-```
-[관리자] 방송 제어 화면에서 대상 + 파일 선택
-   → 서버: 대상 해석 → 겹침 검사(409) → job_id 발번 → 단기 토큰 발급
-   → MQTT: iotradio/village/<id8>/cmd 로 FILE_START (280B / 1024B 한계)
-   → 단말: https_url(/dl/<token>) 로 HTTP GET → sha256 검증
-   → MQTT: iotradio/device/<mac>/result 로 FILE_END(verify_ok=1)
-   → 서버: device_events 적재 → 화면에 완료 1/1 표시
-```
+| 조직·권한 | `organizations` `villages` `zones` `users` `user_villages` | 깊이 제한 없는 기관 트리, 마을·구역, 계정과 담당 마을 |
+| 단말 | `devices` | MAC, 배정, 위치, 하드웨어 정보, 접속 계정, 마지막 상태 |
+| 파일 | `files` `download_tokens` | 음원 메타(상대 경로), 단말용 단기 다운로드 토큰 |
+| 예약 | `schedules` `schedule_runs` | 반복 규칙 하나, 회차별 실행 결과 |
+| 이력 | `broadcast_events` `device_events` | 방송 한 건과 단말별 결과. 단말·계정·파일을 지워도 이력은 남음(스냅샷 저장) |
+| 시스템 | `current_config` `daily_cost_summary` | 단말 공통 설정의 정본, 비용 집계 |
 
 ---
 
-## 디렉터리
+## 6. 기술 스택
+
+| 영역 | 사용 기술 |
+|---|---|
+| 백엔드 | Python 3.12 · FastAPI · SQLAlchemy 2 (async) · asyncpg · Alembic · aiomqtt · APScheduler · PyJWT · bcrypt |
+| 프런트엔드 | React 18 · TypeScript · Vite · React Router · opus-recorder(WASM Opus 인코더) · Web Serial API · Kakao Maps |
+| 데이터 | PostgreSQL 18 (운영은 AWS RDS 기본, 로컬 DB 구성 선택 가능) |
+| 메시징·스트리밍 | Mosquitto 2 (MQTT/MQTTS, 단말별 계정·ACL) · Icecast (실시간 오디오) |
+| 외부 API | Google Cloud Text-to-Speech · Kakao Local |
+| 인프라 | Docker Compose · nginx · Let's Encrypt · AWS (EC2 · RDS) · GitHub Actions |
+| 단말 | ESP32-P4 + ESP32-C6, MQTT · Icecast · HTTPS 3채널 |
+
+---
+
+## 7. 설계에서 신경 쓴 점
+
+- **권한은 백엔드가 강제** — 범위 의존성이 "전체 / 이 마을들"을 타입으로 들고 다녀서, 조회는 범위 필터를, 제어는 범위 확인을 반드시 거칩니다.
+- **MQTT 발행은 한 곳으로** — payload 크기 상한(1024B), QoS·retain, 권한 재확인을 발행기 하나에 모았습니다.
+- **명령은 커밋 뒤에 발행** — 방송 기록·다운로드 토큰을 먼저 커밋해야 단말의 결과와 다운로드 요청이 다른 DB 세션에서 그 기록을 봅니다.
+- **동시 방송 시작은 직렬화** — 겹침 검사와 기록 생성 사이를 PostgreSQL advisory lock 으로 묶어, 같은 단말에 방송이 두 번 걸리지 않습니다.
+- **실시간 오디오는 손대지 않고 전달** — 브라우저에서 Opus(Ogg)로 인코딩해 서버는 바이트를 그대로 Icecast 로 넘깁니다. 지연과 프레임 어긋남이 없습니다.
+- **방송마다 별도 스트림** — 전역 유일한 작업 번호로 mount 를 갈라 여러 마을의 동시 방송을 지원합니다.
+- **설정은 DB 가 정본** — 브로커의 보관 메시지는 캐시로 보고 기동 때·주기적으로 다시 맞춥니다. 단말이 보고한 설정 버전이 다르면 그 단말에만 다시 보냅니다.
+- **마을 배정은 단말별 토픽으로** — 공통 토픽에 마을을 실으면 배정 전 단말이 남의 방송을 받을 수 있어, 배정은 MAC 이 들어간 토픽으로만 보냅니다.
+- **합성과 방송을 분리** — TTS 결과는 먼저 파일함에 넣어 미리 듣고 고르게 해서, 오타가 그대로 마을 스피커로 나가지 않게 했습니다.
+- **이력은 남기되 삭제는 막지 않음** — 이력이 필요한 값은 그 시점의 스냅샷으로 자기 행에 보관합니다.
+- **온프레미스 전환 대비** — 파일은 상대 경로로 저장하고, TTS 엔진은 교체 가능한 인터페이스로 분리했습니다.
+
+---
+
+## 8. 문서 안내 — 무엇을 어디서 읽나
+
+**현행 문서는 [`docs/current/`](docs/current/README.md) 한 곳에 모여 있습니다.** 처음이라면 `01`을 읽고 맡은 영역 문서로 넘어가면 됩니다.
+
+| 알고 싶은 것 | 읽을 문서 |
+|---|---|
+| 전체 구조, 데이터 흐름, 보안 경계 | [01 시스템 아키텍처](docs/current/01_시스템_아키텍처.md) |
+| 단말과 주고받는 MQTT 토픽·메시지, 실시간·파일·OTA 규약 | [02 단말 연동 사양](docs/current/02_단말_연동_사양.md) |
+| REST · WebSocket API, 인증·권한, 에러 형식 | [03 백엔드 API](docs/current/03_백엔드_API.md) |
+| 테이블·키·제약·삭제 정책 | [04 데이터 모델](docs/current/04_데이터_모델.md) |
+| 화면별 동작, 등록·방송 작업 흐름 | [05 프런트엔드 운영 화면](docs/current/05_프론트엔드_운영.md) |
+| Docker·AWS·TLS·배포·백업·모니터링 | [06 인프라와 운영](docs/current/06_인프라_운영.md) |
+| 서비스 품질 목표(KPI · SLO) | [07 서비스 KPI와 SLO](docs/current/07_서비스_KPI_SLO.md) |
+| 예약 방송 설계 | [스케줄 설계](docs/spec/xWIFI_스케줄_설계_260909.md) |
+| 4계층 관리자 설계 | [관리자 계층 설계](docs/spec/xWIFI_관리자_계층_설계_260908.md) |
+| 배포 절차 | [배포·CI/CD 절차](docs/배포_CICD_절차.md) |
+
+`docs/spec/` 의 날짜가 붙은 문서는 결정 배경을 보존한 자료입니다. 내용이 다르면 `docs/current/` 와 현재 코드를 따릅니다.
+
+---
+
+## 9. 저장소 구조
 
 ```
-xwifi-server/
-├── backend/                 FastAPI (단일 프로세스: REST + MQTT 워커 + 스케줄러)
-│   ├── run.py               개발 서버 진입점 (Windows 이벤트 루프 때문에 필요)
+├── backend/                 FastAPI — REST + MQTT 워커 + 스케줄러 (단일 프로세스)
 │   ├── app/
-│   │   ├── main.py          앱 조립만 — 비즈니스 로직 없음
-│   │   ├── config.py        환경 의존성의 유일한 입구
-│   │   ├── db.py            엔진 · 세션
-│   │   ├── constants.py     단말 프로토콜과 공유하는 상수
-│   │   ├── errors.py        API 에러 규약 (code/message/detail)
-│   │   ├── core/            scope · security · deps · ids
-│   │   ├── models/          SQLAlchemy — 테이블 모양만
-│   │   ├── schemas/         Pydantic — 요청/응답
+│   │   ├── core/            권한 범위 · 보안 · 공통 의존성
+│   │   ├── models/          SQLAlchemy 모델
+│   │   ├── schemas/         요청·응답 스키마
 │   │   ├── modules/         도메인별 router + service
-│   │   │   ├── auth/  org/  device/  system/
-│   │   │   ├── file/        업로드 · 다운로드 토큰 · /dl 서빙
-│   │   │   ├── broadcast/   대상 해석 · 겹침 검사 · FILE/LIVE START·STOP
-│   │   │   └── dashboard/   읽기 전용 집계(read model)
-│   │   ├── live/            mount · icecast(source) · registry · ingest(WSS)
-│   │   ├── tts/             engine(google/dev) · voices · service(캐시)
-│   │   ├── mqtt/            topics · connection · publisher · handlers
-│   │   └── tasks/           config_reconcile
-│   ├── alembic/versions/    0001_initial_schema.py
+│   │   │   ├── auth/  org/  device/  geo/  system/
+│   │   │   ├── file/        업로드 · 다운로드 토큰 · /dl
+│   │   │   ├── broadcast/   대상 해석 · 겹침 검사 · 실시간/파일 시작·중지
+│   │   │   ├── schedule/    예약 규칙 · 실행기 · 예정표
+│   │   │   └── dashboard/   읽기 전용 집계
+│   │   ├── live/            Icecast source · mount · WSS 업링크
+│   │   ├── tts/             TTS 엔진(Google / 개발용) · 캐시
+│   │   ├── mqtt/            토픽 · 연결 · 발행기 · 수신 처리
+│   │   └── tasks/           설정 재조정 등 주기 작업
+│   ├── alembic/versions/    마이그레이션 0001 ~ 0021
 │   └── tests/
 ├── frontend/                React 18 + TypeScript + Vite
-│   └── src/{api,auth,components,pages,hooks,styles}/
-├── infra/                   mosquitto · icecast · nginx 설정
-├── scripts/                 seed.py · mock_device.py
+│   └── src/{api,auth,components,hooks,pages,styles}/
+├── infra/                   nginx · mosquitto · icecast 설정
+├── scripts/                 시드 · 가상 단말 · MQTT 감시 · 배포 · 백업/복구 · 상태 점검
+├── docs/current/            현행 문서 세트
 ├── docker-compose.yml       운영 스택
-└── docker-compose.dev.yml   로컬 개발 (Postgres + Mosquitto 만)
+└── docker-compose.dev.yml   로컬 개발 인프라(Postgres · Mosquitto · Icecast)
 ```
-
-### 모듈 경계 규칙
-
-- 다른 모듈의 테이블을 직접 조회하지 않는다. `service.py` 함수로 호출한다.
-  (예외: `modules/dashboard` 는 읽기 전용 집계라 가로질러 읽는다. 쓰기는 절대 안 한다.)
-- **MQTT 발행은 `app/mqtt/publisher.py` 한 곳만 거친다.** payload 크기(1024B)·QoS/retain·
-  권한 재확인이 전부 거기 걸려 있다.
-- ID 발번은 DB 시퀀스(`job_id_seq`)를 쓴다. 프로세스 메모리 카운터를 쓰지 않는다.
-- MQTT 워커·스케줄러 코드를 REST 핸들러에 섞지 않는다.
 
 ---
 
-## 로컬 실행
+## 10. 로컬 실행
 
-### 빠른 방법 — `dev.ps1`
-
-PowerShell 에서 리포 루트에 대고 실행한다.
+Windows PowerShell 기준입니다(Docker Desktop, Python 3.12, Node 22 필요).
 
 ```powershell
-.\dev.ps1 setup    # 최초 1회 (venv · 의존성 · 마이그레이션 · 시드)
-.\dev.ps1 up       # 전부 실행
-.\dev.ps1 status   # 무엇이 떠 있는지
-.\dev.ps1 down     # 전부 종료
+.\dev.ps1 setup    # 처음 한 번: 가상환경 · 의존성 · DB 마이그레이션 · 예시 데이터
+.\dev.ps1 up       # 인프라 + 백엔드 + 웹 + 가상 단말 실행
+.\dev.ps1 down     # 모두 종료
 ```
 
-`up` 을 하면 백엔드 · 프론트 · 목단말이 각각 **별도 창**으로 뜬다. 로그를
-따로 보고 Ctrl+C 로 개별 종료하기 위해서다. 옵션은 `.\dev.ps1 help`.
-
-VSCode 를 쓰면 `Ctrl+Shift+B` 로 같은 걸 실행할 수 있다(`.vscode/tasks.json`).
-이쪽은 새 창 대신 VSCode 터미널 탭으로 뜬다.
-
-> **`up` 이 "다른 Postgres 로 간다" 고 하면** — WSL 에 네이티브
-> postgres/mosquitto 가 깔려 있어 같은 포트를 먼저 잡은 것이다. 둘 다 DB 이름과
-> 비밀번호가 같아서 오류 없이 조용히 엉뚱한 DB 에 붙고, 데이터가 반쪽씩 갈린다.
-> `wsl -e bash -lc "sudo systemctl disable --now postgresql mosquitto"` 로 해제한다.
-
-아래는 `dev.ps1` 이 실제로 하는 일이다. 직접 단계별로 돌리고 싶을 때 참고.
-
-### 1. 인프라
-
-```bash
-cp .env.example .env
-docker compose -f docker-compose.dev.yml up -d
-```
-
-### 2. 백엔드
-
-```bash
-cd backend
-python -m venv .venv
-.venv/Scripts/python -m pip install -e ".[dev]"
-.venv/Scripts/python -m alembic upgrade head
-.venv/Scripts/python ../scripts/seed.py
-.venv/Scripts/python run.py
-```
-
-API 문서: <http://localhost:8080/docs> · 상태: <http://localhost:8080/health>
-
-### 3. 프론트
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-<http://localhost:5173> — `/api` 는 Vite 프록시가 백엔드로 넘긴다.
-
-### 환경 프로파일 — 목 단말용 / 실물 단말용
-
-주소가 상황마다 달라야 한다. 목 단말은 같은 PC 에서 도니 `localhost` 가 맞고,
-실물 단말은 `localhost` 로 서버에 올 수 없으니(단말 입장에서 자기 자신이 된다)
-이 PC 의 LAN IP 가 필요하다. `.env` 하나를 번갈아 고치면 반드시 한 번은 틀린 채로
-돌리게 되므로 파일을 나눈다.
-
-```powershell
-.\dev.ps1 up -EnvProfile local -Mock 3    # 목 단말로 개발
-.\dev.ps1 up -EnvProfile device           # 실물 단말과 통신
-```
-
-`.env` 를 먼저 읽고 `.env.<프로파일>` 이 덮어쓴다. 파일이 없으면 `dev.ps1` 이
-`.env.<프로파일>.example` 에서 만들어 준다.
-
-| 프로파일 | 주소 | 쓰는 곳 |
-|---|---|---|
-| `local` | `http://localhost:8080` · `:8000` | 목 단말, 브라우저 마이크 |
-| `device` | `http://auto:8080` · `:8000` | 실물 ESP32 |
-
-**`auto` 는 기동할 때 이 PC 의 LAN IP 로 바뀐다.** 노트북과 데스크톱을 오가도
-파일을 고칠 필요가 없다. 자동 탐지가 엉뚱한 주소(가상 어댑터·VPN)를 고르면
-IP 를 직접 적으면 된다.
-
-프로파일 없이 `.\dev.ps1 up` 하면 `.env` 만 쓴다(기존과 동일).
-
-> 백엔드가 어떤 주소를 쓰는지는 기동 로그 맨 위에 프로파일과 함께 찍힌다.
-> 실물 단말이 파일을 못 받으면 여기부터 확인한다.
-
-### 포트 배치
-
-| 포트 | 무엇 | 왜 이 번호인가 |
-|---|---|---|
-| 8080 | 백엔드 API | Icecast 에 8000 을 내주고 비켰다 |
-| 8000 | Icecast | **단말 펌웨어가 `<ip>:8000/live` 로 고정 접속**한다. 문서(`docs/Icecast_구성작업_지시서_최종.md`)도 8000 기준 |
-| 1883 | MQTT | 통신 사양 §3.1 |
-| 5173 | 프론트 dev | Vite 기본값 |
-
-### 실물 단말 테스트
-
-목 단말이 아니라 실제 ESP32 를 붙일 때는 세 가지가 더 필요하다.
-
-**1. 단말이 이 PC 를 찾을 수 있어야 한다.** 단말은 `localhost` 가 아니라 이 PC 의
-LAN IP 로 접속한다. 단말과 PC 가 같은 네트워크(같은 공유기)에 있어야 한다.
-
-```powershell
-ipconfig | Select-String IPv4     # 이 IP 를 단말에 설정
-```
-
-**2. 방화벽을 열어야 한다.** 관리자 권한 PowerShell:
-
-```powershell
-netsh advfirewall firewall add rule name="xWIFI MQTT 1883" protocol=TCP dir=in localport=1883 action=allow profile=private
-netsh advfirewall firewall add rule name="xWIFI Icecast 8000" protocol=TCP dir=in localport=8000 action=allow profile=private
-netsh advfirewall firewall add rule name="xWIFI API 8080" protocol=TCP dir=in localport=8080 action=allow profile=private
-```
-
-> ⚠ `profile=private` 로 제한한다. 개발용 브로커는 **익명 접속을 허용**하므로
-> (`infra/mosquitto/config/mosquitto.dev.conf`), 공용 네트워크에 열면 아무나
-> 방송 명령을 보낼 수 있다. 네트워크 프로필이 "공용"이면 먼저 "개인"으로 바꾼다.
-
-**3. `.env` 의 `PUBLIC_BASE_URL` 을 LAN IP 로 바꾼다.** FILE_START 의 다운로드
-URL 을 만드는 값이라 `localhost` 면 단말이 자기 자신에게 받으러 간다.
-
-```
-PUBLIC_BASE_URL=http://192.168.0.5:8080
-ICECAST_PUBLIC_BASE_URL=http://192.168.0.5:8000
-```
-
-그다음 아래 감시 도구를 띄우고 단말 전원을 넣는다.
-
-### 마을 배정이 단말에 전달되는 경로
-
-CONFIG 는 두 토픽으로 나뉜다(사양 `SERVER_COMM_MQTT_ICECAST_HTTP_SPEC_2026-08-14.md` §4).
-
-```
-iotradio/all/config              (QoS 1, retain)   전 단말 공통 설정
-{"config_version":31,"status_interval_sec":45,"live_stats_interval_sec":10,"event_qos":0}
-
-iotradio/device/<mac>/config     (QoS 1, retain)   그 단말의 마을 배정
-{"config_version":31,"village_id":"00000001"}
-```
-
-**`village_id` 는 절대 `all/config` 에 넣지 않는다.** 그 토픽은 전 단말이 구독하고
-retain 이라 나중에 붙는 단말도 받는다. 거기 마을을 실으면 아직 배정 안 된 단말까지
-그 값을 자기 것으로 읽고 남의 마을 방송을 구독한다 — 실제로 목 단말 3대 중 1대만
-배정했는데 3대가 전부 응답했다. 현장이라면 새로 설치한 단말이 배정 전에 엉뚱한
-마을 방송을 트는 사고다. 단말별 토픽은 이름에 MAC 이 박혀 있어 남의 값을 받을 수 없다.
-
-두 토픽은 항상 **같은 `config_version`** 으로 함께 발행한다. 단말은 토픽별로 버전을
-따로 추적하지 않고 마지막에 받은 값을 쓰는 단일 카운터 구조라(사양 §4.3), 한쪽만
-올리면 낡은 값을 최종본으로 보고한다. 그래서 배정이 바뀌든 주기만 바뀌든
-`config_reconcile.publish_all()` 로 둘 다 내보낸다.
-
-배정을 해제하면 그 단말 토픽에 **빈 payload 를 retain 으로** 보내 보관본을 지운다.
-안 지우면 단말이 재접속할 때 없어진 배정을 다시 물려받는다. 재조정 주기도 DB 가
-미배정인 단말의 보관본을 매번 지워서 브로커를 DB 에 맞춘다.
-
-**자동 복구**(사양 §4.3 권장): 단말이 STATUS 에 echo 하는 `village_id`/`config_version`
-이 DB 와 다르면 그 단말 CONFIG 를 다시 내린다. 브로커 retained 유실이나 배정 시점의
-연결 끊김을 스스로 알아채고 복구한다. 같은 단말에 60초 안에는 다시 보내지 않는다 —
-적용하지 않는 낡은 펌웨어가 있으면 STATUS 마다 재발행이 나가기 때문이다.
-
-### MQTT 감시 · 사양 검증
-
-```bash
-cd backend
-.venv/Scripts/python ../scripts/mqtt_monitor.py
-```
-
-브로커에 흐르는 모든 메시지를 보여주고, 단말이 보낸 것을 통신 사양과 대조한다.
-`--seconds 30` 으로 시간을 제한할 수 있고, Ctrl+C 로 끝내면 요약이 나온다.
-
-잡아내는 것:
-
-- `state` 가 IDLE/LIVE/FILE/RF/OTA/OFFLINE 밖의 값인지
-- OTA state 가 6종(ACCEPTED/PREPARE/DOWNLOADING/VERIFYING/COMPLETED/FAIL) 밖인지
-- **옛 ID 필드(`session_id`/`cmd_id`/`file_id`)를 쓰는지** — 보이면 단말 펌웨어가
-  job_id 통일(2026-08-20) 이전 버전이다
-- `village_id` 가 8자리 숫자인지, payload 의 `device` 가 토픽 MAC 과 맞는지
-- `config_version` 이 서버가 보낸 값으로 바뀌었는지 (CONFIG 가 실제로 먹었는지)
-
-### 4. 목 단말 (실물 없이 테스트)
-
-```bash
-cd backend
-.venv/Scripts/python ../scripts/mock_device.py --count 5
-```
-
-실제 단말과 같은 흐름으로 동작한다:
-
-- 미등록 MAC 자동 등록 → CONFIG(retain) 수신 → `config_version` STATUS echo
-- 마을 배정을 받으면 `iotradio/village/<id8>/cmd` 를 **구독**하고, 재배정되면 이전 마을 토픽을 해제한다
-- `FILE_START` 를 받으면 `https_url` 에서 실제로 파일을 받아 sha256 을 검증하고 `FILE_END` 를 보낸다
-- `FILE_STOP` 에는 `FILE_ABORT(USER_CANCEL)` 또는 `FILE_STOP_RESULT(NOT_ACTIVE)` 로 답한다
-- `LIVE_START` 를 받으면 `stream_url` 로 붙어 첫 바이트를 확인하고 `LIVE_READY status=0` 을 보낸다
-- 파일 처리 중에 `LIVE_START` 가 오면 `LIVE_READY status=3` 으로 거절한다(채널 배타)
-- Ctrl+C 로 끊으면 브로커가 LWT 를 대신 발행한다
-
-### 시드 계정
-
-| 아이디 | 비밀번호 | 역할 |
-|---|---|---|
-| `admin` | `admin1234!` | super_admin (전체) |
-| `sindong` | `village1234!` | village_admin (신동마을만) |
-
-두 계정으로 번갈아 로그인하면 권한 범위 분리가 실제로 동작하는지 확인할 수 있다.
-
----
-
-## 테스트
-
-```bash
-cd backend && .venv/Scripts/python -m pytest tests -q
-```
-
-권한 범위 판정 · MAC/토픽 정규화 · payload 크기 한계 · 인증을 덮는다.
-전부 DB·브로커 없이 돈다.
-
-DB·브로커가 필요한 통합 검증은 별도 스크립트로 돌린다(백엔드가 떠 있어야 한다).
-두 스크립트 모두 시작할 때 이전 실행이 남긴 상태(단말 배정 · 진행 중 방송)를
-스스로 정리하므로 몇 번을 돌려도 결과가 같다.
-
----
-
-## 알아둘 것
-
-### 권한
-
-권한은 **백엔드가 강제**한다. 프론트의 메뉴 숨김은 UX 편의일 뿐이다.
-
-- `Scope` 의존성 → `VillageScope` 값 객체. `all_villages` 여부가 타입 안에 박혀 있어서
-  "None 이 전체인지 없음인지" 헷갈릴 여지가 없다.
-- 조회는 `scope.apply(stmt, column)`, 제어는 `scope.ensure_allowed(village_id)`.
-- 미배정 단말(`village_id IS NULL`)은 super_admin 만 다룰 수 있다.
-
-### CONFIG 는 DB 가 정본
-
-브로커의 retain 은 캐시다. 브로커가 재시작되면 유실되므로 기동 시 1회 + 1시간 주기로
-`current_config` 를 다시 발행한다(`app/tasks/config_reconcile.py`).
-
-마을 배정은 `iotradio/device/<mac>/config` 로 단말별로 나간다. 공통 CONFIG 에 넣으면
-전 단말이 같은 마을이 되어 여러 마을 운영이 불가능하다.
-
-### 파일 저장
-
-원본은 `FILE_ROOT` 아래 로컬 디스크에 둔다. `files.storage_path` 는 **상대 경로**다 —
-절대 경로를 넣으면 온프레미스로 옮길 때 전부 깨진다.
-
-단말에게는 서명 URL 대신 짧은 토큰(`/dl/<token>`)을 내려보낸다. MQTT CMD payload 가
-1024바이트를 넘을 수 없어서다. 토큰은 기본 10분 뒤 만료된다(`DOWNLOAD_TOKEN_TTL_SEC`).
-
-재생 시간 계산에 `ffprobe` 를 쓴다. 없으면 `duration_sec` 을 NULL 로 두고 업로드는
-그대로 성공시킨다 — 운영 컨테이너에는 ffmpeg 이 들어 있다.
-
-### TTS
-
-캐시 키는 `sha256(문구|언어|보이스)` 다. 같은 문구를 다시 만들면 Google TTS 를 부르지
-않고 기존 파일을 돌려주므로, 미리듣기를 몇 번 눌러도 요금은 한 번만 나간다.
-합성하면 그 즉시 파일함에 저장된다 — 별도의 '저장' 단계가 없다.
-
-엔진은 `TTS_ENGINE` 으로 바꾼다.
-
-| 값 | 용도 |
+| 주소 | 내용 |
 |---|---|
-| `google` | 실제 합성. 자격증명은 google-auth 기본 체인(`GOOGLE_APPLICATION_CREDENTIALS` → gcloud 사용자 자격증명 → 인스턴스에 붙은 서비스 계정). 운영에서는 **인스턴스 서비스 계정**이 가장 안전하다 — 키 파일을 서버에 두지 않는다. 필요한 권한은 `roles/cloudtts.user` 하나. |
-| `dev` | ffmpeg 으로 톤을 만드는 가짜 엔진. AWS 없이 업로드→캐시→방송→단말 흐름을 끝까지 돌려볼 때 쓴다. `APP_ENV=prod` 에서는 거부된다. |
+| http://localhost:5173 | 관리자 웹 |
+| http://localhost:8080/docs | API 문서(Swagger) |
+| http://localhost:8080/health | 서버 상태 |
 
-⚠ **온프레미스(폐쇄망)에서는 Google TTS 를 부를 수 없다.** 엔진이 프로토콜로 분리돼
-있으니(`app/tts/engine.py`) 로컬 엔진을 하나 더 구현해 끼우면 된다.
-
-### 실시간 방송
-
-오디오 바이트를 **파싱하거나 다시 자르지 않는다.** 브라우저가 만든 Ogg 페이지를
-받은 그대로 Icecast 로 흘려보낸다. 중간에서 재인코딩하면 지연이 붙고 프레임
-경계가 어긋나 단말 지터 버퍼가 깨진다.
-
-인코딩은 `opus-recorder`(WASM)로 한다. 브라우저 내장 `MediaRecorder` 는 못 쓴다 —
-Chrome 계열이 Ogg 컨테이너를 지원하지 않아 WebM 이 나가고, Icecast 가 그걸 Ogg 로
-알고 받아 단말 디코더가 깨진다. 인코더 워커는 번들에 포함되므로 폐쇄망에서도 돈다.
-
-인코더 파라미터(16kHz mono · 24kbps · 40ms)는 `LIVE_START` 로 단말에 보내는
-`sample_rate`/`frame_ms` 와 **반드시 같아야 한다**. 한쪽만 바꾸면 소리가 깨진다.
-바꿀 일이 있으면 `frontend/src/hooks/useMicUplink.ts` 와
-`backend/app/mqtt/publisher.py` 의 `live_start_payload` 를 함께 고친다.
-
-Icecast source 는 HTTP 라이브러리 없이 asyncio 스트림으로 직접 말한다.
-Content-Length 도 chunked 도 쓰지 않는 프로토콜이라, aiohttp/httpx 가 붙이는
-chunked 인코딩을 Icecast 가 오디오로 읽어버린다.
-
-진행 중인 LIVE 세션은 프로세스 메모리에 있다(`app/live/registry.py`).
-Icecast 연결과 WebSocket 은 DB 에 넣을 수 없어서다 — 이력만 DB 에 남는다.
-서버를 재기동하면 진행 중이던 LIVE 는 스트림 정보를 잃고 화면에 "업링크 끊김"
-으로 보인다. 사용자가 종료하면 정리된다.
-
-### 동시성
-
-방송 시작은 PostgreSQL 어드바이저리 락으로 직렬화한다
-(`_lock_broadcast_start`). 겹침 검사와 이벤트 생성 사이에 다른 요청이 끼어들면
-아직 커밋 안 된 앞 방송을 못 보고 통과해서, 같은 단말에 방송이 두 개 걸린다 —
-실제로 32ms 차이로 재현됐다.
-
-DB 세션은 의존성이 아니라 **미들웨어**가 관리한다. FastAPI 의 `yield` 의존성은
-정리(커밋) 코드가 응답을 보낸 뒤 실행돼서, 쓰기 API 가 200 을 돌려준 직후 읽으면
-커밋 전 상태가 보였다(20회 중 1회). 미들웨어의 `call_next` 다음은 응답 전송 전이라
-그 역전이 생기지 않는다.
-
-### 운영 배포 전 필수
-
-- `JWT_SECRET` 교체 — `APP_ENV=prod` 면 기본값·32바이트 미만은 기동이 거부된다.
-- `infra/certs/` 에 인증서 배치 (nginx + mosquitto 공용)
-- Mosquitto `passwd` 파일 생성 (`mosquitto_passwd -c passwd xwifi-server`)
-- `CORS_ORIGINS` 비우기 — nginx 가 같은 오리진으로 서빙하므로 필요 없다
-- `ICECAST_PUBLIC_BASE_URL` 을 실제 도메인으로 — 단말이 받는 `stream_url` 이 이 값으로 만들어진다
-- `ICECAST_SOURCE_PASSWORD` 교체
-- `TTS_ENGINE=google` 로 전환 + 서비스 계정에 `roles/cloudtts.user` 부여, 프로젝트에서 Cloud TTS API 활성화
+- 실물 단말 없이도 `scripts/mock_device.py` 가상 단말이 등록 → 설정 수신 → 파일 다운로드·검증 → 결과 보고, 실시간 스트림 접속까지 실제 단말과 같은 흐름으로 동작합니다.
+- 실물 단말 연결, 환경 프로파일(`-EnvProfile local | device`), 방화벽은 [06 인프라와 운영](docs/current/06_인프라_운영.md)을 봅니다.
+- 시험: `cd backend && .venv/Scripts/python -m pytest tests -q`
 
 ---
 
-## 남은 프로토콜 정합성 항목
+## 11. 구현 현황
 
-확정된 `job_id`, 단말별 CONFIG, `LIVE_START.stream_url`, MQTTS 동작은 현재 코드에
-반영되어 있다. 아직 합의 또는 확인이 필요한 항목은 다음 두 가지다.
+| 영역 | 상태 |
+|---|---|
+| 인증 · 4계층 권한 · 기관 트리 · 계정 기간 | ✅ 완료 |
+| 단말 등록(QR · 수동 · Web Serial) · 단말별 MQTT 계정 · MQTTS | ✅ 완료 |
+| 대시보드 · 카카오 지도(경계 · 클러스터) | ✅ 완료 |
+| 파일함 · TTS(합성 캐시) | ✅ 완료 |
+| 파일 방송 · 실시간 방송 · 동시 방송 | ✅ 완료 |
+| 예약 방송(규칙 · 실행기 · 예정표) | ✅ 완료 |
+| 방송 기록 | 최근 10건 표시 — 검색·필터·단말별 상세는 진행 예정 |
+| OTA(원격 펌웨어 업데이트) | 단말 규약 확정 — 서버 패키지 관리·배포 화면 진행 예정 |
+| 비용 조회 | AWS 비용 보고 스크립트 — 앱 내 조회 화면 진행 예정 |
 
-| 항목 | 현재 상태 | 영향 |
-|---|---|---|
-| `village_id` 외부 표현 | 최신 등록 사양은 12자리, 서버 코드는 DB 정수 ID를 8자리로 변환 | MQTT topic·등록 응답·화면을 함께 전환해야 함 |
-| RF 중 LIVE/FILE 명령 | 상태 우선순위상 LIVE/FILE이 RF보다 높지만 실물 응답은 미확인 | BUSY 처리 여부를 ESP32 측과 확인해야 함 |
+---
 
-세부 근거는 [ESP32 문서 목록](docs/spec/ESP32_문서목록_README.md)과
-[최신 아키텍처 문서](docs/spec/xWIFI_운영서버_아키텍처_260902.md)를 따른다.
+© 2026 Hanna Electronics. All rights reserved.
