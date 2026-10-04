@@ -28,10 +28,17 @@ interface FormState {
   valid_days: number | '';
 }
 
-//: 계정 사용 기간(문제점 26번). 1~30일, 기본 15일.
+//: 계정 사용 기간(문제점 26번). 선택지는 일곱 가지로 줄였다(문제점 44번) — 날마다 고르는 칸은 너무 길었다.
 const VALID_DAYS_DEFAULT = 15;
-const VALID_DAYS_MIN = 1;
-const VALID_DAYS_MAX = 30;
+const VALID_DAYS_OPTIONS: { days: number | ''; label: string }[] = [
+  { days: 7, label: '7일' },
+  { days: 15, label: '15일' },
+  { days: 30, label: '30일' },
+  { days: 90, label: '90일' },
+  { days: 180, label: '180일' },
+  { days: 365, label: '1년' },
+  { days: '', label: '무기한' },
+];
 
 const EMPTY: FormState = {
   username: '',
@@ -408,14 +415,11 @@ export function UsersPage() {
                 })
               }
             >
-              {Array.from({ length: VALID_DAYS_MAX - VALID_DAYS_MIN + 1 }, (_, i) => i + VALID_DAYS_MIN).map(
-                (d) => (
-                  <option key={d} value={d}>
-                    {d}일
-                  </option>
-                ),
-              )}
-              <option value="">무기한</option>
+              {VALID_DAYS_OPTIONS.map((o) => (
+                <option key={o.label} value={o.days}>
+                  {o.label}
+                </option>
+              ))}
             </select>
             <p className="hint">
               {form.valid_days === ''

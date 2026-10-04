@@ -18,6 +18,7 @@ import { TopBar } from './components/layout/TopBar';
 import { useAuth } from './auth/AuthContext';
 import { DashboardPage } from './pages/DashboardPage';
 import { EventsPage } from './pages/EventsPage';
+import { OtaPage } from './pages/OtaPage';
 import { BroadcastPage } from './pages/BroadcastPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { FilesPage } from './pages/FilesPage';
@@ -36,10 +37,10 @@ const PAGE_TITLES: Record<string, [string, string]> = {
   '/devices': ['단말 관리', '등록 · 배정 · 상태'],
   '/broadcast': ['방송하기', '말로 · 글로 · 저장된 소리로, 지금 또는 예약'],
   '/files': ['방송 자료', '저장된 소리 · 글로 만든 음성'],
-  '/events': ['방송 기록', '지난 방송과 단말 응답'],
+  '/events': ['방송 기록', '단말별 수신 결과'],
   '/schedules': ['예약 방송', '예약 목록 · 예정표'],
   '/costs': ['비용', '마을별 사용량'],
-  '/ota': ['OTA 관리', '펌웨어 배포'],
+  '/ota': ['OTA 관리', '펌웨어 패키지 · 배포 · 적용 확인'],
   '/settings': ['설정', '전 단말 공통 CONFIG'],
   '/regions': ['지역 관리', '기관 트리 · 마을 · 구역 · 단말'],
   '/users': ['계정 관리', '관리자 계정과 범위'],
@@ -128,7 +129,7 @@ export function App() {
           path="/ota"
           element={
             <RequireRole role="super_admin">
-              <ComingSoon title="OTA 관리" phase="Phase 7" />
+              <OtaPage />
             </RequireRole>
           }
         />

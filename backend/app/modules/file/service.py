@@ -304,22 +304,27 @@ def serve_file(file: File) -> Response:
 
     개발(빈 값)에서는 앞에 nginx 가 없으니 FileResponse 로 직접 보낸다.
     """
-    path = absolute_path(file)
+    return serve_path(file.storage_path, filename=file.filename, media_type="audio/mpeg")
+
+
+def serve_path(storage_path: str, *, filename: str, media_type: str) -> Response:
+    """FILE_ROOT 아래 파일 하나를 내려보낸다 — 방송 파일(serve_file)과 OTA 패키지가 같이 쓴다."""
+    path = settings.file_root / storage_path
     if not path.exists():
         raise FileNotFound("파일 원본이 디스크에 없습니다.", code="FILE_MISSING_ON_DISK")
     if settings.file_accel_location:
         # storage_path 는 FILE_ROOT 기준 상대 경로 — internal location 뒤에 그대로 붙인다.
-        internal = settings.file_accel_location.rstrip("/") + "/" + quote(file.storage_path)
+        internal = settings.file_accel_location.rstrip("/") + "/" + quote(storage_path)
         return Response(
             status_code=200,
             headers={
                 "X-Accel-Redirect": internal,
                 # nginx 는 accel 응답에서 Content-Type/Disposition 은 그대로 전달한다.
-                "Content-Type": "audio/mpeg",
-                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(file.filename)}",
+                "Content-Type": media_type,
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
             },
         )
-    return FileResponse(path, media_type="audio/mpeg", filename=file.filename)
+    return FileResponse(path, media_type=media_type, filename=filename)
 
 
 # ── 업로드 · 삭제 ────────────────────────────────────────────────────────

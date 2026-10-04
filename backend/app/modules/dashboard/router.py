@@ -184,7 +184,7 @@ async def summary(db: Db, scope: Scope) -> SummaryOut:
     active_rows = await _visible_events(
         db,
         select(BroadcastEvent)
-        .where(BroadcastEvent.ended_at.is_(None))
+        .where(BroadcastEvent.ended_at.is_(None), BroadcastEvent.event_type != "OTA_START")
         .order_by(BroadcastEvent.triggered_at.desc()),
         scope,
     )

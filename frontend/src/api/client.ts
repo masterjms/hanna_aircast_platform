@@ -29,6 +29,10 @@ import type {
   NewDevicePassword,
   DeviceStatusFilter,
   FileBroadcastRequest,
+  HistoryKind,
+  HistoryPage,
+  OtaJob,
+  OtaPackage,
   LiveBroadcastRequest,
   LoginResponse,
   MapData,
@@ -307,6 +311,39 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ reissue }),
       }),
+  },
+
+  /** 방송 기록 — 단말별 한 줄, 페이지(문제점 50번) */
+  events: {
+    list: (p: { page: number; size: 10 | 20 | 50; kind?: HistoryKind | ''; q?: string; from?: string; to?: string }) =>
+      request<HistoryPage>(`/api/events${query(p)}`),
+  },
+
+  /** OTA 관리 — 최고 관리자(문제점 48번) */
+  ota: {
+    packages: () => request<OtaPackage[]>('/api/ota/packages'),
+    upload: async (file: File, meta: { version: string; pkg_version: number; note?: string }): Promise<OtaPackage> => {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('version', meta.version);
+      form.append('pkg_version', String(meta.pkg_version));
+      if (meta.note) form.append('note', meta.note);
+      const headers = new Headers();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const res = await fetch('/api/ota/packages', { method: 'POST', body: form, headers });
+      const text = await res.text();
+      const parsed = text ? JSON.parse(text) : null;
+      if (!res.ok) {
+        const body = parsed as ApiErrorBody | null;
+        throw new ApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? '업로드에 실패했습니다.', body?.error?.detail);
+      }
+      return parsed as OtaPackage;
+    },
+    removePackage: (id: number) => request<void>(`/api/ota/packages/${id}`, { method: 'DELETE' }),
+    start: (body: { package_id: number; target_scope: 'village' | 'device'; target_ids: string[] }) =>
+      request<OtaJob>('/api/ota/start', { method: 'POST', body: JSON.stringify(body) }),
+    jobs: (limit = 20) => request<OtaJob[]>(`/api/ota/jobs?limit=${limit}`),
+    job: (id: number) => request<OtaJob>(`/api/ota/jobs/${id}`),
   },
 
   dashboard: {

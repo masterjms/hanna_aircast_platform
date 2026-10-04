@@ -108,6 +108,10 @@ class DeviceOut(ApiModel):
     has_credential: bool = False
     config_version: int | None = None
     ip: str | None = None
+    #: 실행 중 펌웨어 버전(STATUS 의 p4_fw/c6_fw). 등록 시점 값(p4_version)과 다를 수 있다 —
+    #: OTA 뒤 바뀐다. 목록의 「버전」 열이 "P4 / C6" 로 보여 준다(문제점 49번).
+    p4_fw: str | None = None
+    c6_fw: str | None = None
 
     @classmethod
     def from_row(
@@ -144,6 +148,8 @@ class DeviceOut(ApiModel):
             live=status.get("live"),
             config_version=status.get("config_version"),
             ip=status.get("ip"),
+            p4_fw=status.get("p4_fw"),
+            c6_fw=status.get("c6_fw"),
             has_credential=device.mqtt_password is not None,
         )
 

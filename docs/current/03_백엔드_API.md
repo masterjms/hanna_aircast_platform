@@ -6,7 +6,7 @@
 
 관련 문서: [아키텍처](01_시스템_아키텍처.md) · [단말 연동](02_단말_연동_사양.md) · [데이터 모델](04_데이터_모델.md)
 
-이 문서는 현재 코드에 실제로 등록된 REST·WebSocket API를 기준으로 한다. OTA, 비용, 전체 이력 검색 API는 아직 없으며 별도 절에서 명확히 구분한다.
+이 문서는 현재 코드에 실제로 등록된 REST·WebSocket API를 기준으로 한다. 비용 API는 아직 없으며 별도 절에서 명확히 구분한다. 방송 기록(§9.5)·OTA(§9.6)는 2026-10-04 추가.
 
 ## 1. 공통 규칙
 
@@ -325,7 +325,7 @@ PATCH에서 생략한 필드는 유지한다.
 | `status` | `online`, `offline`, `unassigned` |
 | `q` | label 또는 MAC 검색, 최대 100자 |
 
-응답에는 저장 필드 외에 계산·파생 필드가 포함된다.
+응답에는 저장 필드 외에 계산·파생 필드가 포함된다. `p4_fw`·`c6_fw`는 마지막 STATUS의 실행 중 펌웨어(2026-10-04, 목록 「버전」 열) — 등록 시점 `p4_version`·`c6_version`과 다를 수 있다.
 
 ```json
 {
@@ -381,7 +381,9 @@ PATCH에서 생략한 필드는 유지한다.
 | Method | Path | 설명 |
 |---|---|---|
 | PATCH | `/api/devices/{mac}` | label, 마을·구역, 주소·좌표 부분 수정 |
-| DELETE | `/api/devices/{mac}` | `super_admin`. 단말 삭제, credential·ACL·retained CONFIG 정리. 자동방송이 이 단말을 대상으로 하면 `SCHEDULE_TARGET_IN_USE` |
+| DELETE | `/api/devices/{mac}` | `super_admin`. 단말 삭제, credential·ACL·retained CONFIG 정리, **묘비(`device_tombstones`) 기록**. 예약 방송이 이 단말을 대상으로 하면 `SCHEDULE_TARGET_IN_USE` |
+
+삭제한 MAC은 묘비에 남아, 그 단말이 (공유 계정으로) 계속 STATUS를 보내도 서버가 버린다 — 예전에는 미배정 단말로 다시 자동 등록돼 목록에 오프라인으로 보였다(문제점 46번, 2026-10-04). 다시 쓰려면 `POST /api/devices`(신규 등록)로 등록한다. 그때 묘비가 지워지고 새 비밀번호가 발행되므로 단말에 다시 주입해야 붙는다.
 
 PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유지, `village_id: null`이면 배정 해제다. 마을 배정이 바뀌면 CONFIG와 ACL을 다시 배포한다.
 
@@ -614,6 +616,39 @@ TTS 요청:
 
 단말이 실제 byte 수를 보고하지 않아 결과를 한 번이라도 남긴 단말을 수신자로 간주한 비용·트래픽 참고값이다. 명령은 받았지만 결과를 보내지 못한 단말의 전송량은 빠질 수 있다.
 
+### 9.5 방송 기록 (2026-10-04, 문제점 50번)
+
+| Method | Path | 권한 | 설명 |
+|---|---|---|---|
+| GET | `/api/events` | 로그인·범위 적용 | 단말별 방송 기록, 페이지 |
+
+query: `page`(1~), `size`(10·20·50, 그 외는 10), `kind`(`file`·`schedule`·`live`·`ota`), `q`(단말 별칭·MAC·마을·파일 이름 부분 일치), `from`·`to`(KST 날짜, 하루 단위).
+
+행 = (방송 × 단말). `broadcast_recipients`(방송을 걸 때 범위 안에 있던 단말 전부)가 기준이고, 그 표가 없는 옛 방송은 `device_events`에 응답을 남긴 단말만 행이 된다. 범위는 스냅숏의 `village_id`로 거른다.
+
+```json
+{"total": 5, "page": 1, "size": 10, "items": [
+  {"event_id": 46, "kind": "file", "kind_label": "파일 방송", "source": "안내.mp3",
+   "started_at": "...", "ended_at": "...", "mac": "aabbcc000000", "label": "회관", "village_name": "시험",
+   "sent": true, "result_type": "FILE_RESULT", "responded_at": "...", "verdict": "정상", "reason": null}]}
+```
+
+`verdict`: `정상`(마지막 결과 ok) · `실패`(ok=false, `reason`에 code) · `응답 없음`(보냈는데 결과 없음, 방송 종료 뒤) · `진행 중` · `오프라인`(방송 당시 꺼져 있어 보내지 않음, `sent=false`). 판정 함수는 방송 제어 화면과 같다(`broadcast.service.result_ok`). 기록은 `EVENT_RETENTION_DAYS`(기본 150일) 뒤 매시간 정리 작업이 지운다.
+
+### 9.6 OTA (2026-10-04, 문제점 48번) — `super_admin`
+
+| Method | Path | 설명 |
+|---|---|---|
+| GET | `/api/ota/packages` | 패키지 목록(`active_jobs` = 진행 중 작업 수) |
+| POST | `/api/ota/packages` | multipart `file`(.pkg) + `version`(적용 확인용 문자열) + `pkg_version`(정수) + `note` |
+| DELETE | `/api/ota/packages/{id}` | 진행 중 작업이 있으면 `OTA_PACKAGE_IN_USE` |
+| POST | `/api/ota/start` | `{package_id, target_scope: village\|device, target_ids: [하나]}` → 201 `OtaJobOut`. 그 외 범위 `OTA_TARGET_SCOPE`, 둘 이상 422 |
+| GET | `/api/ota/jobs?limit=` | 최근 작업(방송 응답 + 단말별 `p4_fw`/`c6_fw`·`applied`) |
+| GET | `/api/ota/jobs/{event_id}` | 작업 하나 |
+| GET | `/dl/ota/{token}` | 단말 전용 패키지 다운로드(인증 없음, 토큰 만료 404) |
+
+`OtaJobOut` = `{broadcast: BroadcastOut, package, devices: [{mac, label, village_name, sent, result_type, ok, reason, progress, p4_fw, c6_fw, applied, online}], applied_count, sent_count}`. 겹침·커밋 후 발행·종료 판정은 방송 API와 같다(§9).
+
 ## 10. WebSocket 마이크 업링크
 
 연결:
@@ -683,8 +718,6 @@ wss://<host>/ingest?session=<broadcast_events.id>
 
 | 영역 | 현재 상태 | 구현 시 필요한 최소 범위 |
 |---|---|---|
-| 전체 이력 | 전용 router 없음 | 검색·기간·종류·대상·성공 필터, 페이지네이션, 단말 결과 상세 |
-| OTA | protocol 상수와 저장 디렉터리만 있음 | package·서명 관리, 작업 시작·조회, 재부팅 후 버전 판정 |
 | 비용 | DB 모델과 외부 Slack script만 있음 | 일별 집계, Cost Explorer 결합, 조회 API |
 
 새 API를 추가할 때는 현재 에러 envelope, JWT·scope 의존성, `target_ids` 규칙, 방송 service의 겹침 검사를 재사용한다.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -69,5 +69,27 @@ class Device(Base):
     )
 
     registered_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class DeviceTombstone(Base):
+    """지운 단말의 MAC (문제점 46번, 2026-10-04).
+
+    단말을 지워도 공유 계정(이행기)으로 붙어 있는 단말은 STATUS 를 계속 보내고, 서버의
+    자동 등록이 그걸 미배정 단말로 되살렸다. 묘비가 있는 MAC 의 메시지는 수신 단계에서
+    버린다. 신규 단말 등록(QR·수동)이 같은 MAC 을 다시 등록하면 묘비를 지운다 — 그때는
+    새 비밀번호가 발행되므로 단말에 다시 주입해야 붙는다.
+    """
+
+    __tablename__ = "device_tombstones"
+
+    mac: Mapped[str] = mapped_column(String(MAC_LENGTH), primary_key=True)
+    label: Mapped[str | None] = mapped_column(String(100))
+    village_name: Mapped[str | None] = mapped_column(String(100))
+    deleted_by: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="SET NULL")
+    )
+    deleted_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

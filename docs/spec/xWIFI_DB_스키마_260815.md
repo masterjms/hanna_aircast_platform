@@ -163,6 +163,34 @@ CREATE TABLE device_events (
 );
 ```
 
+2026-10-04 (0022, 문제점 46·48·50번) 추가:
+
+```sql
+-- 방송을 걸 때 범위 안에 있던 단말 전부(오프라인 포함). 단말별 기록·판정의 기준
+CREATE TABLE broadcast_recipients (
+    event_id      BIGINT REFERENCES broadcast_events(id) ON DELETE CASCADE,
+    mac           VARCHAR(12) NOT NULL,
+    label         VARCHAR(100), village_id INTEGER, village_name VARCHAR(100),   -- 그때 값 스냅숏
+    sent          BOOLEAN NOT NULL DEFAULT TRUE,   -- false = 오프라인이라 안 보냄
+    PRIMARY KEY (event_id, mac)
+);
+-- 지운 단말. 이 MAC 의 MQTT 메시지는 버린다(자동 재등록 방지). 신규 등록이 지운다
+CREATE TABLE device_tombstones (
+    mac VARCHAR(12) PRIMARY KEY, label VARCHAR(100), village_name VARCHAR(100),
+    deleted_by INTEGER REFERENCES users(id) ON DELETE SET NULL, deleted_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE ota_packages (
+    id SERIAL PRIMARY KEY, filename VARCHAR(255) NOT NULL, version VARCHAR(50) NOT NULL, pkg_version INTEGER NOT NULL,
+    size_bytes BIGINT NOT NULL, sha256 VARCHAR(64) NOT NULL, storage_path VARCHAR(500) NOT NULL, note TEXT,
+    uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE ota_tokens (
+    token VARCHAR(64) PRIMARY KEY, package_id INTEGER NOT NULL REFERENCES ota_packages(id) ON DELETE CASCADE,
+    job_id BIGINT, expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE broadcast_events ADD COLUMN ota_package_id INTEGER REFERENCES ota_packages(id) ON DELETE SET NULL;
+```
+
 한 번의 방송 명령(broadcast_events 1행)이 여러 단말(device_events 여러 행)에 결과를 남기는 구조. payload를 JSONB로 원본 그대로 저장해서, 필드가 바뀌어도(예: OTA reason 코드 추가) 스키마 변경 없이 대응 가능 — 이 부분이 단순화 포인트.
 
 ## 7. 현재 CONFIG (싱글턴)

@@ -13,7 +13,8 @@ import { LocationPickerMap } from '../components/LocationPickerMap';
 import { Modal } from '../components/Modal';
 import { RegisterDeviceDialog } from '../components/RegisterDeviceDialog';
 import { provisioningFrame } from '../lib/serial';
-import type { Device, DeviceCredential, DeviceStatusFilter, Village, Zone } from '../api/types';
+import type { Device, DeviceCredential, DeviceStatusFilter, Organization, Village, Zone } from '../api/types';
+import { TargetTreePicker } from '../components/broadcast/TargetTreePicker';
 import { useAuth } from '../auth/AuthContext';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
 
@@ -63,6 +64,20 @@ function AssignDialog({
   const [zoneId, setZoneId] = useState<number | ''>(device.zone_id ?? '');
   const [label, setLabel] = useState(device.label ?? '');
   const [zones, setZones] = useState<Zone[]>([]);
+  // 마을은 지역 트리에서 고른다(문제점 45번) — 마을이 수십 개면 드롭다운으로는 못 찾는다.
+  // 기관 목록은 기관 관리자 이상만 받을 수 있다. 이장은 담당 마을만 뿌리로 보인다.
+  const [orgs, setOrgs] = useState<Organization[]>([]);
+  useEffect(() => {
+    let alive = true;
+    api.organizations
+      .list()
+      .then((o) => alive && setOrgs(o))
+      .catch(() => alive && setOrgs([]));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const pickedVillage = villages.find((v) => v.id === villageId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 설치 위치 — 주소 검색이 채우고, 동/호만 수동. 비우면 지도가 마을 좌표로 대신 찍는다.
@@ -153,22 +168,46 @@ function AssignDialog({
       </p>
 
       <div className="field">
-        <label htmlFor="a-village">마을</label>
-        <select
-          id="a-village"
-          value={villageId}
-          onChange={(e) => {
-            setVillageId(e.target.value === '' ? '' : Number(e.target.value));
+        <label>마을</label>
+        <div className="assign-village">
+          <span className={pickedVillage ? 'strong' : 'dim'}>
+            {pickedVillage ? pickedVillage.name : '미배정'}
+          </span>
+          {pickedVillage && (
+            <button
+              type="button"
+              className="btn btn--sm btn--ghost"
+              onClick={() => {
+                setVillageId('');
+                setZoneId('');
+              }}
+            >
+              배정 해제
+            </button>
+          )}
+        </div>
+        <TargetTreePicker
+          mode="village"
+          single
+          allowOffline
+          orgs={orgs}
+          villages={villages}
+          devices={[]}
+          zonesOf={{}}
+          onNeedZones={() => undefined}
+          value={{ leaves: villageId === '' ? [] : [String(villageId)], groups: [] }}
+          onChange={(next) => {
+            const id = next.leaves[0];
+            setVillageId(id === undefined ? '' : Number(id));
             setZoneId('');
           }}
-        >
-          <option value="">미배정</option>
-          {villages.map((v) => (
-            <option key={v.id} value={v.id}>
-              {v.name}
-            </option>
-          ))}
-        </select>
+          renderCount={(online, total) => (
+            <span className={online > 0 ? 'dim' : 'count--none'}>
+              {total === 0 ? '단말 없음' : `${online}/${total}`}
+            </span>
+          )}
+        />
+        <p className="hint">기관을 펼쳐 마을을 하나 고릅니다. 단말이 없는 마을도 고를 수 있습니다.</p>
       </div>
 
       <div className="field">
@@ -518,21 +557,26 @@ function DeviceTable({
   return (
     <table>
       <thead>
+        {/* 열 순서는 문제점 49번(2026-10-03): 별칭-마을-MAC-구역-상태-RSSI-CFG-마지막 통신-버전-버튼 */}
         <tr>
-          <th className="mono">MAC</th>
           <th>별칭</th>
           {showVillage && <th>마을</th>}
+          <th className="mono">MAC</th>
           <th>구역</th>
           <th>상태</th>
           <th className="num">RSSI</th>
           <th className="num">CFG</th>
           <th className="num">마지막 통신</th>
+          <th title="실행 중 펌웨어 — P4 / C6. STATUS 가 없으면 등록 때 값">버전 (P4 / C6)</th>
           <th />
         </tr>
       </thead>
       <tbody>
         {devices.map((d) => (
           <tr key={d.mac}>
+            {/* 이름이 비면 MAC 을 쓴다 — 목록에 빈 칸이 생기지 않게 (등록 사양 §3.3) */}
+            <td className="strong">{d.label || <span className="mono dim">{d.mac}</span>}</td>
+            {showVillage && <td>{d.village_name ?? '미배정'}</td>}
             <td className="mono">
               {d.mac}
               {/* 계정 미발행 = 「미등록*」. 브로커에 붙긴 하는데 서버가 발행한
@@ -548,9 +592,6 @@ function DeviceTable({
                 </span>
               )}
             </td>
-            {/* 이름이 비면 MAC 을 쓴다 — 목록에 빈 칸이 생기지 않게 (등록 사양 §3.3) */}
-            <td className="strong">{d.label || <span className="mono dim">{d.mac}</span>}</td>
-            {showVillage && <td>{d.village_name ?? '미배정'}</td>}
             <td>{d.zone_name ?? '—'}</td>
             <td>
               {/* RECONNECTING = 방송은 살아 있는데 스피커가 무음(사양 §5) — 경고색으로 */}
@@ -571,6 +612,9 @@ function DeviceTable({
             </td>
             <td className="num">{d.config_version ?? '—'}</td>
             <td className="num dim">{formatTime(d.last_seen_at)}</td>
+            <td className="mono dim" title={`P4 ${d.p4_fw ?? d.p4_version ?? '-'} / C6 ${d.c6_fw ?? d.c6_version ?? '-'}`}>
+              {(d.p4_fw ?? d.p4_version) || '—'} / {(d.c6_fw ?? d.c6_version) || '—'}
+            </td>
             <td className="num">
               <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
                 {onCredential && (

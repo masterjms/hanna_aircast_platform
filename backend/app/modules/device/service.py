@@ -19,7 +19,7 @@ from app.core.presence import is_online, online_clause, online_cutoff
 from app.core.scope import VillageScope
 from app.core.village_token import token_for
 from app.errors import ApiError, DeviceAlreadyExists, DeviceNotFound, VillageNotFound
-from app.models.device import Device
+from app.models.device import Device, DeviceTombstone
 from app.models.org import Village, Zone
 from app.models.system import CurrentConfig
 from app.modules.org import service as org_service
@@ -465,6 +465,9 @@ async def create_device(
     if await db.get(Device, payload.mac) is not None:
         raise DeviceAlreadyExists(detail={"mac": payload.mac})
     await _validate_assignment(db, payload.village_id, payload.zone_id, scope)
+    # 지웠던 단말을 다시 등록하는 경우 — 묘비를 치운다. 새 비밀번호가 발행되므로 단말에
+    # 다시 주입해야 붙는다(문제점 46번).
+    await _unbury(db, payload.mac)
 
     # 등록 = DB 기록 + 브로커 계정 발행, 한 묶음이다(레지스트리 사양 §3.6).
     # 등록 화면이 모달을 열며 미리 발급받은 비밀번호(이미 시리얼로 단말에 넣었을 수
@@ -612,14 +615,70 @@ async def resync_config(db: AsyncSession, publisher: MqttPublisher) -> None:
         log.exception("CONFIG 재발행 실패 (재조정 주기가 복구)")
 
 
+# ── 삭제 단말 묘비 (문제점 46번) ─────────────────────────────────────────
+#: 지운 단말 MAC. 수신 루프가 메시지마다 보는 집합이라 DB 를 묻지 않고 메모리에 둔다.
+#: 기동 때 warm_tombstones 로 채우고, 삭제·재등록 때 같이 갱신한다(단일 프로세스라 어긋나지 않는다).
+TOMBSTONES: set[str] = set()
+
+
+async def warm_tombstones(db: AsyncSession) -> int:
+    TOMBSTONES.clear()
+    TOMBSTONES.update((await db.scalars(select(DeviceTombstone.mac))).all())
+    return len(TOMBSTONES)
+
+
+def is_tombstoned(mac: str) -> bool:
+    return mac in TOMBSTONES
+
+
+async def _bury(db: AsyncSession, device: Device, *, user_id: int | None) -> None:
+    """묘비를 세운다. 같은 MAC 의 옛 묘비가 있으면 새 값으로 덮는다."""
+    village_name = None
+    if device.village_id is not None:
+        village_name = await db.scalar(
+            select(Village.name).where(Village.id == device.village_id)
+        )
+    await db.merge(
+        DeviceTombstone(
+            mac=device.mac, label=device.label, village_name=village_name, deleted_by=user_id
+        )
+    )
+    TOMBSTONES.add(device.mac)
+
+
+async def _unbury(db: AsyncSession, mac: str) -> None:
+    """신규 등록이 같은 MAC 을 다시 쓸 때 묘비를 치운다."""
+    stone = await db.get(DeviceTombstone, mac)
+    if stone is not None:
+        await db.delete(stone)
+    TOMBSTONES.discard(mac)
+
+
+async def list_tombstones(db: AsyncSession) -> list[DeviceTombstone]:
+    return list(
+        (
+            await db.scalars(
+                select(DeviceTombstone).order_by(DeviceTombstone.deleted_at.desc())
+            )
+        ).all()
+    )
+
+
 async def delete_device(
-    db: AsyncSession, mac: str, scope: VillageScope, publisher: MqttPublisher
+    db: AsyncSession,
+    mac: str,
+    scope: VillageScope,
+    publisher: MqttPublisher,
+    *,
+    user_id: int | None = None,
 ) -> None:
     device = await db.get(Device, mac)
     if device is None:
         raise DeviceNotFound()
     scope.ensure_allowed(device.village_id)
 
+    # 묘비를 먼저 — 지운 뒤 들어오는 STATUS 가 이 단말을 되살리지 못하게(문제점 46번).
+    await _bury(db, device, user_id=user_id)
     await db.delete(device)
     await db.flush()
     # 삭제 = DB 제거 + 브로커 계정 제거, 한 묶음(레지스트리 사양 §3.6).

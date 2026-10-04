@@ -32,8 +32,8 @@ interface MenuItem {
  */
 const OPERATION: MenuItem[] = [
   { to: '/broadcast', label: '방송하기', primary: true },
-  { to: '/schedules', label: '예약 방송' },
   { to: '/', label: '마을 현황' },
+  { to: '/schedules', label: '예약 방송' }, // 순서는 문제점 47번(2026-10-03)
   { to: '/files', label: '방송 자료' },
   { to: '/events', label: '방송 기록' },
   { to: '/devices', label: '단말 관리' },
@@ -41,7 +41,7 @@ const OPERATION: MenuItem[] = [
 
 const ADMIN: MenuItem[] = [
   { to: '/costs', label: '비용', pending: true },
-  { to: '/ota', label: 'OTA 관리', minRole: 'super_admin', pending: true },
+  { to: '/ota', label: 'OTA 관리', minRole: 'super_admin' },
   { to: '/settings', label: '설정', minRole: 'super_admin' },
   { to: '/regions', label: '지역 관리', minRole: 'org_admin' },
   { to: '/users', label: '계정 관리', minRole: 'org_admin' },

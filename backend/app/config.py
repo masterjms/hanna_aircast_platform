@@ -137,6 +137,10 @@ class Settings(BaseSettings):
     #: 넘어가서, 마을 전체가 동시에 받아도 파이썬 프로세스가 바이트를 만지지 않는다.
     file_accel_location: str = ""
     download_token_ttl_sec: int = 600
+    #: 방송 기록 보관(일). 끝난 방송·단말 응답을 이 뒤에 지운다(문제점 50번, 5개월).
+    event_retention_days: int = 150
+    #: OTA 작업이 이 시간 안에 전 단말 OTA_RESULT 를 못 받으면 종료로 확정한다(초).
+    ota_timeout_sec: int = 1800
     ota_token_ttl_sec: int = 7200
 
     # ── 운영 파라미터 ───────────────────────────────────

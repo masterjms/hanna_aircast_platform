@@ -144,6 +144,9 @@ export interface Device {
   live: string | null;
   config_version: number | null;
   ip: string | null;
+  /** 실행 중 펌웨어(STATUS p4_fw/c6_fw). 없으면 등록 시점 p4_version/c6_version 으로 대신 보여 준다 */
+  p4_fw?: string | null;
+  c6_fw?: string | null;
   /** 단말별 MQTT 계정 발행 여부. false = 「미등록*」(계정 미발행 — 발행 필요) */
   has_credential: boolean;
   /** 등록(QR 스캔) 시점의 하드웨어 식별값 — 출하 당시 값, 실행 중 버전과 별개 */
@@ -416,6 +419,75 @@ export interface TtsResult {
 
 // ── 방송 (Phase 3) ───────────────────────────────────────────────────────
 export type TargetScope = 'device' | 'zone' | 'village' | 'all';
+
+// ── 방송 기록 (GET /api/events, 문제점 50번) ─────────────────────────────
+export type HistoryKind = 'file' | 'schedule' | 'live' | 'ota';
+export type HistoryVerdict = '정상' | '실패' | '응답 없음' | '오프라인' | '진행 중' | '응답';
+
+export interface HistoryRow {
+  event_id: number;
+  kind: HistoryKind;
+  kind_label: string;
+  /** 파일 이름 · "라이브" · 패키지 이름 */
+  source: string | null;
+  started_at: string;
+  ended_at: string | null;
+  mac: string;
+  label: string | null;
+  village_name: string | null;
+  /** 보낼 때 온라인이라 명령을 보낸 단말인가 */
+  sent: boolean;
+  result_type: string | null;
+  responded_at: string | null;
+  verdict: HistoryVerdict;
+  reason: string | null;
+}
+
+export interface HistoryPage {
+  total: number;
+  page: number;
+  size: number;
+  items: HistoryRow[];
+}
+
+// ── OTA (문제점 48번) ─────────────────────────────────────────────────────
+export interface OtaPackage {
+  id: number;
+  filename: string;
+  /** 적용 확인용 — STATUS p4_fw/c6_fw 와 그대로 비교 */
+  version: string;
+  pkg_version: number;
+  size_bytes: number;
+  sha256: string;
+  note: string | null;
+  uploaded_by: number | null;
+  uploaded_by_name: string | null;
+  created_at: string;
+  active_jobs: number;
+}
+
+export interface OtaDevice {
+  mac: string;
+  label: string | null;
+  village_name: string | null;
+  sent: boolean;
+  result_type: string | null;
+  ok: boolean | null;
+  reason: string | null;
+  progress: string | null;
+  p4_fw: string | null;
+  c6_fw: string | null;
+  applied: boolean;
+  online: boolean;
+}
+
+export interface OtaJob {
+  broadcast: BroadcastDetail;
+  package: OtaPackage | null;
+  devices: OtaDevice[];
+  applied_count: number;
+  sent_count: number;
+}
 
 export interface FileBroadcastRequest {
   file_id: number;

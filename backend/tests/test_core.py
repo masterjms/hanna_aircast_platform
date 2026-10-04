@@ -1017,8 +1017,9 @@ class TestTerminalResults:
     def test_terminal_set_matches_spec(self):
         from app.modules.broadcast.service import TERMINAL_RESULTS
 
-        # 통신 사양 §5.4: 종료를 말하는 건 이 둘뿐이다.
-        assert {"FILE_RESULT", "LIVE_RESULT"} == TERMINAL_RESULTS
+        # 통신 사양 §5.4: 방송의 종료를 말하는 건 FILE_RESULT·LIVE_RESULT. OTA 는 OTA_RESULT 가
+        # job 당 한 번 오는 최종 결과다(현행 02 §10, 문제점 48번).
+        assert {"FILE_RESULT", "LIVE_RESULT", "OTA_RESULT"} == TERMINAL_RESULTS
 
     def test_live_ready_is_not_terminal(self):
         from app.modules.broadcast.service import TERMINAL_RESULTS
@@ -1390,10 +1391,12 @@ class TestAccountExpiry:
 
         assert _expiry_from(None) is None
 
-    def test_default_is_15_days_within_1_to_30(self):
+    def test_default_is_15_days_within_1_to_365(self):
         from app.schemas.org import VALID_DAYS_DEFAULT, VALID_DAYS_MAX, VALID_DAYS_MIN
 
-        assert (VALID_DAYS_MIN, VALID_DAYS_DEFAULT, VALID_DAYS_MAX) == (1, 15, 30)
+        # 화면 선택지 7·15·30·90·180·365·무기한(문제점 44번)이 전부 범위 안이어야 한다.
+        assert (VALID_DAYS_MIN, VALID_DAYS_DEFAULT, VALID_DAYS_MAX) == (1, 15, 365)
+        assert all(VALID_DAYS_MIN <= d <= VALID_DAYS_MAX for d in (7, 15, 30, 90, 180, 365))
 
 
 # ── 방송 대상 이름 (문제점 33번) ────────────────────────────────────────
@@ -2455,3 +2458,87 @@ class TestOnceSchedule:
 
         assert schedule_when("once", dt.time(7, 0), dt.date(2030, 9, 22)) == "9/22 한 번 07:00"
         assert schedule_when("daily", dt.time(7, 0)) == "매일 07:00"
+
+
+# ── 방송 기록 단말별 판정 (문제점 50번) ────────────────────────────────────
+class TestHistoryJudge:
+    def test_offline_beats_everything(self):
+        from app.modules.history.service import judge
+
+        assert judge(sent=False, result_type=None, payload=None, ended=True)[0] == "오프라인"
+
+    def test_no_answer_depends_on_whether_event_ended(self):
+        from app.modules.history.service import judge
+
+        assert judge(sent=True, result_type=None, payload=None, ended=False)[0] == "진행 중"
+        assert judge(sent=True, result_type=None, payload=None, ended=True)[0] == "응답 없음"
+
+    def test_result_ok_rules_match_broadcast_screen(self):
+        from app.modules.history.service import judge
+
+        def j(result_type, payload, ended=True):
+            return judge(sent=True, result_type=result_type, payload=payload, ended=ended)
+
+        assert j("FILE_RESULT", {"ok": True})[0] == "정상"
+        assert j("FILE_RESULT", {"ok": False, "code": "DL_FAIL"}) == ("실패", "DL_FAIL")
+        # 구형식 LIVE_READY status=0 도 정상
+        assert j("LIVE_READY", {"status": 0}, ended=False)[0] == "정상"
+        assert j("OTA_RESULT", {"ok": True, "code": "OK"})[0] == "정상"
+
+    def test_kind_of(self):
+        from app.modules.history.service import kind_of
+
+        assert kind_of("FILE_START", None) == "file"
+        assert kind_of("FILE_START", 7) == "schedule"
+        assert kind_of("LIVE_START", None) == "live"
+        assert kind_of("OTA_START", None) == "ota"
+
+
+# ── OTA (문제점 48번) ────────────────────────────────────────────────────
+class TestOtaPayload:
+    def test_ota_start_fields_match_contract(self):
+        """통신 사양 §3.6 · 현행 02 §10: type·job_id·pkg_version·url·size·sha256.
+        targets·reboot 없음."""
+        from app.modules.ota.service import ota_start_payload
+
+        p = ota_start_payload(
+            job_id=301, pkg_version=2, url="https://h/dl/ota/abc", size=7, sha256="f" * 64
+        )
+        assert set(p) == {"type", "job_id", "pkg_version", "url", "size", "sha256"}
+        assert p["type"] == "OTA_START" and p["job_id"] == 301
+
+    def test_ota_progress_is_telemetry_and_result_is_terminal(self):
+        from app.constants import TELEMETRY_RESULTS
+        from app.modules.broadcast.service import TERMINAL_RESULTS
+
+        assert "OTA_PROGRESS" in TELEMETRY_RESULTS and "OTA_PROGRESS" not in TERMINAL_RESULTS
+        assert "OTA_RESULT" in TERMINAL_RESULTS
+
+    def test_ota_jobs_are_hidden_from_active_broadcasts(self):
+        """방송하기의 「방송 끄기」가 OTA 작업에 FILE_STOP 을 보내면 안 된다."""
+        import inspect
+
+        from app.modules.broadcast import service
+
+        assert "OTA_START" in inspect.getsource(service.list_active)
+
+
+# ── 삭제 단말 묘비 (문제점 46번) ───────────────────────────────────────────
+class TestTombstone:
+    def test_dispatch_drops_tombstoned_mac_before_parsing(self):
+        import inspect
+
+        from app.mqtt import handlers
+
+        src = inspect.getsource(handlers.dispatch)
+        assert "is_tombstoned" in src
+        # 묘비 검사가 payload 파싱·버퍼 적재보다 먼저다
+        assert src.index("is_tombstoned") < src.index("_parse(payload)")
+
+    def test_in_memory_set_tracks_bury_and_unbury(self):
+        from app.modules.device import service
+
+        service.TOMBSTONES.clear()
+        service.TOMBSTONES.add("aabbccdd0001")
+        assert service.is_tombstoned("aabbccdd0001") and not service.is_tombstoned("aabbccdd0002")
+        service.TOMBSTONES.clear()

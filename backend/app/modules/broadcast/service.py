@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+from collections.abc import Sequence
 
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,8 +33,9 @@ from app.live.icecast import IcecastSource
 from app.live.mount import mount_path, stream_url
 from app.live.registry import LiveRegistry, LiveSession
 from app.models.device import Device
-from app.models.event import BroadcastEvent, DeviceEvent
+from app.models.event import BroadcastEvent, BroadcastRecipient, DeviceEvent
 from app.models.file import File
+from app.models.org import Village
 from app.models.system import CurrentConfig
 from app.modules.device import service as device_service
 from app.modules.file import service as file_service
@@ -106,6 +108,46 @@ async def _active_events(db: AsyncSession) -> list[BroadcastEvent]:
         .order_by(BroadcastEvent.triggered_at)
     )
     return list(rows.all())
+
+
+async def snapshot_recipients(
+    db: AsyncSession, event: BroadcastEvent, *, sent_macs: Sequence[str]
+) -> None:
+    """방송을 걸 때 대상 범위의 단말 전부를 기록에 박아 둔다(0022, 문제점 50번).
+
+    sent_macs 는 실제로 명령을 보낸(그때 온라인) 단말. 범위 안이지만 오프라인이라 보내지 않은
+    단말은 sent=False 로 남아 기록에 「오프라인(미발송)」으로 보인다. 라벨·마을 이름은 지금 값의
+    스냅숏이다. 범위 해석은 발행과 같은 함수(macs_for_target, online_only=False)를 쓴다.
+    """
+    try:
+        all_macs = await device_service.macs_for_target(
+            db,
+            target_scope=event.target_scope,
+            target_ids=event.target_ids,
+            scope=VillageScope.for_super_admin(),
+            online_only=False,
+        )
+    except ApiError:
+        all_macs = list(sent_macs)
+    macs = sorted(set(all_macs) | set(sent_macs))
+    if not macs:
+        return
+    rows = (
+        await db.execute(
+            select(Device.mac, Device.label, Device.village_id, Village.name)
+            .outerjoin(Village, Village.id == Device.village_id)
+            .where(Device.mac.in_(macs))
+        )
+    ).all()
+    sent = set(sent_macs)
+    db.add_all(
+        BroadcastRecipient(
+            event_id=event.id, mac=mac, label=label, village_id=vid, village_name=vname,
+            sent=mac in sent,
+        )
+        for mac, label, vid, vname in rows
+    )
+    await db.flush()
 
 
 def _ensure_mqtt(publisher: MqttPublisher) -> None:
@@ -211,6 +253,26 @@ def _live_ready_ok(payload: dict) -> bool | None:
     return None
 
 
+def result_ok(result_type: str | None, payload: dict) -> bool | None:
+    """단말 결과 메시지 하나의 성패. True=성공, False=실패, None=판정 불가(telemetry 등).
+
+    방송 제어 화면(_to_out)과 방송 기록(history.service)이 같은 규칙을 써야 두 화면이 같은
+    말을 한다.
+    """
+    if result_type in _OK_FIELD_RESULTS and "ok" in payload:
+        # 신형식: ok 하나가 성패를 정한다. code 는 사유일 뿐 판정을 뒤집지 않는다
+        # (사양 §5.4 규칙 2). STOPPED_BY_SERVER 도 ok=true = 정상 종료다.
+        return bool(payload["ok"])
+    if result_type in _SUCCESS_RESULTS:
+        # 구형식: verify_ok 가 있으면 그 값을 믿는다(sha256 검증 결과).
+        return bool(payload.get("verify_ok", True))
+    if result_type == "LIVE_READY":
+        return _live_ready_ok(payload)
+    if result_type in _FAILURE_RESULTS:
+        return False
+    return None
+
+
 def _reason_text(result_type: str | None, payload: dict) -> str | None:
     """실패 사유 등 결과에 붙는 짧은 설명."""
     if result_type in TELEMETRY_RESULTS:
@@ -232,6 +294,15 @@ def _stats_text(payload: dict) -> str | None:
     소리가 끊긴다는 신고가 오면 여기 숫자로 원인을 가른다.
     """
     parts = []
+    if payload.get("type") == "OTA_PROGRESS" or "percent" in payload:
+        # OTA 진행: 상태 · 퍼센트 (현행 02 §10)
+        state = payload.get("state")
+        pct = payload.get("percent", payload.get("progress"))
+        if state:
+            parts.append(str(state))
+        if pct is not None:
+            parts.append(f"{pct}%")
+        return " · ".join(parts) or None
     buffer_ms = payload.get("p4_buffer_ms")
     if buffer_ms is not None:
         parts.append(f"버퍼 {int(buffer_ms) / 1000:.1f}초")
@@ -251,6 +322,8 @@ def _phase_of(event: BroadcastEvent, results: list[DeviceResultOut]) -> str:
     """
     if event.ended_at is not None:
         return "종료"
+    if event.event_type == EventType.OTA_START.value:
+        return "업데이트 중"
     if event.stop_requested_at is not None:
         return "중지 중"
     expected = event.expected_count or 0
@@ -344,18 +417,7 @@ async def _to_out(
     results: list[DeviceResultOut] = []
     for mac, (de, label) in latest.items():
         payload = de.payload or {}
-        ok: bool | None = None
-        if de.result_type in _OK_FIELD_RESULTS and "ok" in payload:
-            # 신형식: ok 하나가 성패를 정한다. code 는 사유일 뿐 판정을 뒤집지 않는다
-            # (사양 §5.4 규칙 2). STOPPED_BY_SERVER 도 ok=true = 정상 종료다.
-            ok = bool(payload["ok"])
-        elif de.result_type in _SUCCESS_RESULTS:
-            # 구형식: verify_ok 가 있으면 그 값을 믿는다(sha256 검증 결과).
-            ok = bool(payload.get("verify_ok", True))
-        elif de.result_type == "LIVE_READY":
-            ok = _live_ready_ok(payload)
-        elif de.result_type in _FAILURE_RESULTS:
-            ok = False
+        ok = result_ok(de.result_type, payload)
 
         stats = telemetry.get(mac)
         results.append(
@@ -393,7 +455,7 @@ async def list_active(
     db: AsyncSession, scope: VillageScope, registry: LiveRegistry | None = None
 ) -> list[BroadcastOut]:
     """진행 중인 방송. 대상 단말의 마을이 내 범위에 하나라도 걸리면 보인다(설계 §8)."""
-    events = await _active_events(db)
+    events = [e for e in await _active_events(db) if e.event_type != EventType.OTA_START.value]
     flags = await device_service.events_visible_to(db, events, scope)
     return [await _to_out(db, e, registry) for e, ok in zip(events, flags, strict=True) if ok]
 
@@ -454,7 +516,7 @@ PLAYBACK_TAIL_SEC = 5.0
 
 #: "이 방송에서 이 단말은 끝났다"를 뜻하는 결과 타입 (통신 사양 §5.4).
 #: LIVE_READY 는 준비 결과라 여기 없다 — 준비됐다고 방송이 끝난 게 아니다.
-TERMINAL_RESULTS = frozenset({"FILE_RESULT", "LIVE_RESULT"})
+TERMINAL_RESULTS = frozenset({"FILE_RESULT", "LIVE_RESULT", "OTA_RESULT"})
 
 #: 살아 있는 LIVE 세션(Icecast source). 기동 때 main.py 가 넣어 준다.
 #: end_event 가 라이브를 끝낼 때 여기서 스트림을 닫는다 — "종료 확정"과 "스트림
@@ -559,9 +621,10 @@ async def finish_if_all_reported(db: AsyncSession, job_id: int) -> bool:
     if await _responded_count(db, event.id) < event.expected_count:
         return False
 
-    # 라이브의 LIVE_RESULT, 중지 요청 뒤의 응답, 저장만 하는 파일은 "전원 응답 = 끝".
+    # 라이브의 LIVE_RESULT, 중지 요청 뒤의 응답, 저장만 하는 파일, OTA 는 "전원 응답 = 끝".
     if (
         event.event_type.startswith("LIVE")
+        or event.event_type == EventType.OTA_START.value
         or event.stop_requested_at is not None
         or event.autoplay is False
     ):
@@ -748,6 +811,7 @@ async def start_file_broadcast(
     )
     db.add(event)
     await db.flush()
+    await snapshot_recipients(db, event, sent_macs=macs)
     village_kw = await _village_kw(db, payload.target_scope, payload.target_ids)
     # 토큰·이력이 다른 세션에 보인 뒤에 보낸다(함수 주석).
     await _commit_before_publish(db)
@@ -922,6 +986,7 @@ async def start_live_broadcast(
     )
     db.add(event)
     await db.flush()
+    await snapshot_recipients(db, event, sent_macs=macs)
 
     await registry.add(
         LiveSession(

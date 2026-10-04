@@ -33,14 +33,16 @@ from app.modules.device import service as device_service
 from app.modules.device.router import router as device_router
 from app.modules.file.router import router as file_router
 from app.modules.geo.router import router as geo_router
+from app.modules.history.router import router as history_router
 from app.modules.org.router import router as org_router
+from app.modules.ota.router import router as ota_router
 from app.modules.schedule.router import router as schedule_router
 from app.modules.system.router import router as system_router
 from app.mqtt.connection import MqttConnection
 from app.mqtt.handlers import dispatch
 from app.mqtt.publisher import MqttPublisher
 from app.mqtt.status_buffer import StatusBuffer
-from app.tasks import account_expiry, config_reconcile, schedule_runner
+from app.tasks import account_expiry, config_reconcile, event_retention, schedule_runner
 
 # ⚠ Windows 에서 이 모듈을 `python -m uvicorn app.main:app` 로 띄우면 MQTT 가 죽는다.
 #   uvicorn 이 ProactorEventLoop 를 강제하는데 paho 가 쓰는 add_reader 가 거기 없다.
@@ -113,6 +115,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         coalesce=True,
         max_instances=1,
     )
+    # 방송 기록 보관 기간 정리(문제점 50번, 기본 150일). 하루 한 번이면 충분하지만 재시작 뒤에도
+    # 곧 돌게 매시간으로 걸어 둔다(지울 게 없으면 아무 일도 안 한다).
+    scheduler.add_job(
+        event_retention.run,
+        "interval",
+        hours=1,
+        id="event-retention",
+        next_run_time=datetime.now(),
+        coalesce=True,
+        max_instances=1,
+    )
     # 자동방송 실행기. 매분 규칙을 평가한다. 중복 실행은 schedule_runs 유니크가 막으므로
     # coalesce·max_instances 는 한 프로세스 안의 예의일 뿐이다.
     scheduler.add_job(
@@ -138,6 +151,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await device_service.export_broker_accounts(session)
     except Exception:  # noqa: BLE001
         log.exception("기동 시 MQTT 계정 내보내기 실패 (다음 계정 발행 때 재시도)")
+
+    # 지운 단말 묘비(문제점 46번) — 수신 루프가 메시지마다 보는 집합이라 기동 때 채운다.
+    try:
+        async with SessionFactory() as session:
+            buried = await device_service.warm_tombstones(session)
+        if buried:
+            log.info("삭제 단말 묘비 %d건", buried)
+    except Exception:  # noqa: BLE001
+        log.exception("삭제 단말 묘비 읽기 실패 (지운 단말이 다시 등록될 수 있다)")
 
     # 지난 프로세스가 죽거나 재배포로 교체되면서 남은 '진행 중' 방송을 정리한다.
     # LiveRegistry 는 메모리뿐이라 재시작하면 라이브 세션·워치독이 통째로
@@ -221,3 +243,5 @@ app.include_router(dashboard_router)
 app.include_router(file_router)
 app.include_router(broadcast_router)
 app.include_router(geo_router)
+app.include_router(history_router)
+app.include_router(ota_router)

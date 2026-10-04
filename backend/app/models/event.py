@@ -97,6 +97,30 @@ class BroadcastEvent(Base):
     #: stop_*_broadcast 가 ended_at 을 찍을 때 같이 채운다. 서버 재시작으로 고아가
     #: 되어 정리된 행은 시간을 신뢰할 수 없어 NULL 로 남긴다(트래픽 산정에서 제외).
     bytes_estimated: Mapped[int | None] = mapped_column(BigInteger)
+    #: OTA 작업(event_type OTA_START)이 어느 패키지였나(0022). 패키지를 지우면 비워진다.
+    ota_package_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("ota_packages.id", ondelete="SET NULL")
+    )
+
+
+class BroadcastRecipient(Base):
+    """방송을 걸 때 대상 범위에 있던 단말 하나 (0022, 문제점 50번).
+
+    sent=True 는 명령을 보낸 단말(그때 온라인), False 는 범위 안이지만 오프라인이라 보내지
+    않은 단말. 라벨·마을은 그 시각의 스냅숏 — 단말을 지우거나 옮겨도 기록은 그대로 읽힌다.
+    단말별 판정(정상·실패·응답 없음·오프라인)은 이 표와 device_events 를 맞춰 센다.
+    """
+
+    __tablename__ = "broadcast_recipients"
+
+    event_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("broadcast_events.id", ondelete="CASCADE"), primary_key=True
+    )
+    mac: Mapped[str] = mapped_column(String(MAC_LENGTH), primary_key=True, index=True)
+    label: Mapped[str | None] = mapped_column(String(100))
+    village_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    village_name: Mapped[str | None] = mapped_column(String(100))
+    sent: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
 
 
 class DeviceEvent(Base):

@@ -26,9 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
-import aiomqtt  # noqa: E402
-
-from app.config import settings  # noqa: E402
+import aiomqtt
+from app.config import settings
 
 ROOT = settings.mqtt_topic_root
 
@@ -81,6 +80,10 @@ class MockDevice:
         self.live_session: int | None = None
         self.live_task: asyncio.Task | None = None
         self.state = "IDLE"
+        # 실행 중 펌웨어(STATUS p4_fw/c6_fw). OTA 를 받으면 "PKG<pkg_version>" 으로 바뀐다 —
+        # 서버의 적용 확인은 패키지 버전 문자열과 그대로 비교하므로, 시험 때 패키지 버전을
+        # 그 모양으로 적으면 「적용 확인」까지 볼 수 있다(문제점 48번).
+        self.fw = "V.MOCK-1"
 
     def status_payload(self, *, offline: bool = False) -> dict:
         if offline:
@@ -106,6 +109,8 @@ class MockDevice:
             "busy": 1 if self.busy_file else 0,
             "reason": 0,
             "config_version": self.config_version,
+            "p4_fw": self.fw,
+            "c6_fw": self.fw,
         }
 
     def apply_config(self, raw: bytes) -> str | None:
@@ -239,8 +244,9 @@ class MockDevice:
             await self.do_live_start(client, cmd)
         elif kind == "LIVE_STOP":
             await self.do_live_stop(client, cmd)
+        elif kind == "OTA_START":
+            await self.do_ota_start(client, cmd)
         else:
-            # OTA_* 는 Phase 7 에서 붙인다.
             print(f"[{self.mac}]   (아직 처리하지 않는 명령)")
 
     async def do_live_start(self, client: aiomqtt.Client, cmd: dict) -> None:
@@ -350,6 +356,57 @@ class MockDevice:
                 "device": with_colons(self.mac), "reason": "DOWNLOAD_FAIL",
             })
             print(f"[{self.mac}]   FILE_ABORT (다운로드 실패: {exc})")
+        finally:
+            self.busy_file = None
+            await self.set_state(client, "IDLE")
+
+    async def do_ota_start(self, client: aiomqtt.Client, cmd: dict) -> None:
+        """OTA(현행 02 §10): 받기 → 검증 → OTA_RESULT ok → 끊고 재부팅 → 새 펌웨어로 STATUS.
+
+        LIVE·FILE 중이면 BUSY. 진행은 OTA_PROGRESS(최신값만), 끝은 OTA_RESULT 한 번.
+        재부팅은 흉내만 낸다 — 연결은 유지하고 fw 만 바꿔 다음 STATUS 에 싣는다.
+        """
+        job_id = cmd.get("job_id")
+        if self.busy_file is not None or self.live_session is not None:
+            await self.publish_result(client, {
+                "type": "OTA_RESULT", "job_id": job_id, "device": with_colons(self.mac),
+                "ok": False, "code": "BUSY",
+            })
+            print(f"[{self.mac}]   OTA 거절: BUSY")
+            return
+        self.busy_file = job_id
+        await self.set_state(client, "OTA")
+        try:
+            url, expect, total = cmd.get("url", ""), cmd.get("sha256", ""), int(cmd.get("size") or 0)
+            await self.publish_result(client, {
+                "type": "OTA_PROGRESS", "job_id": job_id, "state": "ACCEPTED", "percent": 0,
+            })
+            body = await asyncio.to_thread(_fetch, url)
+            await self.publish_result(client, {
+                "type": "OTA_PROGRESS", "job_id": job_id, "state": "DOWNLOADING", "percent": 100,
+                "received": len(body), "total_size": total or len(body),
+            })
+            ok = bool(body) and (not expect or hashlib.sha256(body).hexdigest() == expect)
+            ok = ok and (not total or len(body) == total)
+            await self.publish_result(client, {
+                "type": "OTA_PROGRESS", "job_id": job_id, "state": "VERIFYING", "percent": 100,
+            })
+            await self.publish_result(client, {
+                "type": "OTA_RESULT", "job_id": job_id, "device": with_colons(self.mac),
+                "ok": ok, "code": "OK" if ok else "VERIFY_FAIL",
+            })
+            if ok:
+                # 재부팅 흉내: 펌웨어 버전이 바뀌고 다음 STATUS 가 즉시 나간다.
+                self.fw = f"PKG{cmd.get('pkg_version')}"
+                print(f"[{self.mac}]   OTA 적용 → fw {self.fw} (재부팅 흉내)")
+            else:
+                print(f"[{self.mac}]   OTA 실패 (VERIFY_FAIL)")
+        except Exception as exc:  # noqa: BLE001
+            await self.publish_result(client, {
+                "type": "OTA_RESULT", "job_id": job_id, "device": with_colons(self.mac),
+                "ok": False, "code": "DL_FAIL",
+            })
+            print(f"[{self.mac}]   OTA 실패 (다운로드: {exc})")
         finally:
             self.busy_file = None
             await self.set_state(client, "IDLE")

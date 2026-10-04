@@ -127,7 +127,7 @@ async def delete_device(
     mac: MacPath,
     db: Db,
     scope: Scope,
-    _: SuperAdmin,
+    user: SuperAdmin,
     publisher: Publisher,
 ) -> None:
     """단말 삭제 — 최고 관리자만(설계 §5). MQTT 계정 삭제까지 같이 일어나는 파괴적 작업.
@@ -138,4 +138,4 @@ async def delete_device(
     await schedule_service.ensure_not_schedule_target(
         db, what="단말", target_scope=ScheduleTarget.DEVICE.value, ids=[mac]
     )
-    await service.delete_device(db, mac, scope, publisher)
+    await service.delete_device(db, mac, scope, publisher, user_id=user.id)

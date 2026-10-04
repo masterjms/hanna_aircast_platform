@@ -72,8 +72,9 @@ const deviceLeaf = (d: Device): Leaf => ({
   total: 1,
 });
 
-/** 방송은 온라인 단말에만 나간다 — 받을 단말이 없는 가지는 고를 수 없다. */
-const pickable = (leaf: Leaf) => leaf.online > 0;
+/** 방송은 온라인 단말에만 나간다 — 받을 단말이 없는 가지는 고를 수 없다.
+ *  배정(문제점 45번)처럼 꺼진 마을도 골라야 하는 화면은 allowOffline 으로 푼다. */
+const pickableOnline = (leaf: Leaf) => leaf.online > 0;
 
 function villageNode(
   v: Village,
@@ -225,6 +226,8 @@ export function TargetTreePicker({
   value,
   onChange,
   renderCount,
+  single = false,
+  allowOffline = false,
 }: {
   mode: PickMode;
   orgs: Organization[];
@@ -235,8 +238,13 @@ export function TargetTreePicker({
   value: Picked;
   onChange: (next: Picked) => void;
   renderCount: (online: number, total: number) => ReactNode;
+  /** 하나만 고른다(라디오). 기관·마을 묶음은 펼치기만 되고 체크할 수 없다 — 단말 배정·OTA(문제점 45·48번). */
+  single?: boolean;
+  /** 꺼진(온라인 0) 잎도 고를 수 있게. 배정은 꺼진 마을에도 한다. */
+  allowOffline?: boolean;
 }) {
   const [query, setQuery] = useState('');
+  const pickable = allowOffline ? () => true : pickableOnline;
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
   // 구역·단말 모드는 마을을 접은 채로 연다 — 단말이 많으면 화면이 끝없이 길어진다.
@@ -295,6 +303,10 @@ export function TargetTreePicker({
   };
 
   const toggleLeaf = (leaf: Leaf, on: boolean, ancestors: string[]) => {
+    if (single) {
+      onChange({ leaves: on ? [leaf.id] : [], groups: [] });
+      return;
+    }
     const nextLeaves = new Set(leaves);
     const nextGroups = new Set(groups);
     if (on) nextLeaves.add(leaf.id);
@@ -324,7 +336,8 @@ export function TargetTreePicker({
           <span className="tree__caret tree__caret--none" aria-hidden="true" />
           <label className={on ? 'is-on' : undefined}>
             <input
-              type="checkbox"
+              type={single ? 'radio' : 'checkbox'}
+              name={single ? 'tree-single' : undefined}
               checked={on}
               disabled={!can}
               onChange={(e) => toggleLeaf(leaf, e.target.checked, ancestors)}
@@ -369,12 +382,17 @@ export function TargetTreePicker({
             <span className="tree__caret tree__caret--none" aria-hidden="true" />
           )}
           <label className={checked ? 'is-on' : undefined}>
-            <TriCheckbox
-              checked={checked}
-              indeterminate={!checked && onCount > 0}
-              disabled={can.length === 0 && !node.pending}
-              onChange={(on) => toggleGroup(node, on, ancestors)}
-            />
+            {single ? (
+              // 하나만 고르는 화면 — 묶음은 체크 대상이 아니다. 자리만 비워 세로줄을 맞춘다.
+              <span className="tree__nocheck" aria-hidden="true" />
+            ) : (
+              <TriCheckbox
+                checked={checked}
+                indeterminate={!checked && onCount > 0}
+                disabled={can.length === 0 && !node.pending}
+                onChange={(on) => toggleGroup(node, on, ancestors)}
+              />
+            )}
             <span className={node.kind === 'org' ? 'tree__name strong' : 'tree__name'}>{node.name}</span>
             <span className="tree__kind">
               {node.pending ? '구역 불러오는 중…' : all.length > 0 && unit ? `${unit} ${all.length}개 · ` : ''}

@@ -34,6 +34,7 @@ from app.models.event import BroadcastEvent, DeviceEvent
 from app.models.org import Village
 from app.models.system import CurrentConfig
 from app.modules.broadcast import service as broadcast_service
+from app.modules.device import service as device_service
 from app.mqtt import topics
 from app.mqtt.publisher import MqttPublisher
 from app.mqtt.status_buffer import (
@@ -378,6 +379,10 @@ async def dispatch(
         return
 
     mac, kind = parsed_topic
+    # 지운 단말(문제점 46번). 공유 계정으로 아직 붙어 있어도 서버는 모른 체한다 — 자동 등록이
+    # 미배정 단말로 되살리지 않게. 다시 쓰려면 신규 단말 등록을 거쳐야 한다.
+    if device_service.is_tombstoned(mac):
+        return
     data = _parse(payload)
     if data is None:
         return
