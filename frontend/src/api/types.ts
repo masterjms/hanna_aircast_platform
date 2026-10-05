@@ -475,6 +475,8 @@ export interface OtaDevice {
   ok: boolean | null;
   reason: string | null;
   progress: string | null;
+  /** 패키지를 끝까지 받아갔다 = 단말 쪽 기준 OTA 성공. 이 뒤 단말은 끊고 재부팅한다. */
+  downloaded: boolean;
   p4_fw: string | null;
   c6_fw: string | null;
   applied: boolean;
@@ -485,6 +487,8 @@ export interface OtaJob {
   broadcast: BroadcastDetail;
   package: OtaPackage | null;
   devices: OtaDevice[];
+  /** 다 받아간(성공) 대수 */
+  done_count: number;
   applied_count: number;
   sent_count: number;
 }

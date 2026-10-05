@@ -27,12 +27,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 
 import aiomqtt
+
 from app.config import settings
 
 ROOT = settings.mqtt_topic_root
 
 #: CONFIG 로 마을을 못 받은 상태의 기본값(통신 사양 §3.5).
 UNASSIGNED_VILLAGE = "00000000"
+
+#: OTA 를 다 받은 단말이 꺼져 있는 시간(재부팅 흉내).
+REBOOT_SEC = 8.0
+
+
+class _Reboot(Exception):
+    """OTA 패키지를 다 받은 단말이 네트워크를 끊고 재부팅하는 것을 흉내 낸다.
+
+    실제 펌웨어가 그렇게 한다(문제점 48번 보조설명 2026-10-04): 다 받으면 OTA_RESULT 없이 바로
+    끊는다. 여기서는 MQTT 를 정상 종료하므로 LWT 는 안 나간다(실제는 끊겨서 LWT 가 늦게 온다).
+    """
 
 
 def _fetch(url: str, timeout: float = 30.0) -> bytes:
@@ -135,6 +147,15 @@ class MockDevice:
         return previous if previous != self.village_id else None
 
     async def run(self) -> None:
+        while True:
+            try:
+                await self._session()
+                return
+            except _Reboot:
+                print(f"[{self.mac}] 네트워크 끊음 → {REBOOT_SEC:.0f}초 뒤 재부팅 (fw {self.fw})")
+                await asyncio.sleep(REBOOT_SEC)
+
+    async def _session(self) -> None:
         lwt = aiomqtt.Will(
             topic=f"{ROOT}/device/{self.mac}/status",
             payload=json.dumps(self.status_payload(offline=True)).encode(),
@@ -361,10 +382,11 @@ class MockDevice:
             await self.set_state(client, "IDLE")
 
     async def do_ota_start(self, client: aiomqtt.Client, cmd: dict) -> None:
-        """OTA(현행 02 §10): 받기 → 검증 → OTA_RESULT ok → 끊고 재부팅 → 새 펌웨어로 STATUS.
+        """OTA(현행 02 §10.1): 받기 → 검증 → **OTA_RESULT 없이** 끊고 재부팅 → 새 펌웨어로 STATUS.
 
-        LIVE·FILE 중이면 BUSY. 진행은 OTA_PROGRESS(최신값만), 끝은 OTA_RESULT 한 번.
-        재부팅은 흉내만 낸다 — 연결은 유지하고 fw 만 바꿔 다음 STATUS 에 싣는다.
+        실제 펌웨어와 같게(문제점 48번 보조설명): 다 받으면 바로 네트워크를 끊는다. 서버는 마지막
+        바이트가 나간 것(OTA_DOWNLOADED)으로 성공을 안다. 실패(검증·다운로드)는 OTA_RESULT ok=false.
+        LIVE·FILE 중이면 BUSY. 진행은 OTA_PROGRESS(최신값만).
         """
         job_id = cmd.get("job_id")
         if self.busy_file is not None or self.live_session is not None:
@@ -376,8 +398,10 @@ class MockDevice:
             return
         self.busy_file = job_id
         await self.set_state(client, "OTA")
+        reboot = False
         try:
-            url, expect, total = cmd.get("url", ""), cmd.get("sha256", ""), int(cmd.get("size") or 0)
+            url, expect = cmd.get("url", ""), cmd.get("sha256", "")
+            total = int(cmd.get("size") or 0)
             await self.publish_result(client, {
                 "type": "OTA_PROGRESS", "job_id": job_id, "state": "ACCEPTED", "percent": 0,
             })
@@ -391,15 +415,16 @@ class MockDevice:
             await self.publish_result(client, {
                 "type": "OTA_PROGRESS", "job_id": job_id, "state": "VERIFYING", "percent": 100,
             })
-            await self.publish_result(client, {
-                "type": "OTA_RESULT", "job_id": job_id, "device": with_colons(self.mac),
-                "ok": ok, "code": "OK" if ok else "VERIFY_FAIL",
-            })
             if ok:
-                # 재부팅 흉내: 펌웨어 버전이 바뀌고 다음 STATUS 가 즉시 나간다.
+                # 다 받았다 — OTA_RESULT 는 보내지 않고 끊는다(실제 펌웨어와 같게).
                 self.fw = f"PKG{cmd.get('pkg_version')}"
-                print(f"[{self.mac}]   OTA 적용 → fw {self.fw} (재부팅 흉내)")
+                reboot = True
+                print(f"[{self.mac}]   OTA 다 받음 → fw {self.fw}, 네트워크 끊고 재부팅")
             else:
+                await self.publish_result(client, {
+                    "type": "OTA_RESULT", "job_id": job_id, "device": with_colons(self.mac),
+                    "ok": False, "code": "VERIFY_FAIL",
+                })
                 print(f"[{self.mac}]   OTA 실패 (VERIFY_FAIL)")
         except Exception as exc:  # noqa: BLE001
             await self.publish_result(client, {
@@ -409,7 +434,10 @@ class MockDevice:
             print(f"[{self.mac}]   OTA 실패 (다운로드: {exc})")
         finally:
             self.busy_file = None
-            await self.set_state(client, "IDLE")
+            if not reboot:
+                await self.set_state(client, "IDLE")
+        if reboot:
+            raise _Reboot
 
     async def do_file_stop(self, client: aiomqtt.Client, cmd: dict) -> None:
         """멈출 게 있으면 FILE_ABORT(USER_CANCEL), 없으면 FILE_STOP_RESULT(NOT_ACTIVE)."""

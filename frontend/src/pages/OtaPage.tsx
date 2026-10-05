@@ -6,14 +6,20 @@
  *
  * 대상은 **마을 하나 또는 단말 하나**(문제점 48번). 고르는 창은 방송하기·단말 배정과 같은 지역 트리
  * (TargetTreePicker, 하나만 고르는 모드). 단말 계약(현행 02 §10): 서버는 OTA_START 만 보내고 단말이
- * 다운로드·검증·적용·재부팅을 알아서 한다. OTA_RESULT ok 만으로 성공이라 하지 않고 재부팅 뒤
- * STATUS 의 p4_fw/c6_fw 가 패키지 버전과 같아야 「적용 확인」이다.
+ * 다운로드·검증·적용·재부팅을 알아서 한다.
+ *
+ * 성공의 기준(단말 쪽 정의, 문제점 48번 보조설명 2026-10-04): 단말이 패키지를 **끝까지 받아가면**
+ * 성공이다. 실제 펌웨어는 다 받으면 바로 네트워크를 끊고 재부팅하므로 OTA_RESULT 가 오지 않는다.
+ * 서버가 마지막 바이트가 나간 것을 보고(OTA_DOWNLOADED) 그 단말을 성공·오프라인으로 돌린다.
+ * 몇 분 안에 다시 붙은 뒤 보고하는 p4_fw/c6_fw 가 패키지 버전과 같으면 「적용 확인」 — 이건 덤이고
+ * 최종 확인은 사람이 한다.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { Device, Organization, OtaJob, OtaPackage, Village } from '../api/types';
+import { StepTitle } from '../components/StepTitle';
 import { TargetTreePicker, type PickMode } from '../components/broadcast/TargetTreePicker';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
 
@@ -31,16 +37,18 @@ function mb(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-/** 단말 한 대의 OTA 상태 글자. 재부팅 뒤 확인이 가장 세다. */
+/** 단말 한 대의 OTA 상태 글자. 재부팅 뒤 버전 확인이 가장 세고, 그다음이 「다 받아감」(성공). */
 function deviceState(d: OtaJob['devices'][number], ended: boolean): { text: string; cls: string } {
-  if (d.applied) return { text: '적용 확인', cls: 'badge badge--ok' };
+  if (d.applied) return { text: '적용 확인 (재부팅 뒤 버전 일치)', cls: 'badge badge--ok' };
   if (!d.sent) return { text: '오프라인 · 안 보냄', cls: 'badge badge--idle' };
-  if (d.result_type === 'OTA_RESULT') {
-    if (d.ok) return { text: '다운로드·검증 완료 → 재부팅 중', cls: 'badge badge--warn' };
-    return { text: `실패${d.reason ? ` · ${d.reason}` : ''}`, cls: 'badge badge--danger' };
+  if (d.downloaded) {
+    // 다 받아갔다 = 성공. 다시 붙었는데 버전 글자가 다르면 패키지의 「버전」을 잘못 적었거나 롤백.
+    if (d.online) return { text: '성공 · 다시 붙음 (버전 글자 다름)', cls: 'badge badge--warn' };
+    return { text: '성공 · 다 받음 → 재부팅 중', cls: 'badge badge--ok' };
   }
+  if (d.ok === false) return { text: `실패${d.reason ? ` · ${d.reason}` : ''}`, cls: 'badge badge--danger' };
   if (d.progress) return { text: d.progress, cls: 'badge badge--warn badge--plain' };
-  return { text: ended ? '응답 없음' : '대기 중', cls: 'badge badge--idle' };
+  return { text: ended ? '응답 없음' : '대기 중', cls: ended ? 'badge badge--danger' : 'badge badge--idle' };
 }
 
 export function OtaPage() {
@@ -162,9 +170,21 @@ export function OtaPage() {
       <div className="ota__grid">
         {/* ① 패키지 */}
         <section className="card ota__card">
-          <h2 className="section-title">① 펌웨어 패키지</h2>
+          <StepTitle n={1} done={packageId !== ''}>펌웨어 패키지</StepTitle>
           <div className="ota__upload">
-            <input type="file" accept=".pkg" onChange={(e) => setFile(e.target.files?.[0] ?? null)} aria-label="패키지 파일" />
+            <div className="file-pick">
+              <input
+                id="ota-file"
+                type="file"
+                accept=".pkg"
+                className="file-pick__input"
+                onClick={(e) => ((e.target as HTMLInputElement).value = '')}
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                aria-label="패키지 파일"
+              />
+              <label htmlFor="ota-file" className="btn">파일 고르기</label>
+              <span className={file ? 'strong' : 'dim'}>{file ? `${file.name} · ${mb(file.size)}` : '.pkg 파일을 골라 주세요'}</span>
+            </div>
             <div className="field">
               <label htmlFor="ota-ver">펌웨어 버전 (적용 확인용, STATUS 의 p4_fw/c6_fw 와 같은 글자)</label>
               <input id="ota-ver" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="예: V.260905-1" maxLength={50} />
@@ -240,7 +260,7 @@ export function OtaPage() {
 
         {/* ② 배포 */}
         <section className="card ota__card">
-          <h2 className="section-title">② 배포 — 마을 하나 또는 단말 하나</h2>
+          <StepTitle n={2}>어디에 보낼까요? — 마을 하나 또는 단말 하나</StepTitle>
           <div className="bc-seg ota__seg" role="group" aria-label="대상 단위">
             <button type="button" aria-pressed={mode === 'village'} onClick={() => setMode('village')}>
               마을 하나
@@ -283,15 +303,16 @@ export function OtaPage() {
             </button>
           </div>
           <p className="hint">
-            방송 중인 단말은 OTA 를 거절(BUSY)하고, OTA 중인 단말에는 방송을 걸 수 없습니다. 단말은 다운로드·검증을 마치면 연결을 끊고
-            스스로 재부팅합니다. 다시 붙은 뒤 보고하는 펌웨어 버전이 패키지 버전과 같아야 「적용 확인」입니다.
+            방송 중인 단말은 OTA 를 거절(BUSY)하고, OTA 중인 단말에는 방송을 걸 수 없습니다. 단말이 패키지를 끝까지 받아가면 그
+            단말은 <b>성공</b>이고, 곧 연결을 끊고 스스로 재부팅하므로 오프라인으로 표시됩니다. 몇 분 안에 다시 붙는지는 사람이
+            확인합니다. 다시 붙은 뒤 보고하는 펌웨어 버전이 패키지 버전과 같으면 「적용 확인」까지 붙습니다.
           </p>
         </section>
       </div>
 
       {/* ③ 진행·이력 */}
       <section className="card ota__card" style={{ marginTop: 16 }}>
-        <h2 className="section-title">③ 진행 · 이력</h2>
+        <StepTitle n={3}>진행 · 이력</StepTitle>
         {jobs.error && <div className="alert">{jobs.error.message}</div>}
         {(jobs.data ?? []).length === 0 ? (
           <div className="empty">아직 OTA 작업이 없습니다.</div>
@@ -310,7 +331,8 @@ export function OtaPage() {
                     <span className="dim">{fmt(b.triggered_at)}</span>
                     <span className="filters__spacer" />
                     <span className="ota__counts">
-                      적용 확인 <b>{j.applied_count}</b> / 보냄 {j.sent_count}
+                      성공 <b>{j.done_count}</b> / 보냄 {j.sent_count}
+                      {j.applied_count > 0 ? ` · 적용 확인 ${j.applied_count}` : ''}
                       {j.devices.length > j.sent_count ? ` · 오프라인 ${j.devices.length - j.sent_count}` : ''}
                     </span>
                     <span aria-hidden="true">{open ? '▾' : '▸'}</span>

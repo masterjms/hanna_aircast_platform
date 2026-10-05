@@ -28,21 +28,25 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.constants import EventType, TargetScope
+from app.constants import DeviceState, EventType, ResultType, TargetScope
 from app.core.ids import new_download_token, next_job_id
 from app.core.presence import is_online, online_cutoff
 from app.core.scope import VillageScope
+from app.db import session_scope
 from app.errors import ApiError, NotFound
 from app.models.device import Device
 from app.models.event import BroadcastEvent, BroadcastRecipient
 from app.models.org import User
 from app.models.ota import OtaPackage, OtaToken
 from app.modules.broadcast import service as broadcast_service
+from app.mqtt import handlers as mqtt_handlers
 from app.mqtt.publisher import MqttPublisher
+from app.mqtt.status_buffer import StatusBuffer
 from app.schemas.ota import OtaDeviceOut, OtaJobOut, OtaPackageOut, OtaStartRequest
 
 log = logging.getLogger(__name__)
@@ -184,13 +188,15 @@ async def delete_package(db: AsyncSession, package_id: int) -> None:
 
 
 # ── 다운로드 토큰 ─────────────────────────────────────────────────────────
-async def issue_token(db: AsyncSession, *, package_id: int, job_id: int) -> str:
+async def issue_token(db: AsyncSession, *, package_id: int, job_id: int, mac: str) -> str:
+    """단말 한 대의 다운로드 토큰. 토큰 → 단말이라 누가 다 받았는지 안다."""
     token = new_download_token()
     db.add(
         OtaToken(
             token=token,
             package_id=package_id,
             job_id=job_id,
+            mac=mac,
             # 다운로드가 몇 분 걸릴 수 있고 단말이 재시도도 하므로 방송 토큰보다 길게.
             expires_at=dt.datetime.now(dt.timezone.utc)
             + dt.timedelta(seconds=settings.ota_timeout_sec),
@@ -200,17 +206,169 @@ async def issue_token(db: AsyncSession, *, package_id: int, job_id: int) -> str:
     return token
 
 
-async def resolve_token(db: AsyncSession, token: str) -> OtaPackage:
-    pkg = (
+async def resolve_token(db: AsyncSession, token: str) -> tuple[OtaToken, OtaPackage]:
+    row = (
         await db.execute(
-            select(OtaPackage)
-            .join(OtaToken, OtaToken.package_id == OtaPackage.id)
+            select(OtaToken, OtaPackage)
+            .join(OtaPackage, OtaToken.package_id == OtaPackage.id)
             .where(OtaToken.token == token, OtaToken.expires_at > dt.datetime.now(dt.timezone.utc))
         )
-    ).scalar_one_or_none()
-    if pkg is None:
+    ).first()
+    if row is None:
         raise OtaPackageNotFound()
-    return pkg
+    return row.OtaToken, row.OtaPackage
+
+
+# ── 단말 다운로드 (서버가 바이트를 보낸다) ─────────────────────────────────
+#: 한 번에 읽는 크기. 몇 MB 패키지를 수십 번에 나눠 보낸다.
+STREAM_CHUNK = 256 * 1024
+
+
+class RangeNotSatisfiable(ApiError):
+    status_code = 416
+    code = "RANGE_NOT_SATISFIABLE"
+    message = "요청한 범위가 파일을 벗어납니다."
+
+
+def parse_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """`Range: bytes=a-b` 하나만 받는다(단말 resume_offset). 없으면 None, 못 읽으면 ValueError.
+
+    끝 생략(`bytes=a-`)은 파일 끝까지, 범위를 벗어나면 ValueError(416).
+    """
+    if not header:
+        return None
+    unit, _, spec = header.strip().partition("=")
+    if unit.strip().lower() != "bytes" or "," in spec:
+        raise ValueError(header)
+    start_s, _, end_s = spec.strip().partition("-")
+    if not start_s:
+        raise ValueError(header)  # suffix range(bytes=-N)는 단말이 쓰지 않는다
+    start = int(start_s)
+    end = int(end_s) if end_s else size - 1
+    if start < 0 or end < start or start >= size:
+        raise ValueError(header)
+    return start, min(end, size - 1)
+
+
+async def stream_package(
+    db: AsyncSession, token: str, *, range_header: str | None, buffer: StatusBuffer | None
+) -> StreamingResponse:
+    """`/dl/ota/<token>` — 패키지 바이트를 **서버가 직접** 보낸다(방송 파일의 X-Accel 과 다르다).
+
+    왜 nginx 에 맡기지 않나: 단말이 마지막 바이트까지 받아간 순간을 서버가 알아야 한다. 실제
+    펌웨어는 다 받으면 네트워크를 끊고 재부팅하므로 OTA_RESULT 가 오지 않고, "다 받아감" 이
+    곧 성공이다(문제점 48번 보조설명 2026-10-04). nginx 가 보내면 그 순간을 알 수 없다.
+    `X-Accel-Buffering: no` 로 nginx 가 응답을 모아 두지 않게 해서, 스트림이 끝난 시점이
+    단말이 받은 시점과 거의 같게 한다. 마을 수십 대 × 몇 MB 는 파이썬이 보내도 문제없다.
+    """
+    tok, pkg = await resolve_token(db, token)
+    path = package_path(pkg)
+    if not path.exists():
+        raise ApiError("패키지 파일이 디스크에 없습니다.", code="FILE_MISSING_ON_DISK")
+    size = path.stat().st_size
+    try:
+        rng = parse_range(range_header, size)
+    except ValueError:
+        raise RangeNotSatisfiable() from None
+    start, end = rng if rng else (0, size - 1)
+    if tok.fetched_at is None:
+        tok.fetched_at = dt.datetime.now(dt.timezone.utc)
+        await db.commit()
+
+    async def body():
+        delivered = 0
+        try:
+            with path.open("rb") as f:
+                f.seek(start)
+                remaining = end - start + 1
+                while remaining > 0:
+                    chunk = await asyncio.to_thread(f.read, min(STREAM_CHUNK, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                    yield chunk
+                    # 여기로 돌아왔다 = 서버가 그 조각을 다 내보내고 다음 조각을 달라고 했다.
+                    delivered += len(chunk)
+        finally:
+            # 기록은 **별도 task** 로. 단말은 마지막 바이트를 받자마자 연결을 끊고, 그러면 이
+            # generator 는 취소된다(미들웨어의 cancel scope) — 여기서 DB 를 기다리면 중간에 잘린다.
+            # 요청 범위를 끝까지 보냈을 때만. 파일의 마지막 바이트가 포함됐으면 "다 받아감".
+            if delivered == end - start + 1:
+                asyncio.get_running_loop().create_task(
+                    _mark_download_progress(
+                        token, sent=delivered, complete=(end == size - 1), buffer=buffer
+                    ),
+                    name=f"ota-downloaded-{token[:8]}",
+                )
+
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{DEVICE_FILE_NAME}\"",
+        "Content-Length": str(end - start + 1),
+        "Accept-Ranges": "bytes",
+        "X-Accel-Buffering": "no",
+    }
+    status_code = 200
+    if rng:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        status_code = 206
+    return StreamingResponse(
+        body(), status_code=status_code, media_type="application/octet-stream", headers=headers
+    )
+
+
+async def _mark_download_progress(
+    token: str, *, sent: int, complete: bool, buffer: StatusBuffer | None
+) -> None:
+    """스트림이 끝난 뒤 — 요청 세션은 이미 닫혔으니 새 세션으로.
+
+    다 받아갔으면: ① 서버 결과 OTA_DOWNLOADED 를 그 단말·작업의 이력에 넣고 ② 단말을 지금부터
+    오프라인으로 본다(곧 네트워크를 끊고 재부팅한다 — 재부팅 뒤 STATUS 가 오면 다시 온라인)
+    ③ 전원이 끝났으면 작업을 종료한다(겹침 잠금 해제).
+    """
+    try:
+        async with session_scope() as db:
+            tok = await db.get(OtaToken, token)
+            if tok is None:
+                return
+            tok.bytes_served = (tok.bytes_served or 0) + sent
+            if not complete or tok.completed_at is not None:
+                return
+            tok.completed_at = dt.datetime.now(dt.timezone.utc)
+            if not tok.mac or tok.job_id is None:
+                return
+            await mqtt_handlers._insert_device_event(  # noqa: SLF001 — 수신 경로와 같은 적재
+                db,
+                mac=tok.mac,
+                result_type=ResultType.OTA_DOWNLOADED.value,
+                payload={
+                    "type": ResultType.OTA_DOWNLOADED.value,
+                    "job_id": tok.job_id,
+                    "ok": True,
+                    "size": tok.bytes_served,
+                },
+                job_id=tok.job_id,
+            )
+            dev = await db.get(Device, tok.mac)
+            if dev is not None:
+                # LWT 와 같은 모양으로 적는다 — is_online() 이 OFFLINE 을 보고 꺼진 걸로 판정한다.
+                dev.last_status = {
+                    **(dev.last_status or {}),
+                    "state": DeviceState.OFFLINE.value,
+                    "offline_reason": "OTA_REBOOT",
+                }
+                if buffer is not None:
+                    buffer.discard(tok.mac)  # 대기 중인 낡은 STATUS 가 되살리지 않게(LWT 와 같다)
+            log.info(
+                "OTA 다 받아감 job_id=%s mac=%s (%d bytes)", tok.job_id, tok.mac, tok.bytes_served
+            )
+            job_id = tok.job_id
+        # 종료 판정은 **커밋한 뒤 새 세션**에서. 마을 OTA 는 단말 여러 대가 거의 동시에 다 받고,
+        # 각자의 세션에서 자기 행만 보며 세면 둘 다 "아직 한 대 모자라다"가 되어 작업이 안 끝난다.
+        # 커밋 뒤에 세면 마지막으로 커밋한 쪽은 반드시 전원을 본다.
+        async with session_scope() as db:
+            await broadcast_service.finish_if_all_reported(db, job_id)
+    except Exception:  # noqa: BLE001 — 바이트는 이미 다 나갔다. 기록 실패가 단말에 영향 주면 안 된다
+        log.exception("OTA 다운로드 완료 기록 실패: token=%s…", token[:8])
 
 
 # ── 배포 ─────────────────────────────────────────────────────────────────
@@ -250,11 +408,16 @@ async def start(
     await broadcast_service._assert_no_overlap(db, macs)  # noqa: SLF001
 
     job_id = await next_job_id(db)
-    token = await issue_token(db, package_id=pkg.id, job_id=job_id)
-    url = f"{settings.public_base_url.rstrip('/')}/dl/ota/{token}"
-    cmd = ota_start_payload(
-        job_id=job_id, pkg_version=pkg.pkg_version, url=url, size=pkg.size_bytes, sha256=pkg.sha256
-    )
+    # 단말마다 다른 주소(토큰) — 마을 하나라도 마을 토픽이 아니라 단말 토픽으로 한 대씩 보낸다.
+    # 주소가 한 개면 누가 다 받아갔는지 구분할 수 없고, "다 받아감"이 OTA 의 성공 신호다.
+    base = settings.public_base_url.rstrip("/")
+    cmds: dict[str, dict[str, Any]] = {}
+    for mac in macs:
+        token = await issue_token(db, package_id=pkg.id, job_id=job_id, mac=mac)
+        cmds[mac] = ota_start_payload(
+            job_id=job_id, pkg_version=pkg.pkg_version, url=f"{base}/dl/ota/{token}",
+            size=pkg.size_bytes, sha256=pkg.sha256,
+        )
 
     event = BroadcastEvent(
         event_type=EventType.OTA_START.value,
@@ -270,15 +433,13 @@ async def start(
     db.add(event)
     await db.flush()
     await broadcast_service.snapshot_recipients(db, event, sent_macs=macs)
-    village_kw = await broadcast_service._village_kw(  # noqa: SLF001
-        db, payload.target_scope, payload.target_ids
-    )
     await broadcast_service._commit_before_publish(db)  # noqa: SLF001
 
     try:
-        await publisher.publish_command(
-            payload=cmd, target_scope=payload.target_scope, scope=scope, **village_kw, macs=macs
-        )
+        for mac, cmd in cmds.items():
+            await publisher.publish_command(
+                payload=cmd, target_scope=TargetScope.DEVICE, scope=scope, macs=[mac]
+            )
     except Exception:
         await broadcast_service.end_event(db, event, reason="발행 실패")
         await db.commit()
@@ -335,6 +496,8 @@ async def job_out(db: AsyncSession, event: BroadcastEvent) -> OtaJobOut:
                 ok=res.ok if res else None,
                 reason=res.reason if res else None,
                 progress=res.stats if res else None,
+                # 성공 = 다 받아감(OTA_DOWNLOADED) 또는 단말이 보낸 OTA_RESULT ok.
+                downloaded=bool(res is not None and res.ok is True),
                 p4_fw=p4,
                 c6_fw=c6,
                 applied=bool(target_version) and target_version in (p4, c6),
@@ -348,12 +511,14 @@ async def job_out(db: AsyncSession, event: BroadcastEvent) -> OtaJobOut:
                 OtaDeviceOut(
                     mac=r.mac, label=r.label, village_name=None, sent=True,
                     result_type=r.result_type, ok=r.ok, reason=r.reason, progress=r.stats,
+                    downloaded=r.ok is True,
                 )
             )
     return OtaJobOut(
         broadcast=out,
         package=pkg_out,
         devices=devices,
+        done_count=sum(1 for d in devices if d.downloaded),
         applied_count=sum(1 for d in devices if d.applied),
         sent_count=sum(1 for d in devices if d.sent),
     )

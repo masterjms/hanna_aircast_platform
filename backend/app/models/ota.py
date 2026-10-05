@@ -49,7 +49,14 @@ class OtaToken(Base):
     package_id: Mapped[int] = mapped_column(
         ForeignKey("ota_packages.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    job_id: Mapped[int | None] = mapped_column(BigInteger)
+    job_id: Mapped[int | None] = mapped_column(BigInteger, index=True)
+    #: 토큰은 **단말마다** 하나다(0023). 어느 단말이 다 받아갔는지 토큰으로 안다 — 마을 토픽에
+    #: 주소 하나를 실으면 누가 받았는지 구분할 수 없다.
+    mac: Mapped[str | None] = mapped_column(String(12))
+    #: 첫 GET 시각 · 마지막 바이트까지 보낸 시각 · 보낸 바이트(Range 재개 포함, 누적).
+    fetched_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    bytes_served: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
     expires_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )

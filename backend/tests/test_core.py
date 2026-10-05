@@ -1017,9 +1017,10 @@ class TestTerminalResults:
     def test_terminal_set_matches_spec(self):
         from app.modules.broadcast.service import TERMINAL_RESULTS
 
-        # 통신 사양 §5.4: 방송의 종료를 말하는 건 FILE_RESULT·LIVE_RESULT. OTA 는 OTA_RESULT 가
-        # job 당 한 번 오는 최종 결과다(현행 02 §10, 문제점 48번).
-        assert {"FILE_RESULT", "LIVE_RESULT", "OTA_RESULT"} == TERMINAL_RESULTS
+        # 통신 사양 §5.4: 방송의 종료를 말하는 건 FILE_RESULT·LIVE_RESULT. OTA 는 단말의
+        # OTA_RESULT 또는 서버가 본 OTA_DOWNLOADED(다 받아감 — 실제 펌웨어는 다 받으면 끊어서
+        # OTA_RESULT 가 안 온다. 현행 02 §10.1, 문제점 48번 보조설명).
+        assert {"FILE_RESULT", "LIVE_RESULT", "OTA_RESULT", "OTA_DOWNLOADED"} == TERMINAL_RESULTS
 
     def test_live_ready_is_not_terminal(self):
         from app.modules.broadcast.service import TERMINAL_RESULTS
@@ -2514,6 +2515,34 @@ class TestOtaPayload:
         assert "OTA_PROGRESS" in TELEMETRY_RESULTS and "OTA_PROGRESS" not in TERMINAL_RESULTS
         assert "OTA_RESULT" in TERMINAL_RESULTS
 
+    def test_downloaded_is_terminal_and_ok(self):
+        """다 받아감 = 성공(단말 쪽 정의). 기록 화면도 「정상」."""
+        from app.modules.broadcast.service import TERMINAL_RESULTS, result_ok
+        from app.modules.history.service import judge
+
+        assert "OTA_DOWNLOADED" in TERMINAL_RESULTS
+        assert result_ok("OTA_DOWNLOADED", {"ok": True}) is True
+        verdict, _ = judge(
+            sent=True, result_type="OTA_DOWNLOADED", payload={"ok": True}, ended=True
+        )
+        assert verdict == "정상"
+
+    def test_timeout_is_minutes_not_half_hour(self):
+        """실패한 OTA 가 그 단말의 방송을 수십 분 막았다(문제점 48번 보조설명 3)."""
+        from app.config import Settings
+
+        assert Settings.model_fields["ota_timeout_sec"].default <= 600
+
+    def test_one_token_per_device(self):
+        """마을 OTA 도 단말 토픽으로 한 대씩 — 토큰이 단말마다 달라야 누가 받았는지 안다."""
+        import inspect
+
+        from app.modules.ota import service
+
+        src = inspect.getsource(service.start)
+        assert "for mac in macs" in src and "TargetScope.DEVICE" in src
+        assert "mac=mac" in src
+
     def test_ota_jobs_are_hidden_from_active_broadcasts(self):
         """방송하기의 「방송 끄기」가 OTA 작업에 FILE_STOP 을 보내면 안 된다."""
         import inspect
@@ -2521,6 +2550,31 @@ class TestOtaPayload:
         from app.modules.broadcast import service
 
         assert "OTA_START" in inspect.getsource(service.list_active)
+
+
+class TestOtaRange:
+    """단말 resume_offset(Range) — 마지막 바이트가 포함된 요청이 끝나야 다 받아간 것이다."""
+
+    def test_no_header_is_whole_file(self):
+        from app.modules.ota.service import parse_range
+
+        assert parse_range(None, 100) is None and parse_range("", 100) is None
+
+    def test_open_ended_and_clamped(self):
+        from app.modules.ota.service import parse_range
+
+        assert parse_range("bytes=40-", 100) == (40, 99)
+        assert parse_range("bytes=0-999", 100) == (0, 99)
+        assert parse_range("bytes=10-19", 100) == (10, 19)
+
+    def test_bad_ranges(self):
+        import pytest
+
+        from app.modules.ota.service import parse_range
+
+        for h in ("bytes=100-", "bytes=5-3", "bytes=-10", "items=0-1", "bytes=0-1,5-6"):
+            with pytest.raises(ValueError):
+                parse_range(h, 100)
 
 
 # ── 삭제 단말 묘비 (문제점 46번) ───────────────────────────────────────────

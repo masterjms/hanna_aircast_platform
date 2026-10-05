@@ -52,7 +52,7 @@ log = logging.getLogger(__name__)
 #: 신형식(2026-08-27~) — 성패를 `ok` 불리언 하나가 정한다(사양 §5.4).
 #: FILE_RESULT 는 FILE_END/FILE_ABORT/FILE_STOP_RESULT 셋을 대체했고,
 #: LIVE_RESULT 는 라이브 종료 결과(정상 종료 ok=true STOPPED_BY_SERVER)다.
-_OK_FIELD_RESULTS = {"FILE_RESULT", "LIVE_RESULT", "OTA_RESULT", "LIVE_READY"}
+_OK_FIELD_RESULTS = {"FILE_RESULT", "LIVE_RESULT", "OTA_RESULT", "OTA_DOWNLOADED", "LIVE_READY"}
 
 #: 구형식 호환 — 신형식 이전 펌웨어와 목 단말이 아직 보낸다.
 #: LIVE_READY 의 status 판정은 _live_ready_ok() 가 함께 처리한다.
@@ -516,7 +516,10 @@ PLAYBACK_TAIL_SEC = 5.0
 
 #: "이 방송에서 이 단말은 끝났다"를 뜻하는 결과 타입 (통신 사양 §5.4).
 #: LIVE_READY 는 준비 결과라 여기 없다 — 준비됐다고 방송이 끝난 게 아니다.
-TERMINAL_RESULTS = frozenset({"FILE_RESULT", "LIVE_RESULT", "OTA_RESULT"})
+# OTA 는 둘 중 하나면 끝이다: 단말이 보낸 OTA_RESULT, 또는 서버가 본 OTA_DOWNLOADED(패키지를
+# 끝까지 받아감). 실제 펌웨어는 다 받으면 바로 네트워크를 끊어 OTA_RESULT 가 오지 않는다
+# (문제점 48번 보조설명) — 그걸 기다리면 작업이 타임아웃까지 「진행 중」이고 방송이 막힌다.
+TERMINAL_RESULTS = frozenset({"FILE_RESULT", "LIVE_RESULT", "OTA_RESULT", "OTA_DOWNLOADED"})
 
 #: 살아 있는 LIVE 세션(Icecast source). 기동 때 main.py 가 넣어 준다.
 #: end_event 가 라이브를 끝낼 때 여기서 스트림을 닫는다 — "종료 확정"과 "스트림

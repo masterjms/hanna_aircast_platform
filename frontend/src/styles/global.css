@@ -641,7 +641,8 @@ textarea,
 input[type='text'],
 input[type='password'],
 input[type='search'],
-input[type='number'] {
+input[type='number'],
+input[type='date'] {
   padding: 9px 14px;
   border: 1px solid var(--border-strong);
   border-radius: var(--r-pill);
@@ -2499,7 +2500,16 @@ input.masked {
 .bc-row__label { flex: 0 0 48px; font-size: 17px; font-weight: 700; color: var(--text-3); }
 .bc-quickdates, .bc-days, .bc-time { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .bc-time select { min-height: 48px; font-size: 18px; min-width: 120px; }
-.date-big { min-height: 44px; font-size: 17px; color-scheme: dark; }
+.date-big { min-height: 44px; font-size: 17px; }
+/* 날짜 칸은 브라우저 기본이 회색 사각형이라 다른 칸과 어긋났다(문제점 51번). 달력 아이콘·팝업도 어둡게. */
+input[type='date'] { color-scheme: dark; min-height: 38px; }
+input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: pointer; }
+
+/* 파일 고르기 — 기본 <input type=file> 은 회색 네모라 숨기고 버튼 + 파일 이름으로(문제점 52번). */
+.file-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 38px; }
+.file-pick__input { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.file-pick__input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
+.file-pick label.btn { margin: 0; cursor: pointer; }
 
 /* 자세히 */
 .bc-more { margin: 4px 0 18px; font-size: 16px; color: var(--text-3); }

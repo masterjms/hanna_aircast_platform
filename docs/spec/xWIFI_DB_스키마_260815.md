@@ -184,9 +184,11 @@ CREATE TABLE ota_packages (
     size_bytes BIGINT NOT NULL, sha256 VARCHAR(64) NOT NULL, storage_path VARCHAR(500) NOT NULL, note TEXT,
     uploaded_by INTEGER REFERENCES users(id) ON DELETE SET NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE TABLE ota_tokens (
+CREATE TABLE ota_tokens (   -- 단말마다 하나(0023). completed_at = 마지막 바이트까지 받아감 = OTA 성공
     token VARCHAR(64) PRIMARY KEY, package_id INTEGER NOT NULL REFERENCES ota_packages(id) ON DELETE CASCADE,
-    job_id BIGINT, expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    job_id BIGINT, mac VARCHAR(12), fetched_at TIMESTAMPTZ, completed_at TIMESTAMPTZ,
+    bytes_served BIGINT NOT NULL DEFAULT 0,
+    expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE broadcast_events ADD COLUMN ota_package_id INTEGER REFERENCES ota_packages(id) ON DELETE SET NULL;
 ```

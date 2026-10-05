@@ -46,6 +46,9 @@ class OtaDeviceOut(BaseModel):
     ok: bool | None = None
     reason: str | None = None
     progress: str | None = None
+    #: 패키지를 끝까지 받아갔다(서버가 본 OTA_DOWNLOADED, 또는 OTA_RESULT ok). 단말 쪽 기준의
+    #: **OTA 성공** — 이 뒤 단말은 네트워크를 끊고 재부팅한다(문제점 48번 보조설명).
+    downloaded: bool = False
     #: 지금 STATUS 가 보고하는 실행 중 펌웨어.
     p4_fw: str | None = None
     c6_fw: str | None = None
@@ -58,6 +61,7 @@ class OtaJobOut(BaseModel):
     broadcast: BroadcastOut
     package: OtaPackageOut | None
     devices: list[OtaDeviceOut]
-    #: 적용 확인된 대수 / 보낸 대수
+    #: 다 받아간(성공) 대수 / 적용 확인된 대수 / 보낸 대수
+    done_count: int
     applied_count: int
     sent_count: int

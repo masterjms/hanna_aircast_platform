@@ -45,6 +45,7 @@ import {
   type Picked,
 } from '../components/broadcast/TargetTreePicker';
 import { uplinkBlockedReason, useMicUplink } from '../hooks/useMicUplink';
+import { StepTitle } from '../components/StepTitle';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
 import { WEEKDAY_LABELS, dateLabel, formatTime as clock, kstToday } from '../lib/schedule';
 
@@ -181,17 +182,6 @@ function OnAir({
       </button>
       {open && <ResultList broadcast={broadcast} />}
     </section>
-  );
-}
-
-function StepTitle({ n, done, children }: { n: number; done?: boolean; children: React.ReactNode }) {
-  return (
-    <h2 className="bc-step__title">
-      <span className={`bc-step__num${done ? ' is-done' : ''}`} aria-hidden="true">
-        {done ? '✓' : n}
-      </span>
-      {children}
-    </h2>
   );
 }
 

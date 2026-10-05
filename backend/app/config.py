@@ -140,7 +140,9 @@ class Settings(BaseSettings):
     #: 방송 기록 보관(일). 끝난 방송·단말 응답을 이 뒤에 지운다(문제점 50번, 5개월).
     event_retention_days: int = 150
     #: OTA 작업이 이 시간 안에 전 단말 OTA_RESULT 를 못 받으면 종료로 확정한다(초).
-    ota_timeout_sec: int = 1800
+    #: 다 받은 신호도 OTA_RESULT 도 없는 단말을 포기하기까지. 패키지 몇 MB 는 몇 분이면 받는다.
+    #: 30분이었을 때 실패한 OTA 가 그 단말의 방송을 수십 분 막았다(문제점 48번 보조설명 3).
+    ota_timeout_sec: int = 600
     ota_token_ttl_sec: int = 7200
 
     # ── 운영 파라미터 ───────────────────────────────────

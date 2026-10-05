@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Response, UploadFile, status
+from fastapi import APIRouter, Form, Request, Response, UploadFile, status
 from fastapi import File as FileParam
 
 from app.core.deps import Db, Publisher, SuperAdmin
-from app.modules.file import service as file_service
 from app.modules.ota import service
 from app.schemas.ota import OtaJobOut, OtaPackageOut, OtaStartRequest
 
@@ -59,9 +58,14 @@ async def get_job(event_id: int, db: Db, _: SuperAdmin) -> OtaJobOut:
 
 
 @router.get("/dl/ota/{token}")
-async def download_for_device(token: str, db: Db) -> Response:
-    """단말 전용 패키지 다운로드. 토큰이 없거나 만료면 404. 바이트는 nginx(X-Accel)가 보낸다."""
-    pkg = await service.resolve_token(db, token)
-    return file_service.serve_path(
-        pkg.storage_path, filename=service.DEVICE_FILE_NAME, media_type="application/octet-stream"
+async def download_for_device(token: str, db: Db, request: Request) -> Response:
+    """단말 전용 패키지 다운로드. 토큰이 없거나 만료면 404.
+
+    바이트는 서버가 직접 보낸다(Range 지원) — 마지막 바이트까지 나간 순간이 그 단말의 OTA 성공
+    신호(OTA_DOWNLOADED)라서다. 방송 파일(X-Accel)과 다른 이유는 service.stream_package 참고.
+    """
+    return await service.stream_package(
+        db, token,
+        range_header=request.headers.get("range"),
+        buffer=getattr(request.app.state, "status_buffer", None),
     )

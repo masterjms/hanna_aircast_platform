@@ -105,7 +105,11 @@ class ResultType(StrEnum):
     LIVE_RESULT = "LIVE_RESULT"      # 라이브 종료 결과 (정상 종료 = ok:true STOPPED_BY_SERVER)
     FILE_RESULT = "FILE_RESULT"      # FILE_END/FILE_ABORT/FILE_STOP_RESULT 셋을 대체
     OTA_PROGRESS = "OTA_PROGRESS"    # 진행 알림 (25% 단위, 최종 아님)
-    OTA_RESULT = "OTA_RESULT"        # OTA 최종 결과
+    OTA_RESULT = "OTA_RESULT"        # OTA 최종 결과(단말이 보내면)
+    #: 서버가 만든 결과 — 단말이 패키지를 **끝까지 받아갔다**(/dl/ota 스트림 완료). 실제 펌웨어는
+    #: 다 받으면 네트워크를 끊고 재부팅해 OTA_RESULT 를 못 보내므로 이것이 OTA 의 성공 신호다
+    #: (문제점 48번 보조설명 2026-10-04).
+    OTA_DOWNLOADED = "OTA_DOWNLOADED"
     # 구형식 — 신형식 이전 펌웨어 호환으로 남긴다.
     FILE_END = "FILE_END"
     FILE_ABORT = "FILE_ABORT"

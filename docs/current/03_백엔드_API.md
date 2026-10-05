@@ -645,9 +645,9 @@ query: `page`(1~), `size`(10·20·50, 그 외는 10), `kind`(`file`·`schedule`�
 | POST | `/api/ota/start` | `{package_id, target_scope: village\|device, target_ids: [하나]}` → 201 `OtaJobOut`. 그 외 범위 `OTA_TARGET_SCOPE`, 둘 이상 422 |
 | GET | `/api/ota/jobs?limit=` | 최근 작업(방송 응답 + 단말별 `p4_fw`/`c6_fw`·`applied`) |
 | GET | `/api/ota/jobs/{event_id}` | 작업 하나 |
-| GET | `/dl/ota/{token}` | 단말 전용 패키지 다운로드(인증 없음, 토큰 만료 404) |
+| GET | `/dl/ota/{token}` | 단말 전용 패키지 다운로드(인증 없음, 토큰 만료 404). 서버가 직접 보낸다(Range → 206, 범위 밖 416). **마지막 바이트까지 나가면** 그 단말의 결과 `OTA_DOWNLOADED`(= 성공)가 기록되고 단말은 오프라인으로 돌아간다(2026-10-05, 02 §10.1) |
 
-`OtaJobOut` = `{broadcast: BroadcastOut, package, devices: [{mac, label, village_name, sent, result_type, ok, reason, progress, p4_fw, c6_fw, applied, online}], applied_count, sent_count}`. 겹침·커밋 후 발행·종료 판정은 방송 API와 같다(§9).
+`OtaJobOut` = `{broadcast: BroadcastOut, package, devices: [{mac, label, village_name, sent, result_type, ok, reason, progress, downloaded, p4_fw, c6_fw, applied, online}], done_count, applied_count, sent_count}`. `downloaded`(=`done_count`의 기준)가 **성공**이다: 서버가 본 `OTA_DOWNLOADED` 또는 단말이 보낸 `OTA_RESULT ok`. `applied`는 재부팅 뒤 버전 일치(덤). 토큰은 단말마다 하나라 마을 OTA도 `device/<mac>/cmd`로 한 대씩 발행한다. 겹침·커밋 후 발행·종료 판정은 방송 API와 같다(§9).
 
 ## 10. WebSocket 마이크 업링크
 
