@@ -46,30 +46,38 @@ PREV_SHA="$(git rev-parse --short HEAD)"
 
 # ── 1. 진행 중인 방송 확인 ──────────────────────────────────────────
 log "진행 중인 방송 확인"
-ACTIVE="$(docker compose exec -T backend python -c "
+# 무엇이 진행 중인지도 같이 찍는다 — 2026-10-05 단말팀 OTA 시험이 남긴 OTA 작업 한 건이
+# "방송 1건"으로만 보여서 사람이 판단할 수 없었다(실제 방송은 없었다).
+OPEN_LIST="$(docker compose exec -T backend python -c "
 import asyncio
-from sqlalchemy import func, select
+from sqlalchemy import select
 from app.db import engine, session_scope
 from app.models.event import BroadcastEvent
 
 async def main():
     async with session_scope() as db:
-        n = await db.scalar(
-            select(func.count()).select_from(BroadcastEvent)
-            .where(BroadcastEvent.ended_at.is_(None))
-        )
+        rows = (await db.execute(
+            select(BroadcastEvent.event_type, BroadcastEvent.job_id, BroadcastEvent.triggered_at,
+                   BroadcastEvent.target_scope, BroadcastEvent.file_name)
+            .where(BroadcastEvent.ended_at.is_(None)).order_by(BroadcastEvent.triggered_at)
+        )).all()
     await engine.dispose()
-    print(n or 0)
+    for t, j, at, sc, fn in rows:
+        print(f'   - {t} job_id={j} {sc} {fn or \"\"} ({at:%m-%d %H:%M} 시작)')
+    print(len(rows))
 
 asyncio.run(main())
-" 2>/dev/null | tr -d '\r' | tail -1 || echo "?")"
+" 2>/dev/null | tr -d '\r' || echo "?")"
+ACTIVE="$(printf '%s\n' "$OPEN_LIST" | tail -1)"
 
 if [ "$ACTIVE" = "?" ]; then
     echo "   확인 실패(백엔드가 안 떠 있을 수 있음) — 계속 진행한다"
 elif [ "$ACTIVE" != "0" ]; then
-    echo "   진행 중인 방송 ${ACTIVE}건"
+    echo "   진행 중 ${ACTIVE}건"
+    printf '%s\n' "$OPEN_LIST" | sed '$d'
     if [ "$FORCE" -eq 0 ]; then
         echo "!! 배포하면 이 방송들이 끊기고, 단말은 스스로 복구하지 않는다."
+        echo "   OTA_START 는 방송이 아니다 — 다운로드 중만 아니면 끊어도 된다(재시작하면 종료로 정리된다)."
         echo "   방송이 끝난 뒤 다시 실행하거나, 알고도 진행하려면 --force 를 붙일 것."
         exit 1
     fi
