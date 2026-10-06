@@ -2464,19 +2464,21 @@ input.masked {
 .bc-preview audio { flex: 1 1 260px; min-width: 0; }
 
 .bc-search { width: 100%; min-height: 48px; margin-bottom: 10px; font-size: 17px; }
-.bc-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 360px; overflow-y: auto; }
+/* 소리 목록(문제점 54번): 한 줄 36px 로 촘촘히, 열 줄까지 보이고 그 아래는 스크롤. */
+.bc-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 396px; overflow-y: auto; }
 .bc-files li {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 6px 10px 6px 4px;
+  gap: 8px;
+  padding: 1px 8px 1px 2px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
 }
 .bc-files li.is-on { border-color: var(--accent); background: var(--accent-tint); }
-.bc-files label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px; cursor: pointer; }
-.bc-files input[type="radio"] { width: 22px; height: 22px; flex: none; }
-.bc-files__name { flex: 1; min-width: 0; font-size: 18px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bc-files label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 4px 6px; cursor: pointer; }
+.bc-files input[type="radio"] { width: 18px; height: 18px; flex: none; }
+.bc-files__name { flex: 1; min-width: 0; font-size: 16px; font-weight: 600; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bc-files .bc-chip { padding: 3px 10px; font-size: 13px; }
 .bc-listen { width: 100%; margin-top: 10px; }
 .bc-empty { font-size: 17px; color: var(--text-2); }
 
@@ -2513,7 +2515,8 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
 
 /* 자세히 */
 .bc-more { margin: 4px 0 18px; font-size: 16px; color: var(--text-3); }
-.bc-more summary { cursor: pointer; padding: 6px 2px; font-weight: 700; }
+/* 문제점 55번: 접지 않는다. 제목 「단말기 저장」 + 체크 한 줄. */
+.bc-more__title { padding: 6px 2px 0; font-weight: 700; color: var(--text-2); }
 .bc-more .check { margin-top: 8px; font-size: 15px; }
 
 /* 맨 아래 — 요약 + 큰 버튼. 화면을 내려도 따라온다. */
@@ -2762,7 +2765,19 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
 }
 
 /* 마을 현황 — 좌(요약·목록) 우(지도) 한 줄. 높이는 아래 「화면에 맞추기」가 정한다. */
-.dash { display: flex; gap: 4px; height: calc(100vh - 120px); min-height: 480px; }
+/* 마을 현황(문제점 58번, 2026-10-06): 위 [목록 | 지도] 는 남는 높이를, 아래 이상단말 표는 제 높이만. */
+.dash { display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 120px); min-height: 480px; }
+.dash__top { display: flex; gap: 4px; flex: 1 1 0; min-height: 300px; }
+.dash__left { min-width: 0; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
+.dash__list { padding: 10px; flex: 1; min-height: 0; overflow-y: auto; }
+.dash__map { min-width: 0; padding: 6px; position: relative; }
+.dash__alerts { flex: 0 0 auto; }
+.dash__alerts .filters { margin-bottom: 8px; }
+.dash__alerts .table-wrap { max-height: 38vh; overflow: auto; }
+.dash__alerts .table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+.dash__alerts tbody tr { cursor: pointer; }
+.dash__alerts tbody tr:hover td { background: var(--surface-sunken); }
+.dash__alerts tbody tr.is-active td { background: var(--accent-tint); }
 
 /* ══ 화면에 맞추기(2026-09-21) ═══════════════════════════════════════════
    페이지 전체는 스크롤하지 않는다. 제목·필터·버튼은 늘 제자리에 있고, 길어질 수 있는

@@ -2552,6 +2552,24 @@ class TestOtaPayload:
         assert "OTA_START" in inspect.getsource(service.list_active)
 
 
+class TestOtaVersion:
+    """버전 칸 적는 법(문제점 60번): 하나면 어느 칩이든, 「P4 / C6」면 각각."""
+
+    def test_single_matches_either_chip(self):
+        from app.modules.ota.service import version_applied
+
+        assert version_applied("V.1", "V.1", "V.0") and version_applied("V.1", "V.0", "V.1")
+        assert not version_applied("V.1", "V.0", "V.0")
+        assert not version_applied(None, "V.1", "V.1") and not version_applied("", "V.1", "V.1")
+
+    def test_pair_matches_each_chip(self):
+        from app.modules.ota.service import version_applied
+
+        assert version_applied("A / B", "A", "B")
+        assert not version_applied("A / B", "B", "A")
+        assert version_applied("A /", "A", "zzz") and version_applied("/ B", "zzz", "B")
+
+
 class TestOtaRange:
     """단말 resume_offset(Range) — 마지막 바이트가 포함된 요청이 끝나야 다 받아간 것이다."""
 

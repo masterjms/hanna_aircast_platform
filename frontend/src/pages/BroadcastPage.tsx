@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
-import { ApiError, api, getToken } from '../api/client';
+import { ApiError, api, getToken, serverNow } from '../api/client';
 import type {
   AudioFile,
   BroadcastDetail,
@@ -77,11 +77,11 @@ function DeviceCount({ online, total }: { online: number; total: number }) {
   return <span className="dim">(켜짐 {online}대)</span>;
 }
 
-/** 지금 몇 초째인지. 1초마다 다시 그린다. */
+/** 지금 몇 초째인지. 1초마다 다시 그린다. 서버 시계 기준(문제점 59번 — PC 시계가 늦으면 0초에 머물렀다). */
 function useElapsedSec(since: string): number {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => serverNow());
   useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => setNow(serverNow()), 1000);
     return () => clearInterval(id);
   }, []);
   return Math.max(0, Math.floor((now - new Date(since).getTime()) / 1000));
@@ -814,13 +814,13 @@ export function BroadcastPage() {
                   <li>말씀이 끝나면 맨 위 빨간 띠의 <strong>「방송 끄기」</strong>를 누릅니다.</li>
                 </ol>
               )}
-              <details className="bc-more">
-                <summary>자세히 설정</summary>
+              <div className="bc-more">
+                <div className="bc-more__title">단말기 저장</div>
                 <label className="check">
                   <input type="checkbox" checked={recordFlash} onChange={(e) => setRecordFlash(e.target.checked)} disabled={liveId !== null} />
-                  <span>단말에 녹음해 두기 (10분이 넘는 방송은 끄세요)</span>
+                  <span>단말기에 녹음해 둡니다. (10분이 넘는 방송은 끄세요)</span>
                 </label>
-              </details>
+              </div>
             </section>
           )}
 
@@ -1000,8 +1000,10 @@ export function BroadcastPage() {
                   </div>
                 </div>
               )}
-              <details className="bc-more">
-                <summary>자세히 설정</summary>
+              {/* 문제점 55번: 「자세히 설정」에 숨기지 않고 늘 보인다. 이 항목은 단말기(수신기)가 이 방송을
+                  저장할지 정하는 것이라 이름도 「단말기 저장」. */}
+              <div className="bc-more">
+                <div className="bc-more__title">단말기 저장</div>
                 {method === 'tts' && catalog && Object.keys(catalog.languages).length > 1 && (
                   <label className="bc-voice">
                     읽는 언어
@@ -1016,9 +1018,9 @@ export function BroadcastPage() {
                 )}
                 <label className="check">
                   <input type="checkbox" checked={storeFlash} onChange={(e) => setStoreFlash(e.target.checked)} />
-                  <span>단말에 저장해 두기 (반복 재생용 · 예약 반복 방송은 저절로 켜집니다)</span>
+                  <span>단말기에 저장합니다. (예약 반복 방송은 저절로 켜집니다)</span>
                 </label>
-              </details>
+              </div>
             </section>
           )}
 

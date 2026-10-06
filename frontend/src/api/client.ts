@@ -84,6 +84,26 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   onUnauthorized = handler;
 }
 
+// ── 서버 시계 ────────────────────────────────────────────────────────────
+// 방송 시작 시각은 서버가 찍고, "몇 초째"는 브라우저가 센다. PC 시계가 서버보다 몇 분 느리면
+// 경과가 음수라 0초에 머문다(문제점 59번 — 17:37 에 다시 해 보니 흐르더라는 것이 시계 보정의
+// 흔적). 응답의 Date 헤더(초 단위)로 차이를 재서 보탠다. 2초 안쪽은 시계가 맞는 것으로 본다.
+let clockOffsetMs = 0;
+
+/** 서버 기준 지금(ms). 경과 시간 표시는 Date.now() 대신 이걸 쓴다. */
+export function serverNow(): number {
+  return Date.now() + clockOffsetMs;
+}
+
+function noteServerClock(res: Response): void {
+  const header = res.headers.get('date');
+  if (!header) return;
+  const t = Date.parse(header);
+  if (!Number.isFinite(t)) return;
+  const off = t - Date.now();
+  clockOffsetMs = Math.abs(off) < 2000 ? 0 : off;
+}
+
 // ── 요청 ─────────────────────────────────────────────────────────────────
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
@@ -91,6 +111,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
   const res = await fetch(path, { ...init, headers });
+  noteServerClock(res);
 
   if (res.status === 401) {
     setToken(null);

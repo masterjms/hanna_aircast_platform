@@ -186,16 +186,26 @@ export function OtaPage() {
               <span className={file ? 'strong' : 'dim'}>{file ? `${file.name} · ${mb(file.size)}` : '.pkg 파일을 골라 주세요'}</span>
             </div>
             <div className="field">
-              <label htmlFor="ota-ver">펌웨어 버전 (적용 확인용, STATUS 의 p4_fw/c6_fw 와 같은 글자)</label>
-              <input id="ota-ver" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="예: V.260905-1" maxLength={50} />
+              <label htmlFor="ota-ver">
+                펌웨어 버전 — 단말이 STATUS 로 보고하는 글자 그대로. P4 나 C6 하나만 바뀌면 그 버전, 둘 다면 「P4버전 / C6버전」
+              </label>
+              <input id="ota-ver" type="text" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="예: V.260905-1  또는  V.260905-1 / V.260901-2" maxLength={50} />
             </div>
             <div className="field">
               <label htmlFor="ota-pkgver">pkg_version (OTA_START 에 실리는 번호, 1 이상 정수)</label>
-              <input id="ota-pkgver" type="number" min={1} value={pkgVersion} onChange={(e) => setPkgVersion(e.target.value)} placeholder="예: 3" />
+              <input
+                id="ota-pkgver"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                value={pkgVersion}
+                onChange={(e) => setPkgVersion(e.target.value.replace(/[^0-9]/g, ''))}
+                placeholder="예: 3"
+              />
             </div>
             <div className="field">
               <label htmlFor="ota-note">메모 (선택)</label>
-              <input id="ota-note" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="무엇이 바뀐 펌웨어인지" />
+              <input id="ota-note" type="text" value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} placeholder="무엇이 바뀐 펌웨어인지" />
             </div>
             <button
               type="button"
@@ -313,6 +323,13 @@ export function OtaPage() {
       {/* ③ 진행·이력 */}
       <section className="card ota__card" style={{ marginTop: 16 }}>
         <StepTitle n={3}>진행 · 이력</StepTitle>
+        <p className="hint" style={{ marginTop: -6 }}>
+          상태 읽는 법 — <b>성공 · 다 받음 → 재부팅 중</b>: 패키지를 끝까지 받아갔다(=성공), 지금은 끊고 재부팅하는 중 ·{' '}
+          <b>적용 확인</b>: 다시 붙어 보고한 펌웨어 버전이 패키지 버전과 같다 · <b>성공 · 다시 붙음 (버전 글자 다름)</b>: 받아는 갔는데 다시
+          붙어 보고한 버전 글자가 패키지에 적은 것과 다르다(버전 칸을 잘못 적었거나 롤백) · <b>실패 · 사유</b>: 단말이 거절·검증 실패 ·{' '}
+          <b>진행 %</b>: 받는 중 · <b>대기 중</b>: 아직 신호 없음 · <b>응답 없음</b>: 10분 안에 아무 신호가 없었다 · <b>오프라인 · 안 보냄</b>:
+          시작할 때 꺼져 있어 보내지 않았다.
+        </p>
         {jobs.error && <div className="alert">{jobs.error.message}</div>}
         {(jobs.data ?? []).length === 0 ? (
           <div className="empty">아직 OTA 작업이 없습니다.</div>

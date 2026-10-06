@@ -1,17 +1,23 @@
 /**
- * 대시보드 — [왼쪽: 요약 타일 + 마을별 단말 목록 + 이상단말] : [오른쪽: 지도] = 4:6.
+ * 마을 현황(대시보드) — 위: [요약 타일 + 마을별 단말 목록] : [지도], 아래: 이상단말 표(전체 폭).
  *
  * 지도와 목록은 /api/dashboard/map 한 벌의 두 표현이고(지도 설계 §4.5),
- * 연동은 selectedMac/hoveredMac 두 상태뿐이다(§4.6). 최근 이력은 이력 탭으로
- * 옮겼고, 진행 중 방송 표는 뺐다(방송 제어 화면의 일) — 타일 카운트만 남긴다.
+ * 연동은 selectedMac/hoveredMac 두 상태뿐이다(§4.6). 이상단말 표의 행을 눌러도 같은
+ * selectedMac 이 바뀌어 지도가 그 단말로 간다(문제점 58번 ⑤).
+ *
+ * 2026-10-06 (문제점 58번): 단말 목록이 지도 아래 끝까지 내려오고, 이상단말은 왼쪽 구석의
+ * 작은 표가 아니라 지도 아래 전체 폭에 단말 관리와 같은 열(별칭·마을·MAC·구역·상태·RSSI·CFG·
+ * 마지막 통신·버전)로 놓인다. 검색과 10·20·50건 쪽 넘기기는 방송 기록과 같다.
+ * 이상단말의 데이터는 단말 목록 API(status=offline)를 그대로 쓴다 — 요약 API 의 alerts 는
+ * 열이 모자라고(별칭·마을·사유뿐) 20건에서 잘린다.
  *
  * 진행 중인 방송이 있으면 폴링을 2초로 당긴다(사양: 기본 5초, 방송 중 2초).
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '../api/client';
-import type { Organization, Village } from '../api/types';
+import type { Device, Organization, Village } from '../api/types';
 import { MapView } from '../components/MapView';
 import { VillageDeviceList } from '../components/VillageDeviceList';
 import { useAuth } from '../auth/AuthContext';
@@ -81,6 +87,167 @@ function formatTime(iso: string | null): string {
   });
 }
 
+function signalTone(rssi: number | null): Tone {
+  if (rssi === null) return 'idle';
+  if (rssi >= -60) return 'ok';
+  if (rssi >= -75) return 'warn';
+  return 'danger';
+}
+
+const TONE_VAR: Record<Tone, string> = {
+  ok: 'var(--ok-text)',
+  warn: 'var(--warn-text)',
+  danger: 'var(--danger-text)',
+  idle: 'var(--text-3)',
+};
+
+/** 왜 이상인가 — 서버 요약의 _alert_reason 과 같은 세 가지. */
+function alertReason(d: Device): string {
+  if (!d.last_seen_at) return '한 번도 통신하지 않음';
+  if (d.state === 'OFFLINE') return '연결 끊김(LWT)';
+  return '응답 없음';
+}
+
+const SIZES = [10, 20, 50] as const;
+type Size = (typeof SIZES)[number];
+
+/** 지도 아래 이상단말 표 — 단말 관리와 같은 열, 방송 기록과 같은 검색·쪽 넘기기. */
+function AlertTable({
+  devices,
+  selectedMac,
+  onSelect,
+}: {
+  devices: Device[] | null;
+  selectedMac: string | null;
+  onSelect: (mac: string | null) => void;
+}) {
+  const [q, setQ] = useState('');
+  const [size, setSize] = useState<Size>(10);
+  const [page, setPage] = useState(1);
+
+  const filtered = useMemo(() => {
+    const list = devices ?? [];
+    const needle = q.trim().toLowerCase();
+    if (!needle) return list;
+    return list.filter((d) =>
+      [d.label, d.mac, d.village_name, d.zone_name].some((v) => v?.toLowerCase().includes(needle)),
+    );
+  }, [devices, q]);
+
+  const pages = Math.max(1, Math.ceil(filtered.length / size));
+  // 필터가 바뀌어 쪽 수가 줄면 마지막 쪽으로. 폴링으로 단말이 복구돼 줄어도 같다.
+  const safePage = Math.min(page, pages);
+  const rows = filtered.slice((safePage - 1) * size, safePage * size);
+
+  return (
+    <section className="dash__alerts">
+      <div className="filters">
+        <h2 className="section-title" style={{ margin: 0 }}>
+          이상단말{' '}
+          {devices && devices.length > 0 && (
+            <span style={{ color: 'var(--danger-text)', fontSize: 12 }}>{devices.length}대</span>
+          )}
+        </h2>
+        <div className="filters__spacer" />
+        <input
+          type="search"
+          placeholder="별칭 · MAC · 마을 · 구역"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setPage(1);
+          }}
+          style={{ minWidth: 220 }}
+          aria-label="이상단말 검색"
+        />
+        <select
+          value={size}
+          onChange={(e) => {
+            setSize(Number(e.target.value) as Size);
+            setPage(1);
+          }}
+          aria-label="한 쪽에 보일 줄 수"
+        >
+          {SIZES.map((s) => (
+            <option key={s} value={s}>
+              {s}건씩
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="table-wrap table-wrap--scroll">
+        {devices === null ? (
+          <div className="empty">불러오는 중…</div>
+        ) : filtered.length === 0 ? (
+          <div className="empty">{q ? '조건에 맞는 이상단말이 없습니다.' : '모든 단말이 정상입니다.'}</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>별칭</th>
+                <th>마을</th>
+                <th className="mono">MAC</th>
+                <th>구역</th>
+                <th>상태</th>
+                <th className="num">RSSI</th>
+                <th className="num">CFG</th>
+                <th className="num">마지막 통신</th>
+                <th title="마지막 STATUS 가 보고한 펌웨어 — P4 / C6">버전 (P4 / C6)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((d) => (
+                <tr
+                  key={d.mac}
+                  className={d.mac === selectedMac ? 'is-active' : undefined}
+                  onClick={() => onSelect(d.mac === selectedMac ? null : d.mac)}
+                  title="누르면 지도에서 이 단말을 보여 줍니다"
+                >
+                  <td className="strong">{d.label || <span className="mono dim">{d.mac}</span>}</td>
+                  <td>{d.village_name ?? '미배정'}</td>
+                  <td className="mono">{d.mac}</td>
+                  <td>{d.zone_name ?? '—'}</td>
+                  <td>
+                    <span className="badge badge--danger">{alertReason(d)}</span>
+                  </td>
+                  <td className="num" style={{ color: TONE_VAR[signalTone(d.rssi)], fontWeight: 600 }}>
+                    {d.rssi ?? '—'}
+                  </td>
+                  <td className="num">{d.config_version ?? '—'}</td>
+                  <td className="num dim">{formatTime(d.last_seen_at)}</td>
+                  <td className="mono dim">
+                    {(d.p4_fw ?? d.p4_version) || '—'} / {(d.c6_fw ?? d.c6_version) || '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {filtered.length > size && (
+        <div className="pager">
+          <span className="dim">
+            총 {filtered.length}대 · {safePage}/{pages}쪽
+          </span>
+          <span className="filters__spacer" />
+          <button type="button" className="btn btn--sm" disabled={safePage <= 1} onClick={() => setPage(1)}>
+            처음
+          </button>
+          <button type="button" className="btn btn--sm" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>
+            이전
+          </button>
+          <button type="button" className="btn btn--sm" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>
+            다음
+          </button>
+          <button type="button" className="btn btn--sm" disabled={safePage >= pages} onClick={() => setPage(pages)}>
+            끝
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function DashboardPage() {
   const { user } = useAuth();
   const [selectedMac, setSelectedMac] = useState<string | null>(null);
@@ -91,6 +258,8 @@ export function DashboardPage() {
   const interval = fastMode ? POLL_INTERVAL.broadcasting : POLL_INTERVAL.normal;
   const { data, loading } = usePolling(() => api.dashboard.summary(), interval);
   const map = usePolling(() => api.dashboard.map(), interval);
+  // 이상단말 = 오프라인 단말. 판정은 서버 단말 목록(status=offline)이 요약 타일과 같은 규칙으로 한다.
+  const offline = usePolling(() => api.devices.list({ status: 'offline' }), interval);
 
   const broadcasting = (data?.active_broadcasts.length ?? 0) > 0;
   useEffect(() => setFastMode(broadcasting), [broadcasting]);
@@ -152,168 +321,120 @@ export function DashboardPage() {
     return <div className="alert">대시보드를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.</div>;
   }
 
-  const { devices, alerts } = data;
+  const { devices } = data;
   const total = devices.total + devices.unassigned;
 
   return (
     // 상단바가 이미 "전체 개요"를 보여주므로 제목을 반복하지 않는다.
-    <div ref={rowRef} className="dash">
-      {/* ── 왼쪽: 요약 + 기관·마을별 단말 + 이상단말 ──
-          세로 flex 로 세 구역을 쌓고, 단말 목록만 남는 높이를 차지해 안에서
-          스크롤한다. 단말·마을이 늘어도 화면 전체가 길어지지 않는다 — 타일과
-          이상단말은 항상 제자리에 있어야 한다(2026-09-03 현장 요청). */}
-      <div
-        style={{
-          flex: `1 1 ${100 - mapPct}%`,
-          minWidth: 0,
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 14,
-          paddingRight: 4,
-        }}
-      >
-        {/* 좁은 왼쪽 칼럼에서도 와이어프레임처럼 2×2 를 유지한다 */}
-        <div className="tiles" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: 0 }}>
-          <Tile
-            label="온라인"
-            value={devices.online}
-            unit={`/ ${total}`}
-            note="최근 5분 내 STATUS 수신 기준"
-            tone="ok"
-          />
-          <Tile
-            label="오프라인"
-            value={devices.offline}
-            unit="대"
-            note="LWT 수신 또는 5분 이상 무응답"
-            tone={devices.offline ? 'danger' : 'idle'}
-          />
-          <Tile
-            label="방송 중"
-            value={data.active_broadcasts.length}
-            unit="건"
-            note={broadcasting ? '진행 중 — 방송 제어에서 확인' : '진행 중인 방송 없음'}
-            tone={broadcasting ? 'warn' : 'idle'}
-          />
-          {user?.all_villages && (
+    <div className="dash">
+      <div ref={rowRef} className="dash__top">
+        {/* ── 왼쪽: 요약 + 기관·마을별 단말 ──
+            타일은 제자리에 있고 단말 목록이 남는 높이(지도 아래 끝까지)를 차지해 안에서
+            스크롤한다. 단말·마을이 늘어도 화면 전체가 길어지지 않는다. */}
+        <div className="dash__left" style={{ flex: `1 1 ${100 - mapPct}%` }}>
+          {/* 좁은 왼쪽 칼럼에서도 와이어프레임처럼 2×2 를 유지한다 */}
+          <div className="tiles" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: 0 }}>
             <Tile
-              label="미배정"
-              value={devices.unassigned}
-              unit="대"
-              note="마을 배정 대기 중"
-              tone={devices.unassigned ? 'warn' : 'idle'}
+              label="온라인"
+              value={devices.online}
+              unit={`/ ${total}`}
+              note="최근 5분 내 STATUS 수신 기준"
+              tone="ok"
             />
+            <Tile
+              label="오프라인"
+              value={devices.offline}
+              unit="대"
+              note="LWT 수신 또는 5분 이상 무응답"
+              tone={devices.offline ? 'danger' : 'idle'}
+            />
+            <Tile
+              label="방송 중"
+              value={data.active_broadcasts.length}
+              unit="건"
+              note={broadcasting ? '진행 중 — 방송 제어에서 확인' : '진행 중인 방송 없음'}
+              tone={broadcasting ? 'warn' : 'idle'}
+            />
+            {user?.all_villages && (
+              <Tile
+                label="미배정"
+                value={devices.unassigned}
+                unit="대"
+                note="마을 배정 대기 중"
+                tone={devices.unassigned ? 'warn' : 'idle'}
+              />
+            )}
+          </div>
+
+          <section className="card dash__list">
+            <VillageDeviceList
+              pins={map.data?.pins ?? []}
+              missing={map.data?.missing_location ?? []}
+              orgs={orgs}
+              villages={villages}
+              selectedMac={selectedMac}
+              hoveredMac={hoveredMac}
+              onSelect={setSelectedMac}
+              onHover={setHoveredMac}
+            />
+          </section>
+        </div>
+
+        {/* 목록과 지도 사이 손잡이 — 끌어서 지도 폭을 바꾼다. 키보드는 ←→ 로 5%씩. */}
+        <div
+          className={`dash-split${dragging ? ' is-dragging' : ''}`}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="지도 크기 조절"
+          aria-valuemin={MAP_PCT_MIN}
+          aria-valuemax={MAP_PCT_MAX}
+          aria-valuenow={mapPct}
+          tabIndex={0}
+          onPointerDown={onSplitDown}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowLeft') setMapPct(mapPct + 5);
+            if (e.key === 'ArrowRight') setMapPct(mapPct - 5);
+          }}
+          title="끌어서 지도 크기 조절"
+        />
+
+        {/* ── 오른쪽: 지도 ── */}
+        <div className="card dash__map" style={{ flex: `1 1 ${mapPct}%` }}>
+          <div className="map-size" role="group" aria-label="지도 크기">
+            {MAP_PRESETS.map((p) => (
+              <button
+                key={p.label}
+                type="button"
+                aria-pressed={mapPct === p.pct}
+                onClick={() => setMapPct(p.pct)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {map.data?.kakao_js_key ? (
+            <MapView
+              jsKey={map.data.kakao_js_key}
+              pins={map.data.pins}
+              villages={map.data.villages}
+              selectedMac={selectedMac}
+              hoveredMac={hoveredMac}
+              onSelect={setSelectedMac}
+              onHover={setHoveredMac}
+            />
+          ) : map.data && map.data.kakao_js_key === null ? (
+            <div className="empty">
+              카카오 JavaScript 키가 설정되지 않았습니다 — 서버 .env 에 KAKAO_JS_KEY 를 넣고
+              재기동하세요.
+            </div>
+          ) : (
+            <div className="empty">지도를 불러오는 중…</div>
           )}
         </div>
-
-        <section className="card" style={{ padding: 10, flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          <VillageDeviceList
-            pins={map.data?.pins ?? []}
-            missing={map.data?.missing_location ?? []}
-            orgs={orgs}
-            villages={villages}
-            selectedMac={selectedMac}
-            hoveredMac={hoveredMac}
-            onSelect={setSelectedMac}
-            onHover={setHoveredMac}
-          />
-        </section>
-
-        <section style={{ flex: 'none' }}>
-          <h2 className="section-title">
-            이상단말{' '}
-            {alerts.length > 0 && (
-              <span style={{ color: 'var(--danger-text)', fontSize: 12 }}>{alerts.length}건</span>
-            )}
-          </h2>
-          {/* 이상단말이 많아져도 이 높이 안에서만 스크롤한다 */}
-          <div className="table-wrap table-wrap--scroll" style={{ maxHeight: 180, overflowY: 'auto' }}>
-            {alerts.length === 0 ? (
-              <div className="empty">모든 단말이 정상입니다.</div>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>별칭</th>
-                    <th>마을</th>
-                    <th>상태</th>
-                    <th>마지막 통신</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {alerts.map((a) => (
-                    <tr key={a.mac}>
-                      <td className="strong">
-                        {a.label ?? <span className="mono dim">{a.mac}</span>}
-                      </td>
-                      <td>{a.village_name ?? '미배정'}</td>
-                      <td>
-                        <span className="badge badge--danger">{a.reason}</span>
-                      </td>
-                      <td className="dim">{formatTime(a.last_seen_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </section>
       </div>
 
-      {/* 목록과 지도 사이 손잡이 — 끌어서 지도 폭을 바꾼다. 키보드는 ←→ 로 5%씩. */}
-      <div
-        className={`dash-split${dragging ? ' is-dragging' : ''}`}
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="지도 크기 조절"
-        aria-valuemin={MAP_PCT_MIN}
-        aria-valuemax={MAP_PCT_MAX}
-        aria-valuenow={mapPct}
-        tabIndex={0}
-        onPointerDown={onSplitDown}
-        onKeyDown={(e) => {
-          if (e.key === 'ArrowLeft') setMapPct(mapPct + 5);
-          if (e.key === 'ArrowRight') setMapPct(mapPct - 5);
-        }}
-        title="끌어서 지도 크기 조절"
-      />
-
-      {/* ── 오른쪽: 지도 ── */}
-      <div
-        className="card"
-        style={{ flex: `1 1 ${mapPct}%`, minWidth: 0, padding: 6, position: 'relative' }}
-      >
-        <div className="map-size" role="group" aria-label="지도 크기">
-          {MAP_PRESETS.map((p) => (
-            <button
-              key={p.label}
-              type="button"
-              aria-pressed={mapPct === p.pct}
-              onClick={() => setMapPct(p.pct)}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-        {map.data?.kakao_js_key ? (
-          <MapView
-            jsKey={map.data.kakao_js_key}
-            pins={map.data.pins}
-            villages={map.data.villages}
-            selectedMac={selectedMac}
-            hoveredMac={hoveredMac}
-            onSelect={setSelectedMac}
-            onHover={setHoveredMac}
-          />
-        ) : map.data && map.data.kakao_js_key === null ? (
-          <div className="empty">
-            카카오 JavaScript 키가 설정되지 않았습니다 — 서버 .env 에 KAKAO_JS_KEY 를 넣고
-            재기동하세요.
-          </div>
-        ) : (
-          <div className="empty">지도를 불러오는 중…</div>
-        )}
-      </div>
+      {/* ── 아래: 이상단말 (전체 폭) ── */}
+      <AlertTable devices={offline.data} selectedMac={selectedMac} onSelect={setSelectedMac} />
     </div>
   );
 }

@@ -456,6 +456,21 @@ async def start(
 
 
 # ── 조회 ─────────────────────────────────────────────────────────────────
+def version_applied(target: str | None, p4: str | None, c6: str | None) -> bool:
+    """패키지에 적은 버전이 단말이 보고한 p4_fw/c6_fw 에 반영됐나(문제점 60번).
+
+    적는 법: 칩 하나만 바뀐 패키지는 그 버전 하나(`V.260905-1`) — P4 든 C6 든 어느 한쪽과
+    같으면 적용. 둘 다 바뀐 패키지는 `P4버전 / C6버전` — 각각 자기 칩과 같아야 적용.
+    한쪽을 비우면(`V.1 /`) 그 칩은 보지 않는다.
+    """
+    if not target:
+        return False
+    if "/" in target:
+        want_p4, want_c6 = (t.strip() for t in target.split("/", 1))
+        return (not want_p4 or want_p4 == p4) and (not want_c6 or want_c6 == c6)
+    return target in (p4, c6)
+
+
 def _version_from_name(file_name: str | None) -> str | None:
     """start() 가 적는 `"<파일> (<버전>)"` 에서 버전을 되찾는다. 모양이 다르면 None."""
     if not file_name or not file_name.endswith(")") or " (" not in file_name:
@@ -500,7 +515,7 @@ async def job_out(db: AsyncSession, event: BroadcastEvent) -> OtaJobOut:
                 downloaded=bool(res is not None and res.ok is True),
                 p4_fw=p4,
                 c6_fw=c6,
-                applied=bool(target_version) and target_version in (p4, c6),
+                applied=version_applied(target_version, p4, c6),
                 online=bool(dev is not None and is_online(dev, cutoff)),
             )
         )

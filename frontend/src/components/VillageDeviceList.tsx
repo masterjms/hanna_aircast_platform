@@ -12,7 +12,7 @@
  * 기관이 없는 계정(이장)은 예전처럼 마을 목록으로 바로 보인다.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { MapPin, Organization, Village } from '../api/types';
 import { buildForest, type OrgNode } from '../lib/orgtree';
@@ -121,10 +121,21 @@ export function VillageDeviceList({
   }, [forest, pinsByVillage]);
 
   // 지도에서 핀을 고르면 그 단말이 든 가지를 펼친다 — 목록이 따라와야 한다(§4.5).
+  //
+  // **선택이 바뀐 그 순간 한 번만.** 예전에는 pins 가 바뀔 때마다(5초 폴링) 다시 돌아,
+  // 사용자가 다른 지역을 찾으려고 선택 단말의 가지를 접고 스크롤을 내려도 다음 폴링에
+  // 그 가지가 도로 펼쳐지고 scrollIntoView 가 그 단말로 끌고 갔다 — "다른 단말을 고를 수
+  // 없고 첫 단말로 돌아간다"(문제점 58번 ①).
+  const openedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!selectedMac) return;
+    if (!selectedMac) {
+      openedForRef.current = null;
+      return;
+    }
+    if (openedForRef.current === selectedMac) return;
     const pin = pins.find((p) => p.mac === selectedMac);
     if (!pin) return;
+    openedForRef.current = selectedMac;
     const keys = [pin.village_id === null ? 'v:none' : `v:${pin.village_id}`];
     const v = villages.find((x) => x.id === pin.village_id);
     let node = v?.organization_id != null ? forest.byId.get(v.organization_id) : undefined;
@@ -159,6 +170,9 @@ export function VillageDeviceList({
     return <div className="empty">표시할 단말이 없습니다.</div>;
   }
 
+  // 마커 클릭 → 목록이 그 항목으로 따라온다(§4.5). 선택이 바뀔 때 한 번만 — 매 렌더마다
+  // 하면 폴링 때마다 스크롤이 선택 단말로 되돌아간다(문제점 58번 ①).
+  const scrolledForRef = useRef<string | null>(null);
   const deviceItems = (list: MapPin[]) => (
     <ul className="vlist__items">
       {list.map((p) => {
@@ -169,8 +183,10 @@ export function VillageDeviceList({
               type="button"
               className={`vlist__item${active ? ' is-active' : ''}`}
               ref={(el) => {
-                // 마커 클릭 → 목록이 그 항목으로 따라온다(§4.5)
-                if (el && p.mac === selectedMac) el.scrollIntoView({ block: 'nearest' });
+                if (el && p.mac === selectedMac && scrolledForRef.current !== selectedMac) {
+                  scrolledForRef.current = selectedMac;
+                  el.scrollIntoView({ block: 'nearest' });
+                }
               }}
               onClick={() => onSelect(p.mac === selectedMac ? null : p.mac)}
               onMouseEnter={() => onHover(p.mac)}
