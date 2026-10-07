@@ -566,7 +566,7 @@ function DeviceTable({
           <th>상태</th>
           <th className="num">RSSI</th>
           <th className="num">CFG</th>
-          <th className="num">마지막 통신</th>
+          <th>마지막 통신</th>
           <th title="실행 중 펌웨어 — P4 / C6. STATUS 가 없으면 등록 때 값">버전 (P4 / C6)</th>
           <th />
         </tr>
@@ -611,7 +611,7 @@ function DeviceTable({
               {d.rssi ?? '—'}
             </td>
             <td className="num">{d.config_version ?? '—'}</td>
-            <td className="num dim">{formatTime(d.last_seen_at)}</td>
+            <td className="dim">{formatTime(d.last_seen_at)}</td>
             <td className="mono dim" title={`P4 ${d.p4_fw ?? d.p4_version ?? '-'} / C6 ${d.c6_fw ?? d.c6_version ?? '-'}`}>
               {(d.p4_fw ?? d.p4_version) || '—'} / {(d.c6_fw ?? d.c6_version) || '—'}
             </td>

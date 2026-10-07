@@ -154,6 +154,8 @@ class MockDevice:
             except _Reboot:
                 print(f"[{self.mac}] 네트워크 끊음 → {REBOOT_SEC:.0f}초 뒤 재부팅 (fw {self.fw})")
                 await asyncio.sleep(REBOOT_SEC)
+                # 재부팅한 단말은 IDLE 로 다시 붙는다(OTA 상태를 들고 오지 않는다).
+                self.state = "IDLE"
 
     async def _session(self) -> None:
         lwt = aiomqtt.Will(

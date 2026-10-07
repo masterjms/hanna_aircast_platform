@@ -64,6 +64,12 @@ class CurrentConfig(Base):
         SmallInteger, nullable=False, server_default="30"
     )
 
+    #: CONFIG 재조정(공통·단말별 retained CONFIG 를 DB 값으로 다시 발행) 주기, 시간 단위 1~24
+    #: (문제점 63번). 서버 안의 작업 주기라 CONFIG 로 나가지 않고 config_version 도 올리지 않는다.
+    config_reconcile_hours: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="1"
+    )
+
     # ── 오디오 품질. 단말 CONFIG 로 나가지 않는다(opus·mp3 모두 자기 헤더에
     #    비트레이트가 들어 있어 단말이 따로 알 필요가 없다). 서버와 브라우저의
     #    인코딩 설정이라 config_version 을 올리지 않는다. 문제점 29·30번.

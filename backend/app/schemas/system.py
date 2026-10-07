@@ -27,6 +27,8 @@ class ConfigOut(ApiModel):
     live_bitrate_kbps: int
     #: 파일함 mp3 비트레이트(kbps). 업로드 재인코딩과 TTS 합성에 쓴다.
     file_bitrate_kbps: int
+    #: CONFIG 재조정 주기(시간, 1~24). 서버 작업 주기 — 단말 CONFIG 가 아니다(문제점 63번).
+    config_reconcile_hours: int = 1
     updated_at: dt.datetime
 
 
@@ -46,6 +48,7 @@ class ConfigUpdate(BaseModel):
     # ── 오디오 품질 (선택지는 constants.CONFIG_CHOICES 와 같다) ──
     live_bitrate_kbps: Literal[16, 24] | None = None
     file_bitrate_kbps: Literal[16, 24] | None = None
+    config_reconcile_hours: int | None = Field(default=None, ge=1, le=24)
 
 
 class HealthOut(BaseModel):

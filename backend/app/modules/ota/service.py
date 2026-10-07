@@ -44,6 +44,7 @@ from app.models.event import BroadcastEvent, BroadcastRecipient
 from app.models.org import User
 from app.models.ota import OtaPackage, OtaToken
 from app.modules.broadcast import service as broadcast_service
+from app.modules.device import service as device_service
 from app.mqtt import handlers as mqtt_handlers
 from app.mqtt.publisher import MqttPublisher
 from app.mqtt.status_buffer import StatusBuffer
@@ -358,6 +359,8 @@ async def _mark_download_progress(
                 }
                 if buffer is not None:
                     buffer.discard(tok.mac)  # 대기 중인 낡은 STATUS 가 되살리지 않게(LWT 와 같다)
+                # 끊기 직전에 오는 STATUS 도 버린다 — 재부팅 뒤 첫 STATUS 부터 다시 온라인.
+                device_service.mark_ota_rebooting(tok.mac)
             log.info(
                 "OTA 다 받아감 job_id=%s mac=%s (%d bytes)", tok.job_id, tok.mac, tok.bytes_served
             )

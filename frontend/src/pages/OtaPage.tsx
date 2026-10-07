@@ -8,11 +8,11 @@
  * (TargetTreePicker, 하나만 고르는 모드). 단말 계약(현행 02 §10): 서버는 OTA_START 만 보내고 단말이
  * 다운로드·검증·적용·재부팅을 알아서 한다.
  *
- * 성공의 기준(단말 쪽 정의, 문제점 48번 보조설명 2026-10-04): 단말이 패키지를 **끝까지 받아가면**
- * 성공이다. 실제 펌웨어는 다 받으면 바로 네트워크를 끊고 재부팅하므로 OTA_RESULT 가 오지 않는다.
- * 서버가 마지막 바이트가 나간 것을 보고(OTA_DOWNLOADED) 그 단말을 성공·오프라인으로 돌린다.
- * 몇 분 안에 다시 붙은 뒤 보고하는 p4_fw/c6_fw 가 패키지 버전과 같으면 「적용 확인」 — 이건 덤이고
- * 최종 확인은 사람이 한다.
+ * 성공의 기준(단말 쪽 정의, 문제점 48·60번 보조설명): 단말이 패키지를 **끝까지 받아가면** 서버와의
+ * 관계는 끝이다. 단말은 연결을 끊고 스스로 업데이트(진행률 보고 없음) → 재부팅 → 재접속한다.
+ * 서버가 마지막 바이트가 나간 것을 보고(OTA_DOWNLOADED) 그 단말을 성공·오프라인으로 돌리고,
+ * 다시 온라인이 되면 그것으로 OTA 가 정상 끝난 것이다. 버전(펌웨어 버전·pkg_version)은 **표기용**
+ * 이고 비교·판정에 쓰지 않는다(10/7 단말팀).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -37,13 +37,11 @@ function mb(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-/** 단말 한 대의 OTA 상태 글자. 재부팅 뒤 버전 확인이 가장 세고, 그다음이 「다 받아감」(성공). */
+/** 단말 한 대의 OTA 상태 글자. 다 받아감 = 성공, 다시 온라인 = 끝(버전은 비교하지 않는다 — 문제점 60번). */
 function deviceState(d: OtaJob['devices'][number], ended: boolean): { text: string; cls: string } {
-  if (d.applied) return { text: '적용 확인 (재부팅 뒤 버전 일치)', cls: 'badge badge--ok' };
   if (!d.sent) return { text: '오프라인 · 안 보냄', cls: 'badge badge--idle' };
   if (d.downloaded) {
-    // 다 받아갔다 = 성공. 다시 붙었는데 버전 글자가 다르면 패키지의 「버전」을 잘못 적었거나 롤백.
-    if (d.online) return { text: '성공 · 다시 붙음 (버전 글자 다름)', cls: 'badge badge--warn' };
+    if (d.online) return { text: '성공 · 재접속 완료', cls: 'badge badge--ok' };
     return { text: '성공 · 다 받음 → 재부팅 중', cls: 'badge badge--ok' };
   }
   if (d.ok === false) return { text: `실패${d.reason ? ` · ${d.reason}` : ''}`, cls: 'badge badge--danger' };
@@ -186,13 +184,11 @@ export function OtaPage() {
               <span className={file ? 'strong' : 'dim'}>{file ? `${file.name} · ${mb(file.size)}` : '.pkg 파일을 골라 주세요'}</span>
             </div>
             <div className="field">
-              <label htmlFor="ota-ver">
-                펌웨어 버전 — 단말이 STATUS 로 보고하는 글자 그대로. P4 나 C6 하나만 바뀌면 그 버전, 둘 다면 「P4버전 / C6버전」
-              </label>
-              <input id="ota-ver" type="text" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="예: V.260905-1  또는  V.260905-1 / V.260901-2" maxLength={50} />
+              <label htmlFor="ota-ver">펌웨어 버전 (표기용 — 목록과 기록에 보이기만 하고 비교·판정에 쓰지 않습니다)</label>
+              <input id="ota-ver" type="text" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="예: V.260905-1" maxLength={50} />
             </div>
             <div className="field">
-              <label htmlFor="ota-pkgver">pkg_version (OTA_START 에 실리는 번호, 1 이상 정수)</label>
+              <label htmlFor="ota-pkgver">pkg_version (OTA_START 에 실리는 번호, 1 이상 정수 — 참고용, 서버는 비교하지 않습니다)</label>
               <input
                 id="ota-pkgver"
                 type="text"
@@ -314,8 +310,8 @@ export function OtaPage() {
           </div>
           <p className="hint">
             방송 중인 단말은 OTA 를 거절(BUSY)하고, OTA 중인 단말에는 방송을 걸 수 없습니다. 단말이 패키지를 끝까지 받아가면 그
-            단말은 <b>성공</b>이고, 곧 연결을 끊고 스스로 재부팅하므로 오프라인으로 표시됩니다. 몇 분 안에 다시 붙는지는 사람이
-            확인합니다. 다시 붙은 뒤 보고하는 펌웨어 버전이 패키지 버전과 같으면 「적용 확인」까지 붙습니다.
+            단말은 <b>성공</b>이고, 연결을 끊고 스스로 업데이트·재부팅하는 동안 오프라인으로 표시됩니다. 다시 온라인이 되면
+            「성공 · 재접속 완료」 — 그것으로 OTA 가 끝난 것입니다. 버전은 표기용이라 비교하지 않습니다.
           </p>
         </section>
       </div>
@@ -324,11 +320,11 @@ export function OtaPage() {
       <section className="card ota__card" style={{ marginTop: 16 }}>
         <StepTitle n={3}>진행 · 이력</StepTitle>
         <p className="hint" style={{ marginTop: -6 }}>
-          상태 읽는 법 — <b>성공 · 다 받음 → 재부팅 중</b>: 패키지를 끝까지 받아갔다(=성공), 지금은 끊고 재부팅하는 중 ·{' '}
-          <b>적용 확인</b>: 다시 붙어 보고한 펌웨어 버전이 패키지 버전과 같다 · <b>성공 · 다시 붙음 (버전 글자 다름)</b>: 받아는 갔는데 다시
-          붙어 보고한 버전 글자가 패키지에 적은 것과 다르다(버전 칸을 잘못 적었거나 롤백) · <b>실패 · 사유</b>: 단말이 거절·검증 실패 ·{' '}
-          <b>진행 %</b>: 받는 중 · <b>대기 중</b>: 아직 신호 없음 · <b>응답 없음</b>: 10분 안에 아무 신호가 없었다 · <b>오프라인 · 안 보냄</b>:
-          시작할 때 꺼져 있어 보내지 않았다.
+          상태 읽는 법 — <b>성공 · 다 받음 → 재부팅 중</b>: 패키지를 끝까지 받아갔다(=성공). 단말이 연결을 끊고 업데이트·재부팅하는 중 ·{' '}
+          <b>성공 · 재접속 완료</b>: 재부팅 뒤 다시 온라인 — OTA 끝 · <b>실패 · 사유</b>: 단말이 거절(BUSY)·검증 실패 · <b>진행 %</b>: 받는 중 ·{' '}
+          <b>대기 중</b>: 아직 신호 없음 · <b>응답 없음</b>: 10분 안에 아무 신호가 없었다 · <b>오프라인 · 안 보냄</b>: 시작할 때 꺼져 있어 보내지
+          않았다. 통신 칸의 <b>온라인/오프라인</b>은 MQTT 연결 여부(최근 STATUS 수신·LWT 기준)이고, 단말 관리의 <b>IDLE/LIVE/FILE/OTA</b>는
+          단말이 STATUS 로 보고하는 자기 상태(IDLE = 대기, 방송 수신 가능)입니다.
         </p>
         {jobs.error && <div className="alert">{jobs.error.message}</div>}
         {(jobs.data ?? []).length === 0 ? (
@@ -349,7 +345,10 @@ export function OtaPage() {
                     <span className="filters__spacer" />
                     <span className="ota__counts">
                       성공 <b>{j.done_count}</b> / 보냄 {j.sent_count}
-                      {j.applied_count > 0 ? ` · 적용 확인 ${j.applied_count}` : ''}
+                      {(() => {
+                        const back = j.devices.filter((d) => d.downloaded && d.online).length;
+                        return back > 0 ? ` · 재접속 ${back}` : '';
+                      })()}
                       {j.devices.length > j.sent_count ? ` · 오프라인 ${j.devices.length - j.sent_count}` : ''}
                     </span>
                     <span aria-hidden="true">{open ? '▾' : '▸'}</span>

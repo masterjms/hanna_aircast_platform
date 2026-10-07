@@ -171,6 +171,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
   "file_wait_sec": 30,
   "live_bitrate_kbps": 24,
   "file_bitrate_kbps": 24,
+  "config_reconcile_hours": 1,
   "updated_at": "2026-09-06T00:00:00+00:00"
 }
 ```
@@ -198,6 +199,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | `live_stop_wait_sec` | 10~30 | 아니오 |
 | `file_wait_sec` | 10~60 | 아니오 |
 | `live_bitrate_kbps` | 16 또는 24 | 아니오 |
+| `config_reconcile_hours` | 1~24 | 아니오; 재조정 작업 주기, 저장 즉시 스케줄 변경(문제점 63번) |
 | `file_bitrate_kbps` | 16 또는 24 | 아니오 |
 
 단말 CONFIG 필드의 **값이 실제로 달라졌을 때만** `config_version`을 올리고 retained CONFIG를 재발행한다. 같은 값을 다시 보낸 것은 변경이 아니다. (~2026-09-20에는 요청에 단말 필드가 「들어 있기만」 해도 올렸다 — 화면은 저장 때 모든 값을 보내므로 응답 대기 시간만 바꿔도 매번 전 단말에 재발행됐다. 2026-09-21 로컬 시험에서 발견해 고쳤다.)
@@ -647,7 +649,7 @@ query: `page`(1~), `size`(10·20·50, 그 외는 10), `kind`(`file`·`schedule`�
 | GET | `/api/ota/jobs/{event_id}` | 작업 하나 |
 | GET | `/dl/ota/{token}` | 단말 전용 패키지 다운로드(인증 없음, 토큰 만료 404). 서버가 직접 보낸다(Range → 206, 범위 밖 416). **마지막 바이트까지 나가면** 그 단말의 결과 `OTA_DOWNLOADED`(= 성공)가 기록되고 단말은 오프라인으로 돌아간다(2026-10-05, 02 §10.1) |
 
-`OtaJobOut` = `{broadcast: BroadcastOut, package, devices: [{mac, label, village_name, sent, result_type, ok, reason, progress, downloaded, p4_fw, c6_fw, applied, online}], done_count, applied_count, sent_count}`. `downloaded`(=`done_count`의 기준)가 **성공**이다: 서버가 본 `OTA_DOWNLOADED` 또는 단말이 보낸 `OTA_RESULT ok`. `applied`는 재부팅 뒤 버전 일치(덤 — 버전 하나면 어느 칩이든, 「P4 / C6」면 각각, `ota.service.version_applied`). 토큰은 단말마다 하나라 마을 OTA도 `device/<mac>/cmd`로 한 대씩 발행한다. 겹침·커밋 후 발행·종료 판정은 방송 API와 같다(§9).
+`OtaJobOut` = `{broadcast: BroadcastOut, package, devices: [{mac, label, village_name, sent, result_type, ok, reason, progress, downloaded, p4_fw, c6_fw, applied, online}], done_count, applied_count, sent_count}`. `downloaded`(=`done_count`의 기준)가 **성공**이다: 서버가 본 `OTA_DOWNLOADED` 또는 단말이 보낸 `OTA_RESULT ok`. `applied`는 재부팅 뒤 버전 일치(`ota.service.version_applied`) — 2026-10-07부터 화면은 쓰지 않는다. 단말팀 정의: 다 받아감 = 성공, 다시 온라인 = 끝(문제점 60번). 토큰은 단말마다 하나라 마을 OTA도 `device/<mac>/cmd`로 한 대씩 발행한다. 겹침·커밋 후 발행·종료 판정은 방송 API와 같다(§9).
 
 ## 10. WebSocket 마이크 업링크
 

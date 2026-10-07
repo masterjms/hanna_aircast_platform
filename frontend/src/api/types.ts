@@ -259,6 +259,8 @@ export interface SystemConfig {
   live_bitrate_kbps: BitrateKbps;
   /** 파일함 mp3 비트레이트(kbps). 업로드 재인코딩과 TTS 합성에 쓴다. */
   file_bitrate_kbps: BitrateKbps;
+  /** CONFIG 재조정(공통·단말별 retained CONFIG 재발행) 주기, 시간 단위 1~24. 서버 작업 주기. */
+  config_reconcile_hours: number;
   updated_at: string;
 }
 

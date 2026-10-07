@@ -2765,16 +2765,16 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
 }
 
 /* 마을 현황 — 좌(요약·목록) 우(지도) 한 줄. 높이는 아래 「화면에 맞추기」가 정한다. */
-/* 마을 현황(문제점 58번, 2026-10-06): 위 [목록 | 지도] 는 남는 높이를, 아래 이상단말 표는 제 높이만. */
-.dash { display: flex; flex-direction: column; gap: 12px; height: calc(100vh - 120px); min-height: 480px; }
-.dash__top { display: flex; gap: 4px; flex: 1 1 0; min-height: 300px; }
+/* 마을 현황(문제점 58번 보조설명, 2026-10-07): 한 화면에 맞추지 않는다. 위 [목록 | 지도]가 화면 높이
+   가까이(트리가 전보다 두 배), 이상단말 표는 그 아래로 — 화면을 내려서 본다. */
+.dash { display: flex; flex-direction: column; gap: 14px; height: auto; }
+.dash__top { display: flex; gap: 4px; flex: none; height: calc(100vh - 190px); min-height: 620px; }
 .dash__left { min-width: 0; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
 .dash__list { padding: 10px; flex: 1; min-height: 0; overflow-y: auto; }
 .dash__map { min-width: 0; padding: 6px; position: relative; }
-.dash__alerts { flex: 0 0 auto; }
+.dash__alerts { flex: none; padding-bottom: 8px; }
 .dash__alerts .filters { margin-bottom: 8px; }
-.dash__alerts .table-wrap { max-height: 38vh; overflow: auto; }
-.dash__alerts .table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+.dash__alerts .table-wrap { overflow: visible; }
 .dash__alerts tbody tr { cursor: pointer; }
 .dash__alerts tbody tr:hover td { background: var(--surface-sunken); }
 .dash__alerts tbody tr.is-active td { background: var(--accent-tint); }
@@ -2789,7 +2789,8 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
   .main { display: flex; flex-direction: column; padding-bottom: 22px; }
   .main > * { flex: none; }
 
-  .main > .dash { flex: 1 1 auto; height: auto; min-height: 0; }
+  /* 마을 현황은 예외 — 이상단말 표를 아래로 내려 보는 화면(문제점 58번 보조설명). */
+  .main > .dash { flex: none; height: auto; }
 
   .main > .table-wrap { flex: 0 1 auto; min-height: 150px; overflow: auto; }
   .main > .table-wrap thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }

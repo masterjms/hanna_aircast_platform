@@ -204,6 +204,7 @@ CREATE TABLE current_config (
     status_interval_sec      INTEGER NOT NULL DEFAULT 30,
     live_stats_interval_sec  INTEGER NOT NULL DEFAULT 10,
     event_qos                SMALLINT NOT NULL DEFAULT 0,
+    config_reconcile_hours   SMALLINT NOT NULL DEFAULT 1,   -- 재조정 주기(시간, 0024). CONFIG 로 안 나감
     updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```

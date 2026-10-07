@@ -23,6 +23,7 @@ import logging
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -106,8 +107,14 @@ async def _touch_device(
     *,
     payload: dict[str, Any] | None,
     seen_at: dt.datetime | None,
+    merge_status: bool = False,
 ) -> None:
     """단말 캐시 갱신. 처음 보는 MAC 이면 미배정 상태로 자동 등록한다.
+
+    merge_status=True 면 payload 를 기존 last_status 위에 **덧씌운다**(JSONB ||). LWT 가 쓴다 —
+    LWT payload 는 type·device·village_id·state 네 칸뿐이라 통째로 바꾸면 그 단말의 CFG 버전·
+    RSSI·펌웨어 버전이 사라져 이상단말 표가 전부 「—」가 된다(문제점 62번 ②). 끊긴 단말이야말로
+    "마지막으로 알던 값"이 필요하다.
 
     village_id 는 건드리지 않는다 — 배정 권한은 서버(관리자)에 있고,
     STATUS 의 village_id 는 단말이 CONFIG 를 제대로 받았는지 확인하는 echo 일 뿐이다.
@@ -125,10 +132,12 @@ async def _touch_device(
         return
 
     stmt = pg_insert(Device).values(**values)
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[Device.mac],
-        set_={k: stmt.excluded[k] for k in values if k != "mac"},
-    )
+    set_: dict[str, Any] = {k: stmt.excluded[k] for k in values if k != "mac"}
+    if merge_status and payload is not None:
+        set_["last_status"] = func.coalesce(
+            Device.last_status, sa_text("'{}'::jsonb")
+        ).op("||")(stmt.excluded.last_status)
+    stmt = stmt.on_conflict_do_update(index_elements=[Device.mac], set_=set_)
     await db.execute(stmt)
 
 
@@ -312,7 +321,7 @@ async def handle_status(
         # 덮어써서 죽은 단말이 온라인으로 되살아난다.
         if buffer is not None:
             buffer.discard(mac)
-        await _touch_device(db, mac, payload=data, seen_at=None)
+        await _touch_device(db, mac, payload=data, seen_at=None, merge_status=True)
         await _insert_device_event(
             db,
             mac=mac,
@@ -387,12 +396,21 @@ async def dispatch(
     if data is None:
         return
 
-    if kind == "status" and buffer is not None:
-        # 버퍼로 갈 수 있는 종류(주기 STATUS)면 세션 자체를 열지 않는다.
-        # LWT·LIVE_STATS 는 아래 트랜잭션 경로로 내려간다.
+    if kind == "status":
         is_lwt = str(data.get("state") or "") == DeviceState.OFFLINE.value
         is_stats = str(data.get("type") or "") == ResultType.LIVE_STATS.value
-        if not is_lwt and not is_stats:
+        # OTA 패키지를 다 받아간 단말은 곧 끊고 재부팅한다. 그 사이에 오는 STATUS(끊기 직전
+        # 주기 보고, state=OTA)를 받아 주면 방금 오프라인으로 돌린 단말이 도로 온라인이 된다
+        # (문제점 60번 보조설명). 재부팅 뒤 첫 STATUS(state≠OTA)부터 다시 받는다.
+        if (
+            not is_lwt
+            and not is_stats
+            and device_service.drop_status_during_ota_reboot(mac, str(data.get("state") or ""))
+        ):
+            return
+        if buffer is not None and not is_lwt and not is_stats:
+            # 버퍼로 갈 수 있는 종류(주기 STATUS)면 세션 자체를 열지 않는다.
+            # LWT·LIVE_STATS 는 아래 트랜잭션 경로로 내려간다.
             buffer.offer(mac, payload=data, seen_at=dt.datetime.now(dt.timezone.utc))
             return
 

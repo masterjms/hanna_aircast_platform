@@ -46,6 +46,11 @@ const GROUPS = [
     hint: '서버가 방송의 시작·종료를 확정하기까지 단말 응답을 기다리는 시간입니다. 단말 CONFIG 로 나가지 않습니다. 단말이 모두 응답하면 그 자리에서 끝나므로, 넉넉히 잡아도 정상 동작에서는 비용이 없습니다.',
   },
   {
+    key: 'server',
+    title: '서버 작업',
+    hint: '서버가 스스로 도는 작업의 주기입니다. 단말 CONFIG 로 나가지 않고 config_version 도 바뀌지 않습니다.',
+  },
+  {
     key: 'audio',
     title: '오디오 품질',
     hint: '표본율 16kHz · mono 는 통신 사양 고정이고 비트레이트만 고릅니다. 단말 CONFIG 로 나가지 않습니다 — opus 와 mp3 모두 파일 안에 비트레이트가 들어 있어 단말이 미리 알 필요가 없습니다.',
@@ -54,6 +59,8 @@ const GROUPS = [
 
 //: 비트레이트 선택지. 16 은 데이터를 아끼고 24 는 음질이 낫다.
 const BITRATE_CHOICES = [16, 24] as const;
+//: CONFIG 재조정 주기 선택지(시간). 1~24 중 하나(문제점 63번).
+const RECONCILE_HOURS: readonly number[] = Array.from({ length: 24 }, (_, i) => i + 1);
 
 const FIELDS = [
   {
@@ -111,6 +118,14 @@ const FIELDS = [
     unit: '초',
   },
   {
+    group: 'server',
+    key: 'config_reconcile_hours',
+    label: 'CONFIG 재조정 주기',
+    hint: '이 주기마다 공통 CONFIG(all/config)와 단말별 CONFIG(device/<mac>/config)를 DB 값으로 다시 발행합니다. 브로커 재시작 등으로 retained 메시지가 사라졌을 때를 위한 안전망이라, 단말은 같은 config_version 이면 무시합니다. 토픽이 둘이라 단말 로그에는 한 주기에 CONFIG 가 두 줄 찍힙니다.',
+    choices: RECONCILE_HOURS,
+    unit: '시간',
+  },
+  {
     group: 'audio',
     key: 'live_bitrate_kbps',
     label: '라이브 스트림 속도',
@@ -141,6 +156,7 @@ export function SettingsPage() {
     file_wait_sec: 30,
     live_bitrate_kbps: 24,
     file_bitrate_kbps: 24,
+    config_reconcile_hours: 1,
   });
   const [message, setMessage] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -167,6 +183,7 @@ export function SettingsPage() {
           file_wait_sec: c.file_wait_sec,
           live_bitrate_kbps: c.live_bitrate_kbps,
           file_bitrate_kbps: c.file_bitrate_kbps,
+          config_reconcile_hours: c.config_reconcile_hours ?? 1,
         });
       } catch (err) {
         setMessage({
@@ -301,7 +318,11 @@ export function SettingsPage() {
                     />
                   )}
                   <span className="settings-row__range">
-                    {'choices' in f ? f.choices.join(' / ') : `${f.min}~${f.max}`}
+                    {'choices' in f
+                      ? f.choices.length > 4
+                        ? `${f.choices[0]}~${f.choices[f.choices.length - 1]}`
+                        : f.choices.join(' / ')
+                      : `${f.min}~${f.max}`}
                     {f.unit}
                   </span>
                 </div>

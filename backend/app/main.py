@@ -88,11 +88,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if status_buffer is not None:
         await status_buffer.start(publisher)
 
+    # 재조정 주기는 설정 화면(current_config.config_reconcile_hours, 문제점 63번)이 정본이다.
+    # DB 를 못 읽으면 .env 값으로 시작한다.
+    reconcile_sec = settings.config_reconcile_interval_sec
+    try:
+        async with session_scope() as db:
+            reconcile_sec = (await config_reconcile.load_config(db)).config_reconcile_hours * 3600
+    except Exception:  # noqa: BLE001
+        log.exception("재조정 주기를 DB 에서 못 읽어 .env 값(%d초)으로 시작", reconcile_sec)
+
     scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
     scheduler.add_job(
         config_reconcile.run,
         "interval",
-        seconds=settings.config_reconcile_interval_sec,
+        seconds=reconcile_sec,
         args=[publisher],
         id="config-reconcile",
         # 기동 직후에도 1회 돈다. interval 트리거는 기본적으로 첫 실행을

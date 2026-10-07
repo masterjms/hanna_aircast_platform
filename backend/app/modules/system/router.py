@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
 from app.core.deps import Db, Publisher, SuperAdmin
 from app.modules.system import service
@@ -28,5 +28,8 @@ async def update_config(
     db: Db,
     _: SuperAdmin,
     publisher: Publisher,
+    request: Request,
 ) -> ConfigOut:
-    return await service.update_config(db, payload, publisher)
+    return await service.update_config(
+        db, payload, publisher, scheduler=getattr(request.app.state, "scheduler", None)
+    )

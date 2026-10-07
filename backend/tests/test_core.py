@@ -2552,6 +2552,70 @@ class TestOtaPayload:
         assert "OTA_START" in inspect.getsource(service.list_active)
 
 
+class TestOtaRebootGate:
+    """다 받은 단말의 끊기 직전 STATUS 는 버리고, 재부팅 뒤 첫 STATUS 부터 받는다(문제점 60번)."""
+
+    def test_gate(self, monkeypatch):
+        from app.modules.device import service as ds
+
+        ds.OTA_REBOOTING.clear()
+        assert ds.drop_status_during_ota_reboot("aa", "IDLE") is False  # 표시 없음
+        now = [1000.0]
+        monkeypatch.setattr(ds.time, "monotonic", lambda: now[0])
+        ds.mark_ota_rebooting("aa")
+        assert ds.drop_status_during_ota_reboot("aa", "IDLE") is True  # 유예 안
+        now[0] += 11
+        assert ds.drop_status_during_ota_reboot("aa", "OTA") is True  # 아직 OTA 상태
+        assert ds.drop_status_during_ota_reboot("aa", "IDLE") is False  # 재부팅 뒤 첫 STATUS
+        assert "aa" not in ds.OTA_REBOOTING
+        ds.mark_ota_rebooting("bb")
+        now[0] += 601
+        assert ds.drop_status_during_ota_reboot("bb", "OTA") is False  # 너무 오래 — 표시 소멸
+
+
+class TestReconcileHours:
+    def test_reschedule_changes_running_job_interval(self):
+        """저장 즉시 돌고 있는 재조정 작업의 간격이 바뀐다(문제점 63번)."""
+        import datetime as dt
+
+        from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+        from app.modules.system.service import reschedule_reconcile
+
+        sch = AsyncIOScheduler()
+        sch.add_job(lambda: None, "interval", seconds=3600, id="config-reconcile")
+        reschedule_reconcile(sch, 6)
+        assert sch.get_job("config-reconcile").trigger.interval == dt.timedelta(hours=6)
+        reschedule_reconcile(None, 3)  # 스케줄러 없이도(테스트) 조용히 지나간다
+
+    def test_limits_and_not_device_field(self):
+        from app.constants import CONFIG_LIMITS, DEVICE_CONFIG_FIELDS
+
+        assert CONFIG_LIMITS["config_reconcile_hours"] == (1, 24)
+        assert "config_reconcile_hours" not in DEVICE_CONFIG_FIELDS  # config_version 안 올림
+
+    def test_update_schema_range(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from app.schemas.system import ConfigUpdate
+
+        assert ConfigUpdate(config_reconcile_hours=24).config_reconcile_hours == 24
+        with pytest.raises(ValidationError):
+            ConfigUpdate(config_reconcile_hours=25)
+
+
+class TestLwtMerge:
+    def test_lwt_path_merges_status(self):
+        """LWT 가 CFG·RSSI·버전을 지우면 안 된다(문제점 62번 ②)."""
+        import inspect
+
+        from app.mqtt import handlers
+
+        src = inspect.getsource(handlers.handle_status)
+        assert "merge_status=True" in src
+
+
 class TestOtaVersion:
     """버전 칸 적는 법(문제점 60번): 하나면 어느 칩이든, 「P4 / C6」면 각각."""
 

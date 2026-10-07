@@ -6,6 +6,7 @@ current_config 테이블(싱글턴)을 소유한다.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,12 +54,15 @@ def device_fields_changed(current: object, data: dict[str, int]) -> bool:
 
 
 async def update_config(
-    db: AsyncSession, payload: ConfigUpdate, publisher: MqttPublisher
+    db: AsyncSession, payload: ConfigUpdate, publisher: MqttPublisher, scheduler: Any = None
 ) -> ConfigOut:
     """설정 저장 → config_version 증가 → MQTT 재발행.
 
     단말은 config_version 이 올라갈 때만 값을 다시 적용하므로 반드시 함께 올린다.
     발행이 실패해도 DB 는 커밋한다 — 정본은 DB 이고, 재조정 주기가 브로커를 따라잡는다.
+
+    scheduler 를 주면 재조정 주기(config_reconcile_hours)가 바뀔 때 돌고 있는 작업의 간격을
+    그 자리에서 바꾼다(문제점 63번). 안 주면(테스트) 다음 기동부터 적용된다.
     """
     config = await load_config(db)
 
@@ -68,6 +72,10 @@ async def update_config(
 
     for field, value in data.items():
         _check_value(field, value)
+
+    new_hours = data.get("config_reconcile_hours")
+    if new_hours is not None and new_hours != config.config_reconcile_hours:
+        reschedule_reconcile(scheduler, new_hours)
 
     # 단말로 나가는 값이 **실제로 바뀌었을 때만** 버전을 올린다. 올리면 전 단말이 CONFIG 를
     # 다시 받고 적용 확인까지 오간다.
@@ -94,6 +102,17 @@ async def update_config(
         log.exception("CONFIG 발행 실패 (재조정 주기가 복구)")
 
     return ConfigOut.model_validate(config)
+
+
+def reschedule_reconcile(scheduler: Any, hours: int) -> None:
+    """CONFIG 재조정 작업(main.py 의 id="config-reconcile")의 간격을 바꾼다."""
+    if scheduler is None:
+        return
+    try:
+        scheduler.reschedule_job("config-reconcile", trigger="interval", hours=hours)
+        log.info("CONFIG 재조정 주기 변경: %d시간", hours)
+    except Exception:  # noqa: BLE001 — 저장은 됐다. 다음 기동부터는 DB 값으로 돈다.
+        log.exception("CONFIG 재조정 주기 변경 실패")
 
 
 async def config_version(db: AsyncSession) -> int:

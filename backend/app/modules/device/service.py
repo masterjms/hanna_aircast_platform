@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.config import settings
+from app.constants import DeviceState
 from app.core import mqtt_accounts
 from app.core.presence import is_online, online_clause, online_cutoff
 from app.core.scope import VillageScope
@@ -629,6 +631,35 @@ async def warm_tombstones(db: AsyncSession) -> int:
 
 def is_tombstoned(mac: str) -> bool:
     return mac in TOMBSTONES
+
+
+# ── OTA 재부팅 중 단말 (문제점 60번 보조설명) ───────────────────────────────
+#: 패키지를 다 받아간 단말 → 표시한 시각(epoch). 단말은 곧 끊고 재부팅하는데, 그 사이의 STATUS
+#: (끊기 직전 주기 보고, state=OTA)를 받아 주면 방금 오프라인으로 돌린 단말이 도로 온라인이 된다.
+OTA_REBOOTING: dict[str, float] = {}
+#: 다 받은 직후 이 시간 동안은 어떤 STATUS 도 버린다 — 재부팅에 이보다 짧게 걸릴 수는 없다.
+OTA_REBOOT_GRACE_SEC = 10.0
+#: 이 시간이 지나면 표시를 지운다(재부팅 뒤 STATUS 가 끝내 안 온 단말).
+OTA_REBOOT_MAX_SEC = 600.0
+
+
+def mark_ota_rebooting(mac: str) -> None:
+    OTA_REBOOTING[mac] = time.monotonic()
+
+
+def drop_status_during_ota_reboot(mac: str, state: str) -> bool:
+    """이 STATUS 를 버려야 하나. 재부팅 뒤 첫 STATUS(state≠OTA, 유예 뒤)는 받고 표시를 지운다."""
+    marked = OTA_REBOOTING.get(mac)
+    if marked is None:
+        return False
+    elapsed = time.monotonic() - marked
+    if elapsed > OTA_REBOOT_MAX_SEC:
+        OTA_REBOOTING.pop(mac, None)
+        return False
+    if elapsed < OTA_REBOOT_GRACE_SEC or state == DeviceState.OTA.value:
+        return True
+    OTA_REBOOTING.pop(mac, None)
+    return False
 
 
 async def _bury(db: AsyncSession, device: Device, *, user_id: int | None) -> None:

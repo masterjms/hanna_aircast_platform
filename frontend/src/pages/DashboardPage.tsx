@@ -8,6 +8,9 @@
  * 2026-10-06 (문제점 58번): 단말 목록이 지도 아래 끝까지 내려오고, 이상단말은 왼쪽 구석의
  * 작은 표가 아니라 지도 아래 전체 폭에 단말 관리와 같은 열(별칭·마을·MAC·구역·상태·RSSI·CFG·
  * 마지막 통신·버전)로 놓인다. 검색과 10·20·50건 쪽 넘기기는 방송 기록과 같다.
+ * 2026-10-07 (58번 보조설명): 이 화면은 **한 화면에 맞추지 않는다**. 위 [목록 | 지도]가 화면 높이
+ * 가까이 차지하고(트리가 전보다 두 배), 이상단말 표는 그 아래 — 화면을 내려서 본다. 표는 안에서
+ * 스크롤하지 않고 고른 건수만큼 다 보이며 쪽 넘기기 버튼은 늘 표 아래에 있다.
  * 이상단말의 데이터는 단말 목록 API(status=offline)를 그대로 쓴다 — 요약 API 의 alerts 는
  * 열이 모자라고(별칭·마을·사유뿐) 20건에서 잘린다.
  *
@@ -191,7 +194,7 @@ function AlertTable({
                 <th>상태</th>
                 <th className="num">RSSI</th>
                 <th className="num">CFG</th>
-                <th className="num">마지막 통신</th>
+                <th>마지막 통신</th>
                 <th title="마지막 STATUS 가 보고한 펌웨어 — P4 / C6">버전 (P4 / C6)</th>
               </tr>
             </thead>
@@ -208,13 +211,16 @@ function AlertTable({
                   <td className="mono">{d.mac}</td>
                   <td>{d.zone_name ?? '—'}</td>
                   <td>
-                    <span className="badge badge--danger">{alertReason(d)}</span>
+                    {/* 단말 관리와 같은 글자 「오프라인」(문제점 61번). 사유는 마우스를 올리면. */}
+                    <span className="badge badge--danger" title={alertReason(d)}>
+                      오프라인
+                    </span>
                   </td>
                   <td className="num" style={{ color: TONE_VAR[signalTone(d.rssi)], fontWeight: 600 }}>
                     {d.rssi ?? '—'}
                   </td>
                   <td className="num">{d.config_version ?? '—'}</td>
-                  <td className="num dim">{formatTime(d.last_seen_at)}</td>
+                  <td className="dim" title={alertReason(d)}>{formatTime(d.last_seen_at)}</td>
                   <td className="mono dim">
                     {(d.p4_fw ?? d.p4_version) || '—'} / {(d.c6_fw ?? d.c6_version) || '—'}
                   </td>
@@ -224,7 +230,7 @@ function AlertTable({
           </table>
         )}
       </div>
-      {filtered.length > size && (
+      {filtered.length > 0 && (
         <div className="pager">
           <span className="dim">
             총 {filtered.length}대 · {safePage}/{pages}쪽
