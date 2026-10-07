@@ -24,6 +24,7 @@ import datetime as dt
 import hashlib
 import logging
 import uuid
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -40,7 +41,7 @@ from app.core.scope import VillageScope
 from app.db import session_scope
 from app.errors import ApiError, NotFound
 from app.models.device import Device
-from app.models.event import BroadcastEvent, BroadcastRecipient
+from app.models.event import BroadcastEvent, BroadcastRecipient, DeviceEvent
 from app.models.org import User
 from app.models.ota import OtaPackage, OtaToken
 from app.modules.broadcast import service as broadcast_service
@@ -48,6 +49,7 @@ from app.modules.device import service as device_service
 from app.mqtt import handlers as mqtt_handlers
 from app.mqtt.publisher import MqttPublisher
 from app.mqtt.status_buffer import StatusBuffer
+from app.schemas.broadcast import BroadcastOut
 from app.schemas.ota import OtaDeviceOut, OtaJobOut, OtaPackageOut, OtaStartRequest
 
 log = logging.getLogger(__name__)
@@ -539,10 +541,80 @@ async def job_out(db: AsyncSession, event: BroadcastEvent) -> OtaJobOut:
         done_count=sum(1 for d in devices if d.downloaded),
         applied_count=sum(1 for d in devices if d.applied),
         sent_count=sum(1 for d in devices if d.sent),
+        total_count=len(devices),
     )
 
 
+async def _summaries(db: AsyncSession, events: Sequence[BroadcastEvent]) -> list[OtaJobOut]:
+    """끝난 작업의 요약만(단말 행 없음). 작업 수와 무관하게 쿼리 4개(병목 감사 M3).
+
+    예전에는 끝난 지 몇 주 된 작업까지 매번 단말 행·응답을 다시 만들어, OTA 화면 하나가 2초마다
+    쿼리 100개·행 1~2만을 끌어왔다.
+    """
+    if not events:
+        return []
+    ids = [e.id for e in events]
+    labels = await device_service.describe_targets(
+        db, [(e.target_scope, e.target_ids) for e in events]
+    )
+    sent_rows = (
+        await db.execute(
+            select(
+                BroadcastRecipient.event_id,
+                func.count().label("total"),
+                func.count().filter(BroadcastRecipient.sent.is_(True)).label("sent"),
+            )
+            .where(BroadcastRecipient.event_id.in_(ids))
+            .group_by(BroadcastRecipient.event_id)
+        )
+    ).all()
+    counts = {eid: (total, sent) for eid, total, sent in sent_rows}
+    done_rows = (
+        await db.execute(
+            select(DeviceEvent.event_id, func.count(func.distinct(DeviceEvent.mac)))
+            .where(
+                DeviceEvent.event_id.in_(ids),
+                DeviceEvent.result_type.in_(("OTA_DOWNLOADED", "OTA_RESULT")),
+                DeviceEvent.payload["ok"].astext == "true",
+            )
+            .group_by(DeviceEvent.event_id)
+        )
+    ).all()
+    done = dict(done_rows)
+    pkg_ids = {e.ota_package_id for e in events if e.ota_package_id}
+    pkgs = (
+        {
+            p.id: p
+            for p in (await db.scalars(select(OtaPackage).where(OtaPackage.id.in_(pkg_ids)))).all()
+        }
+        if pkg_ids
+        else {}
+    )
+    out: list[OtaJobOut] = []
+    for e, label in zip(events, labels, strict=True):
+        b = BroadcastOut.model_validate(e)
+        b.target_label = label
+        b.phase = "종료"
+        b.target_count = e.expected_count or 0
+        total, sent = counts.get(e.id, (0, 0))
+        pkg = pkgs.get(e.ota_package_id) if e.ota_package_id else None
+        out.append(
+            OtaJobOut(
+                broadcast=b,
+                package=_out(pkg, None, 0) if pkg else None,
+                devices=[],
+                detail=False,
+                done_count=int(done.get(e.id, 0)),
+                applied_count=0,
+                sent_count=int(sent),
+                total_count=int(total),
+            )
+        )
+    return out
+
+
 async def list_jobs(db: AsyncSession, *, limit: int = 20) -> list[OtaJobOut]:
+    """최근 작업. 진행 중인 것만 단말별 상세, 끝난 것은 요약(펼치면 GET /jobs/{id})."""
     events = (
         await db.scalars(
             select(BroadcastEvent)
@@ -551,7 +623,11 @@ async def list_jobs(db: AsyncSession, *, limit: int = 20) -> list[OtaJobOut]:
             .limit(limit)
         )
     ).all()
-    return [await job_out(db, e) for e in events]
+    active = [e for e in events if e.ended_at is None]
+    ended = [e for e in events if e.ended_at is not None]
+    by_id = {e.id: await job_out(db, e) for e in active}
+    by_id.update({s.broadcast.id: s for s in await _summaries(db, ended)})
+    return [by_id[e.id] for e in events]
 
 
 async def get_job(db: AsyncSession, event_id: int) -> OtaJobOut:

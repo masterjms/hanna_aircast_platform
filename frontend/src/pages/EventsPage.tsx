@@ -65,8 +65,9 @@ export function EventsPage() {
   const [size, setSize] = useState<Size>(10);
   const [kind, setKind] = useState<HistoryKind | ''>('');
   const [q, setQ] = useState('');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
+  // 기본 최근 7일(병목 감사 H6). 비우면 서버가 최근 31일로 본다 — 5개월치를 한 번에 훑지 않는다.
+  const [from, setFrom] = useState(() => kstDateInput(-6));
+  const [to, setTo] = useState(() => kstDateInput(0));
   const [data, setData] = useState<HistoryPage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -131,8 +132,13 @@ export function EventsPage() {
           7일
         </button>
         {(from || to) && (
-          <button type="button" className="btn btn--sm btn--ghost" onClick={() => (setFrom(''), setTo(''))}>
-            기간 지우기
+          <button
+            type="button"
+            className="btn btn--sm btn--ghost"
+            title="기간을 비우면 최근 31일을 봅니다"
+            onClick={() => (setFrom(''), setTo(''))}
+          >
+            기간 지우기 (최근 31일)
           </button>
         )}
         <div className="filters__spacer" />

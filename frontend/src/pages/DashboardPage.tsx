@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '../api/client';
-import type { Device, Organization, Village } from '../api/types';
+import type { Device, GeoGeometry, MapVillage, Organization, Village } from '../api/types';
 import { MapView } from '../components/MapView';
 import { VillageDeviceList } from '../components/VillageDeviceList';
 import { useAuth } from '../auth/AuthContext';
@@ -270,18 +270,26 @@ export function DashboardPage() {
   const broadcasting = (data?.active_broadcasts.length ?? 0) > 0;
   useEffect(() => setFastMode(broadcasting), [broadcasting]);
 
-  // 기관 트리(향후검토 6번). 구조는 자주 안 바뀌므로 열 때 한 번 읽는다.
+  // 기관 트리(향후검토 6번)와 마을 경계(병목 감사 H5). 둘 다 자주 안 바뀌므로 열 때 한 번 읽는다.
+  // 경계는 수 MB 라 /map 폴링에서 떼어 냈다 — 폴링 응답은 핀과 마을 이름뿐이다.
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [villages, setVillages] = useState<Village[]>([]);
+  const [boundaries, setBoundaries] = useState<Record<number, GeoGeometry>>({});
   useEffect(() => {
     void Promise.all([
       api.organizations.list().catch(() => [] as Organization[]),
       api.villages.list().catch(() => [] as Village[]),
-    ]).then(([o, v]) => {
+      api.dashboard.boundaries().catch(() => []),
+    ]).then(([o, v, b]) => {
       setOrgs(o);
       setVillages(v);
+      setBoundaries(Object.fromEntries(b.map((x) => [x.id, x.boundary])));
     });
   }, []);
+  const mapVillages = useMemo<MapVillage[]>(
+    () => (map.data?.villages ?? []).map((v) => ({ ...v, boundary: boundaries[v.id] ?? null })),
+    [map.data?.villages, boundaries],
+  );
 
   // ── 지도 크기(향후검토 13번) ──
   const [mapPct, setMapPctState] = useState(readMapPct);
@@ -422,7 +430,7 @@ export function DashboardPage() {
             <MapView
               jsKey={map.data.kakao_js_key}
               pins={map.data.pins}
-              villages={map.data.villages}
+              villages={mapVillages}
               selectedMac={selectedMac}
               hoveredMac={hoveredMac}
               onSelect={setSelectedMac}

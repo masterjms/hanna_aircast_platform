@@ -107,6 +107,16 @@ class MapVillage(BaseModel):
     boundary: dict[str, Any] | None = None
 
 
+class BoundaryOut(BaseModel):
+    """마을 경계 하나. /map 에서 떼어 냈다(병목 감사 H5).
+
+    경계는 수십 KB × 마을 수라 매 폴링에 실으면 응답이 수 MB 가 되고, 단일 프로세스가 그
+    직렬화에 CPU 를 쓴다. 바뀌는 일이 드물어 화면이 열 때 한 번 받는다."""
+
+    id: int
+    boundary: dict[str, Any]
+
+
 class MapOut(BaseModel):
     #: 지도 SDK 로드용 JavaScript 키. 공개 키(도메인 등록으로 보호)라 응답에 실어도 된다.
     #: 미설정이면 null — 화면이 "키 설정 필요" 안내를 띄운다.
@@ -243,7 +253,9 @@ async def device_map(db: Db, scope: Scope) -> MapOut:
             Device.mac,
             Device.label,
             Device.last_seen_at,
-            Device.last_status,
+            # 전체 JSONB 가 아니라 쓰는 두 칸만(병목 감사 H5). 2,000대면 1~2MB 차이.
+            Device.last_status["state"].astext,
+            Device.last_status["live"].astext,
             Device.village_id,
             village.name,
             Device.lat,
@@ -263,7 +275,7 @@ async def device_map(db: Db, scope: Scope) -> MapOut:
     missing: list[str] = []
 
     for (
-        mac, label, last_seen, last_status, village_id, village_name,
+        mac, label, last_seen, state, live, village_id, village_name,
         d_lat, d_lng, z_lat, z_lng, v_lat, v_lng,
     ) in (await db.execute(stmt)).all():
         if d_lat is not None and d_lng is not None:
@@ -277,7 +289,7 @@ async def device_map(db: Db, scope: Scope) -> MapOut:
             continue
         # 목록·타일과 같은 규칙을 쓰기 위해 임시 Device 로 감싼다.
         online = is_online(
-            Device(mac=mac, last_seen_at=last_seen, last_status=last_status), cutoff
+            Device(mac=mac, last_seen_at=last_seen, last_status={"state": state}), cutoff
         )
         if village_name is None:
             marker = "unassigned"
@@ -294,18 +306,22 @@ async def device_map(db: Db, scope: Scope) -> MapOut:
                 online=online,
                 village_id=village_id,
                 village_name=village_name,
-                live=(last_status or {}).get("live"),
+                live=live,
                 marker=marker,
                 position_source=source,
             )
         )
 
-    village_stmt = scope.apply(select(Village).order_by(Village.name), Village.id)
+    # 경계(boundary)는 싣지 않는다 — GET /map/boundaries 로 따로(병목 감사 H5).
+    village_stmt = scope.apply(
+        select(Village.id, Village.name, Village.b_code, Village.lat, Village.lng).order_by(
+            Village.name
+        ),
+        Village.id,
+    )
     villages = [
-        MapVillage(
-            id=v.id, name=v.name, b_code=v.b_code, lat=v.lat, lng=v.lng, boundary=v.boundary
-        )
-        for v in (await db.scalars(village_stmt)).all()
+        MapVillage(id=vid, name=name, b_code=b_code, lat=lat, lng=lng, boundary=None)
+        for vid, name, b_code, lat, lng in (await db.execute(village_stmt)).all()
     ]
 
     return MapOut(
@@ -314,3 +330,12 @@ async def device_map(db: Db, scope: Scope) -> MapOut:
         pins=pins,
         missing_location=missing,
     )
+
+
+@router.get("/map/boundaries", response_model=list[BoundaryOut])
+async def village_boundaries(db: Db, scope: Scope) -> list[BoundaryOut]:
+    """마을 경계 폴리곤(GeoJSON). 경계가 있는 마을만. 화면이 열 때 한 번 받는다."""
+    stmt = scope.apply(
+        select(Village.id, Village.boundary).where(Village.boundary.is_not(None)), Village.id
+    )
+    return [BoundaryOut(id=vid, boundary=b) for vid, b in (await db.execute(stmt)).all()]

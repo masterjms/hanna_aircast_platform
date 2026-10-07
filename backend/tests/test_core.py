@@ -2552,6 +2552,41 @@ class TestOtaPayload:
         assert "OTA_START" in inspect.getsource(service.list_active)
 
 
+class TestPerfAudit:
+    """병목 감사(2026-10-07) 권장 1·2."""
+
+    def test_scaled_wait(self):
+        from app.modules.broadcast.service import scaled_wait
+
+        assert scaled_wait(30, 0) == 30 and scaled_wait(30, 49) == 30
+        assert scaled_wait(30, 50) == 31 and scaled_wait(30, 2000) == 70
+
+    def test_history_sql_shape(self):
+        """LIMIT 뒤에 LATERAL, 옛 방송 가지는 event_id 상한으로 잘라야 한다."""
+        from app.modules.history import service
+
+        assert service._PAGE.index("LIMIT :limit") < service._PAGE.index("LEFT JOIN LATERAL")  # noqa: SLF001
+        assert "de.event_id < :legacy_before" in service._BASE  # noqa: SLF001
+        assert service.DEFAULT_WINDOW_DAYS == 31
+
+    def test_map_has_no_boundary_and_boundaries_route_exists(self):
+        import inspect
+
+        from app.modules.dashboard import router
+
+        assert "boundary=None" in inspect.getsource(router.device_map)
+        paths = {getattr(r, "path", "") for r in router.router.routes}
+        assert "/api/dashboard/map/boundaries" in paths
+
+    def test_ota_list_summarises_ended_jobs(self):
+        import inspect
+
+        from app.modules.ota import service
+
+        src = inspect.getsource(service.list_jobs)
+        assert "_summaries" in src and "ended_at is None" in src
+
+
 class TestOtaRebootGate:
     """다 받은 단말의 끊기 직전 STATUS 는 버리고, 재부팅 뒤 첫 STATUS 부터 받는다(문제점 60번)."""
 

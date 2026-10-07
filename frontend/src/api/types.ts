@@ -356,6 +356,12 @@ export interface MapVillage {
   boundary: GeoGeometry | null;
 }
 
+/** 마을 경계 하나 — GET /api/dashboard/map/boundaries. /map 에는 더 이상 경계가 실리지 않는다. */
+export interface VillageBoundary {
+  id: number;
+  boundary: GeoGeometry;
+}
+
 export interface MapData {
   /** 지도 SDK 로드용 JS 키. null 이면 서버 .env 미설정 */
   kakao_js_key: string | null;
@@ -488,11 +494,15 @@ export interface OtaDevice {
 export interface OtaJob {
   broadcast: BroadcastDetail;
   package: OtaPackage | null;
+  /** 목록에서 끝난 작업은 비어 있다(detail=false). 펼치면 api.ota.job(id) 로 받는다. */
   devices: OtaDevice[];
+  detail: boolean;
   /** 다 받아간(성공) 대수 */
   done_count: number;
   applied_count: number;
   sent_count: number;
+  /** 대상 전체(오프라인 포함) */
+  total_count: number;
 }
 
 export interface FileBroadcastRequest {

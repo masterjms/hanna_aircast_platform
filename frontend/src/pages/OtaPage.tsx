@@ -151,8 +151,22 @@ export function OtaPage() {
   };
 
   // ── 진행·이력 ──
-  const jobs = usePolling(() => api.ota.jobs(20), POLL_INTERVAL.broadcasting);
+  // 진행 중인 작업이 있을 때만 자주 묻는다. 없으면 15초 — 끝난 작업 목록은 바뀌지 않는다(병목 감사 M3).
+  const [jobsInterval, setJobsInterval] = useState<number>(POLL_INTERVAL.broadcasting);
+  const jobs = usePolling(() => api.ota.jobs(20), jobsInterval);
+  useEffect(() => {
+    const active = (jobs.data ?? []).some((j) => j.broadcast.ended_at === null);
+    setJobsInterval(active ? POLL_INTERVAL.broadcasting : 15_000);
+  }, [jobs.data]);
   const [openJob, setOpenJob] = useState<number | null>(null);
+  // 끝난 작업은 목록에 단말 행이 없다 — 펼칠 때 한 번 받아 둔다.
+  const [details, setDetails] = useState<Record<number, OtaJob>>({});
+  useEffect(() => {
+    if (openJob === null || details[openJob]) return;
+    const row = (jobs.data ?? []).find((j) => j.broadcast.id === openJob);
+    if (!row || row.detail) return;
+    void api.ota.job(openJob).then((full) => setDetails((d) => ({ ...d, [openJob]: full }))).catch(() => undefined);
+  }, [openJob, jobs.data, details]);
 
   const canStart = !!pkg && picked.length === 1 && onlineInTarget > 0 && !starting;
 
@@ -331,7 +345,9 @@ export function OtaPage() {
           <div className="empty">아직 OTA 작업이 없습니다.</div>
         ) : (
           <div className="ota__jobs">
-            {(jobs.data ?? []).map((j) => {
+            {(jobs.data ?? []).map((row) => {
+              // 진행 중이면 목록의 상세, 끝났으면 펼칠 때 받아 둔 상세(없으면 요약만).
+              const j = row.detail ? row : (details[row.broadcast.id] ?? row);
               const b = j.broadcast;
               const ended = b.ended_at !== null;
               const open = openJob === b.id;
@@ -349,7 +365,7 @@ export function OtaPage() {
                         const back = j.devices.filter((d) => d.downloaded && d.online).length;
                         return back > 0 ? ` · 재접속 ${back}` : '';
                       })()}
-                      {j.devices.length > j.sent_count ? ` · 오프라인 ${j.devices.length - j.sent_count}` : ''}
+                      {j.total_count > j.sent_count ? ` · 오프라인 ${j.total_count - j.sent_count}` : ''}
                     </span>
                     <span aria-hidden="true">{open ? '▾' : '▸'}</span>
                   </button>
@@ -390,7 +406,7 @@ export function OtaPage() {
                           {j.devices.length === 0 && (
                             <tr>
                               <td colSpan={5} className="dim">
-                                단말 응답이 아직 없습니다.
+                                {j.detail ? '단말 응답이 아직 없습니다.' : '불러오는 중…'}
                               </td>
                             </tr>
                           )}

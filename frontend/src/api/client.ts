@@ -10,12 +10,6 @@
  */
 
 import type {
-  Occurrence,
-  Organization,
-  OrganizationInput,
-  Schedule,
-  ScheduleInput,
-  ScheduleRun,
   AddressResult,
   ApiErrorBody,
   ApiErrorCode,
@@ -26,17 +20,23 @@ import type {
   DeviceCreateRequest,
   DeviceCredential,
   DeviceDetail,
-  NewDevicePassword,
   DeviceStatusFilter,
   FileBroadcastRequest,
   HistoryKind,
   HistoryPage,
-  OtaJob,
-  OtaPackage,
   LiveBroadcastRequest,
   LoginResponse,
   MapData,
   Me,
+  NewDevicePassword,
+  Occurrence,
+  Organization,
+  OrganizationInput,
+  OtaJob,
+  OtaPackage,
+  Schedule,
+  ScheduleInput,
+  ScheduleRun,
   SystemConfig,
   TtsRequest,
   TtsResult,
@@ -44,6 +44,7 @@ import type {
   UserCreate,
   UserUpdate,
   Village,
+  VillageBoundary,
   VillageInput,
   VoiceCatalog,
   Zone,
@@ -370,6 +371,8 @@ export const api = {
   dashboard: {
     summary: () => request<DashboardSummary>('/api/dashboard/summary'),
     map: () => request<MapData>('/api/dashboard/map'),
+    /** 마을 경계만. 수 MB 라 폴링하지 않고 열 때 한 번 받는다. */
+    boundaries: () => request<VillageBoundary[]>('/api/dashboard/map/boundaries'),
   },
 
   geo: {

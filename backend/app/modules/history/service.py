@@ -36,34 +36,64 @@ _KIND_SQL = {
     "ota": "e.event_type = 'OTA_START'",
 }
 
+#: 기간을 안 주면 최근 이 일수만 본다 — 5개월치를 두 번 훑는 요청을 막는다(병목 감사 H6).
+DEFAULT_WINDOW_DAYS = 31
+
+#: 단계별로 좁힌다(병목 감사 H6):
+#:   ev   — 방송 먼저 거른다(종류·기간). 여기서 수천 → 수십 건으로 준다.
+#:   rec  — 그 방송들의 단말 줄만. 옛 방송(스냅숏 없는 0022 이전)만 device_events 에서 DISTINCT 로
+#:          만들고, 그 범위를 event_id < :legacy_before 로 잘라 인덱스로 끝낸다.
+#:   rows — 검색어·마을 범위.
+#:   page — 정렬 + LIMIT/OFFSET 을 **먼저** 하고, 마지막 결과(LATERAL)는 그 쪽의 10~50줄에만 붙인다.
+#:          LATERAL 은 (event_id, mac, received_at DESC) 인덱스로 한 번에 찾는다.
 _BASE = """
-WITH rec AS (
+WITH ev AS (
+    SELECT e.id, e.event_type, e.schedule_id, e.file_name, e.triggered_at, e.ended_at
+    FROM broadcast_events e
+    WHERE e.event_type IN ('FILE_START', 'LIVE_START', 'OTA_START')
+      {where_ev}
+),
+rec AS (
     SELECT r.event_id, r.mac, r.label, r.village_id, r.village_name, r.sent
     FROM broadcast_recipients r
+    JOIN ev ON ev.id = r.event_id
     UNION ALL
     SELECT d.event_id, d.mac, dev.label, dev.village_id, v.name, TRUE
-    FROM (SELECT DISTINCT event_id, mac FROM device_events WHERE event_id IS NOT NULL) d
+    FROM (
+        SELECT DISTINCT de.event_id, de.mac
+        FROM device_events de
+        JOIN ev ON ev.id = de.event_id
+        WHERE de.event_id < :legacy_before
+    ) d
     LEFT JOIN devices dev ON dev.mac = d.mac
     LEFT JOIN villages v ON v.id = dev.village_id
     WHERE NOT EXISTS (SELECT 1 FROM broadcast_recipients r2 WHERE r2.event_id = d.event_id)
 ),
 rows AS (
-    SELECT e.id AS event_id, e.event_type, e.schedule_id, e.file_name, e.triggered_at, e.ended_at,
-           rec.mac, rec.label, rec.village_id, rec.village_name, rec.sent,
-           last.result_type, last.payload, last.received_at
-    FROM broadcast_events e
-    JOIN rec ON rec.event_id = e.id
-    LEFT JOIN LATERAL (
-        SELECT de.result_type, de.payload, de.received_at
-        FROM device_events de
-        WHERE de.event_id = e.id AND de.mac = rec.mac
-          AND (de.result_type IS NULL OR de.result_type NOT IN ('LIVE_STATS', 'OTA_PROGRESS'))
-        ORDER BY de.received_at DESC
-        LIMIT 1
-    ) last ON TRUE
-    WHERE e.event_type IN ('FILE_START', 'LIVE_START', 'OTA_START')
-      {where}
+    SELECT ev.id AS event_id, ev.event_type, ev.schedule_id, ev.file_name,
+           ev.triggered_at, ev.ended_at,
+           rec.mac, rec.label, rec.village_id, rec.village_name, rec.sent
+    FROM ev
+    JOIN rec ON rec.event_id = ev.id
+    {where_rows}
 )
+"""
+
+_PAGE = """
+, page AS (
+    SELECT * FROM rows ORDER BY triggered_at DESC, event_id DESC, mac LIMIT :limit OFFSET :offset
+)
+SELECT page.*, last.result_type, last.payload, last.received_at
+FROM page
+LEFT JOIN LATERAL (
+    SELECT de.result_type, de.payload, de.received_at
+    FROM device_events de
+    WHERE de.event_id = page.event_id AND de.mac = page.mac
+      AND (de.result_type IS NULL OR de.result_type NOT IN ('LIVE_STATS', 'OTA_PROGRESS'))
+    ORDER BY de.received_at DESC
+    LIMIT 1
+) last ON TRUE
+ORDER BY page.triggered_at DESC, page.event_id DESC, page.mac
 """
 
 
@@ -108,21 +138,25 @@ async def page(
 ) -> HistoryPage:
     if size not in PAGE_SIZES:
         size = PAGE_SIZES[0]
-    where = []
+    where_ev: list[str] = []
+    where_rows: list[str] = []
     params: dict[str, Any] = {}
     if kind in _KIND_SQL:
-        where.append(_KIND_SQL[kind])
+        where_ev.append(_KIND_SQL[kind])
     if q:
-        where.append(
+        where_rows.append(
             "(rec.mac ILIKE :q OR rec.label ILIKE :q OR rec.village_name ILIKE :q "
-            "OR e.file_name ILIKE :q)"
+            "OR ev.file_name ILIKE :q)"
         )
         params["q"] = f"%{q.strip()}%"
+    if date_from is None and date_to is None:
+        # 무제한 조회는 받지 않는다 — 화면은 기본 7일, 비워 보내면 최근 31일.
+        date_from = dt.datetime.now(_KST).date() - dt.timedelta(days=DEFAULT_WINDOW_DAYS - 1)
     if date_from is not None:
-        where.append("e.triggered_at >= :date_from")
+        where_ev.append("e.triggered_at >= :date_from")
         params["date_from"] = dt.datetime.combine(date_from, dt.time.min, tzinfo=_KST)
     if date_to is not None:
-        where.append("e.triggered_at < :date_to")
+        where_ev.append("e.triggered_at < :date_to")
         params["date_to"] = dt.datetime.combine(
             date_to + dt.timedelta(days=1), dt.time.min, tzinfo=_KST
         )
@@ -130,21 +164,27 @@ async def page(
         # 이장·기관 관리자는 자기 마을 단말의 줄만 본다(스냅숏의 마을 기준).
         if scope.is_empty:
             return HistoryPage(total=0, page=page_no, size=size, items=[])
-        where.append("rec.village_id = ANY(:village_ids)")
+        where_rows.append("rec.village_id = ANY(:village_ids)")
         params["village_ids"] = list(scope.village_ids)
 
-    base = _BASE.format(where=("AND " + " AND ".join(f"({w})" for w in where)) if where else "")
+    # 스냅숏이 없는 옛 방송의 경계. 첫 스냅숏보다 앞선 event_id 만 device_events 에서 만든다.
+    params["legacy_before"] = int(
+        await db.scalar(
+            text("SELECT COALESCE(MIN(event_id), 2147483647) FROM broadcast_recipients")
+        )
+        or 0
+    )
+
+    def clause(items: list[str]) -> str:
+        return ("AND " + " AND ".join(f"({w})" for w in items)) if items else ""
+
+    base = _BASE.format(
+        where_ev=clause(where_ev), where_rows=clause(where_rows).replace("AND ", "WHERE ", 1)
+    )
     total = int(await db.scalar(text(base + "SELECT COUNT(*) FROM rows"), params) or 0)
     offset = max(page_no - 1, 0) * size
     rows = (
-        await db.execute(
-            text(
-                base
-                + "SELECT * FROM rows ORDER BY triggered_at DESC, event_id DESC, mac "
-                "LIMIT :limit OFFSET :offset"
-            ),
-            {**params, "limit": size, "offset": offset},
-        )
+        await db.execute(text(base + _PAGE), {**params, "limit": size, "offset": offset})
     ).mappings().all()
 
     items = []

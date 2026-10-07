@@ -60,8 +60,12 @@ class OtaDeviceOut(BaseModel):
 class OtaJobOut(BaseModel):
     broadcast: BroadcastOut
     package: OtaPackageOut | None
+    #: 목록(GET /jobs)에서 **끝난** 작업은 비어 있다(detail=False) — 20개 작업의 단말 행을 2초마다
+    #: 다시 만들지 않는다(병목 감사 M3). 펼치면 GET /jobs/{id} 로 받는다.
     devices: list[OtaDeviceOut]
-    #: 다 받아간(성공) 대수 / 적용 확인된 대수 / 보낸 대수
+    detail: bool = True
+    #: 다 받아간(성공) 대수 / 적용 확인된 대수 / 보낸 대수 / 대상 전체(오프라인 포함)
     done_count: int
     applied_count: int
     sent_count: int
+    total_count: int = 0

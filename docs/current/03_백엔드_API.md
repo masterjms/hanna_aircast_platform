@@ -198,6 +198,8 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | `live_ready_timeout_sec` | 1~60 | 아니오; LIVE_START에 포함 |
 | `live_stop_wait_sec` | 10~30 | 아니오 |
 | `file_wait_sec` | 10~60 | 아니오 |
+
+`file_wait_sec`·`live_stop_wait_sec`는 실제 대기에서 **대상 50대마다 1초**가 더해진다(2026-10-07 병목 감사 H3). 결과 메시지는 수신 루프가 한 건씩 처리하므로 2,000대가 한꺼번에 답하면 마지막 결과가 적히기까지 20초 넘게 걸리는데, 설정값만 기다리면 아직 큐에 있는 응답을 「응답 없음」으로 끝내게 된다.
 | `live_bitrate_kbps` | 16 또는 24 | 아니오 |
 | `config_reconcile_hours` | 1~24 | 아니오; 재조정 작업 주기, 저장 즉시 스케줄 변경(문제점 63번) |
 | `file_bitrate_kbps` | 16 또는 24 | 아니오 |
@@ -462,8 +464,10 @@ PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유�
 - 단말 좌표 선택: device → zone → village
 - `position_source`: `device`, `zone`, `village`
 - marker: `normal`, `offline`, `unassigned`
-- village에는 GeoJSON `boundary`가 포함될 수 있음
+- `villages[].boundary`는 항상 `null`(2026-10-07) — 경계는 아래 API 로 따로 받는다. 폴링 응답에 수 MB 폴리곤이 매번 실리던 것을 떼어 냈다
 - 어떤 계층에도 좌표가 없으면 pin 대신 `missing_location`에 MAC을 넣음
+
+`GET /api/dashboard/map/boundaries` — 로그인·범위 적용. 경계가 있는 마을만 `[{id, boundary(GeoJSON)}]`. 바뀌는 일이 드물어 화면이 열 때 한 번 받는다.
 
 ## 8. 파일·TTS API
 
@@ -624,7 +628,7 @@ TTS 요청:
 |---|---|---|---|
 | GET | `/api/events` | 로그인·범위 적용 | 단말별 방송 기록, 페이지 |
 
-query: `page`(1~), `size`(10·20·50, 그 외는 10), `kind`(`file`·`schedule`·`live`·`ota`), `q`(단말 별칭·MAC·마을·파일 이름 부분 일치), `from`·`to`(KST 날짜, 하루 단위).
+query: `page`(1~), `size`(10·20·50, 그 외는 10), `kind`(`file`·`schedule`·`live`·`ota`), `q`(단말 별칭·MAC·마을·파일 이름 부분 일치), `from`·`to`(KST 날짜, 하루 단위). **둘 다 비우면 최근 31일**(2026-10-07) — 5개월치를 한 번에 훑는 요청은 받지 않는다. 쿼리는 방송 → 단말 줄 → 정렬·LIMIT → 마지막 결과(LATERAL, `(event_id, mac, received_at DESC)` 인덱스) 순으로 좁힌다.
 
 행 = (방송 × 단말). `broadcast_recipients`(방송을 걸 때 범위 안에 있던 단말 전부)가 기준이고, 그 표가 없는 옛 방송은 `device_events`에 응답을 남긴 단말만 행이 된다. 범위는 스냅숏의 `village_id`로 거른다.
 
@@ -645,7 +649,7 @@ query: `page`(1~), `size`(10·20·50, 그 외는 10), `kind`(`file`·`schedule`�
 | POST | `/api/ota/packages` | multipart `file`(.pkg) + `version`(적용 확인용 문자열) + `pkg_version`(정수) + `note` |
 | DELETE | `/api/ota/packages/{id}` | 진행 중 작업이 있으면 `OTA_PACKAGE_IN_USE` |
 | POST | `/api/ota/start` | `{package_id, target_scope: village\|device, target_ids: [하나]}` → 201 `OtaJobOut`. 그 외 범위 `OTA_TARGET_SCOPE`, 둘 이상 422 |
-| GET | `/api/ota/jobs?limit=` | 최근 작업(방송 응답 + 단말별 `p4_fw`/`c6_fw`·`applied`) |
+| GET | `/api/ota/jobs?limit=` | 최근 작업. **진행 중만** 단말별 상세(`detail=true`), 끝난 작업은 요약(`devices=[]`, `detail=false`, 건수만 — 2026-10-07). 상세는 `/jobs/{id}` |
 | GET | `/api/ota/jobs/{event_id}` | 작업 하나 |
 | GET | `/dl/ota/{token}` | 단말 전용 패키지 다운로드(인증 없음, 토큰 만료 404). 서버가 직접 보낸다(Range → 206, 범위 밖 416). **마지막 바이트까지 나가면** 그 단말의 결과 `OTA_DOWNLOADED`(= 성공)가 기록되고 단말은 오프라인으로 돌아간다(2026-10-05, 02 §10.1) |
 

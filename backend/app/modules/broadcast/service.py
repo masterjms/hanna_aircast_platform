@@ -688,6 +688,16 @@ async def _force_end_after(
         log.exception("방송 종료 확정 실패: event=%d", event_id)
 
 
+def scaled_wait(base_sec: int, device_count: int) -> int:
+    """응답 대기 상한을 대상 대수에 맞춘다(병목 감사 H3).
+
+    결과 메시지는 수신 루프가 한 건씩 처리하므로(초당 ~100건) 전체 2,000대가 한꺼번에 답하면 마지막
+    결과가 DB 에 적히기까지 20초 넘게 걸린다. 설정값(30초)만 기다리면 아직 큐에 있는 응답을
+    "응답 없음"으로 보고 방송을 끝낸다. 50대마다 1초를 더한다 — 2,000대면 +40초.
+    """
+    return int(base_sec) + max(0, device_count) // 50
+
+
 async def _config_int(db: AsyncSession, field: str, default: int) -> int:
     """current_config 의 정수 설정 하나. 행이 없으면(첫 기동) 기본값."""
     config = await db.get(CurrentConfig, 1)
@@ -841,7 +851,7 @@ async def start_file_broadcast(
     # finish_if_all_reported 가 "재생 중"으로 넘기고 재생 길이 뒤에 끝낸다. 도중에
     # 꺼진 단말이 있으면 그 신호가 영영 안 오므로 상한을 둔다(기본 30초). 전원이
     # 응답했으면 이 워치독은 손대지 않는다(재생 중인 방송을 끊으면 안 된다).
-    wait_sec = await _config_int(db, "file_wait_sec", 30)
+    wait_sec = scaled_wait(await _config_int(db, "file_wait_sec", 30), len(macs))
     asyncio.create_task(
         _force_end_after(
             event.id, wait_sec, reason="수신 완료 응답 대기 시간 초과", only_if_missing=True
@@ -890,7 +900,7 @@ async def stop_file_broadcast(
     # 단말의 FILE_RESULT 를 기다린다 — 다 오면 그 순간, 안 오면 대기 시간 뒤에 끝난다.
     # 중지 표시는 보내기 전에 커밋한다 — 단말 응답이 먼저 오면 수신 쪽이 이 표시를 못 봐
     # "전원 응답 = 끝"으로 닫지 못하고 대기 시간을 다 채운다(_commit_before_publish).
-    wait_sec = await _config_int(db, "file_wait_sec", 30)
+    wait_sec = scaled_wait(await _config_int(db, "file_wait_sec", 30), len(macs))
     event.stop_requested_at = dt.datetime.now(dt.timezone.utc)
     await db.flush()
     village_kw = await _village_kw(db, TargetScope(event.target_scope), event.target_ids)
@@ -1151,7 +1161,7 @@ async def stop_live_broadcast(
     # 못 받은 단말이 있어도 대기 시간이 지나면 종료로 확정한다. 실측 1.5초라
     # 10초는 여유가 크지만, 타임아웃은 상한이지 고정 대기가 아니다.
     # 중지 표시는 보내기 전에 커밋한다(stop_file_broadcast 와 같은 이유).
-    wait_sec = await _config_int(db, "live_stop_wait_sec", 10)
+    wait_sec = scaled_wait(await _config_int(db, "live_stop_wait_sec", 10), len(macs))
     event.stop_requested_at = dt.datetime.now(dt.timezone.utc)
     await db.flush()
     village_kw = await _village_kw(db, TargetScope(event.target_scope), event.target_ids)
