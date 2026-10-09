@@ -25,6 +25,7 @@ import type {
   HistoryKind,
   HistoryPage,
   LiveBroadcastRequest,
+  LoginEventPage,
   LoginResponse,
   MapData,
   Me,
@@ -154,6 +155,9 @@ export const api = {
         body: JSON.stringify({ username, password }),
       }),
     logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
+    /** 로그인 기록(문제점 65번). 최고 관리자는 전부, 그 외는 자기 것. */
+    logins: (params: { page: number; size: number; q?: string }) =>
+      request<LoginEventPage>(`/api/auth/logins${query(params)}`),
     me: () => request<Me>('/api/auth/me'),
     changePassword: (currentPassword: string, newPassword: string) =>
       request<Me>('/api/auth/password', {

@@ -1,17 +1,17 @@
 /**
- * 마을 현황(대시보드) — 위: [요약 타일 + 마을별 단말 목록] : [지도], 아래: 이상단말 표(전체 폭).
+ * 마을 현황(대시보드) — 위: [요약 타일 + 마을별 단말 목록] : [지도], 아래: 이상 단말 표(전체 폭).
  *
  * 지도와 목록은 /api/dashboard/map 한 벌의 두 표현이고(지도 설계 §4.5),
- * 연동은 selectedMac/hoveredMac 두 상태뿐이다(§4.6). 이상단말 표의 행을 눌러도 같은
+ * 연동은 selectedMac/hoveredMac 두 상태뿐이다(§4.6). 이상 단말 표의 행을 눌러도 같은
  * selectedMac 이 바뀌어 지도가 그 단말로 간다(문제점 58번 ⑤).
  *
- * 2026-10-06 (문제점 58번): 단말 목록이 지도 아래 끝까지 내려오고, 이상단말은 왼쪽 구석의
- * 작은 표가 아니라 지도 아래 전체 폭에 단말 관리와 같은 열(별칭·마을·MAC·구역·상태·RSSI·CFG·
+ * 2026-10-06 (문제점 58번): 단말 목록이 지도 아래 끝까지 내려오고, 이상 단말은 왼쪽 구석의
+ * 작은 표가 아니라 지도 아래 전체 폭에 단말 관리와 같은 열(별칭·마을·MAC·상태·RSSI·CFG·
  * 마지막 통신·버전)로 놓인다. 검색과 10·20·50건 쪽 넘기기는 방송 기록과 같다.
  * 2026-10-07 (58번 보조설명): 이 화면은 **한 화면에 맞추지 않는다**. 위 [목록 | 지도]가 화면 높이
- * 가까이 차지하고(트리가 전보다 두 배), 이상단말 표는 그 아래 — 화면을 내려서 본다. 표는 안에서
+ * 가까이 차지하고(트리가 전보다 두 배), 이상 단말 표는 그 아래 — 화면을 내려서 본다. 표는 안에서
  * 스크롤하지 않고 고른 건수만큼 다 보이며 쪽 넘기기 버튼은 늘 표 아래에 있다.
- * 이상단말의 데이터는 단말 목록 API(status=offline)를 그대로 쓴다 — 요약 API 의 alerts 는
+ * 이상 단말의 데이터는 단말 목록 API(status=offline)를 그대로 쓴다 — 요약 API 의 alerts 는
  * 열이 모자라고(별칭·마을·사유뿐) 20건에서 잘린다.
  *
  * 진행 중인 방송이 있으면 폴링을 2초로 당긴다(사양: 기본 5초, 방송 중 2초).
@@ -22,6 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { Device, GeoGeometry, MapVillage, Organization, Village } from '../api/types';
 import { MapView } from '../components/MapView';
+import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
 import { VillageDeviceList } from '../components/VillageDeviceList';
 import { useAuth } from '../auth/AuthContext';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
@@ -111,10 +112,7 @@ function alertReason(d: Device): string {
   return '응답 없음';
 }
 
-const SIZES = [10, 20, 50] as const;
-type Size = (typeof SIZES)[number];
-
-/** 지도 아래 이상단말 표 — 단말 관리와 같은 열, 방송 기록과 같은 검색·쪽 넘기기. */
+/** 지도 아래 이상 단말 표 — 단말 관리와 같은 열, 방송 기록과 같은 검색·쪽 넘기기. */
 function AlertTable({
   devices,
   selectedMac,
@@ -125,28 +123,22 @@ function AlertTable({
   onSelect: (mac: string | null) => void;
 }) {
   const [q, setQ] = useState('');
-  const [size, setSize] = useState<Size>(10);
-  const [page, setPage] = useState(1);
 
   const filtered = useMemo(() => {
     const list = devices ?? [];
     const needle = q.trim().toLowerCase();
     if (!needle) return list;
-    return list.filter((d) =>
-      [d.label, d.mac, d.village_name, d.zone_name].some((v) => v?.toLowerCase().includes(needle)),
-    );
+    return list.filter((d) => [d.label, d.mac, d.village_name].some((v) => v?.toLowerCase().includes(needle)));
   }, [devices, q]);
-
-  const pages = Math.max(1, Math.ceil(filtered.length / size));
-  // 필터가 바뀌어 쪽 수가 줄면 마지막 쪽으로. 폴링으로 단말이 복구돼 줄어도 같다.
-  const safePage = Math.min(page, pages);
-  const rows = filtered.slice((safePage - 1) * size, safePage * size);
+  // 목록 공통 쪽 넘기기(문제점 64번). 필터로 쪽 수가 줄면 마지막 쪽으로.
+  const pager = usePager(filtered);
+  const rows = pager.rows;
 
   return (
     <section className="dash__alerts">
       <div className="filters">
         <h2 className="section-title" style={{ margin: 0 }}>
-          이상단말{' '}
+          이상 단말{' '}
           {devices && devices.length > 0 && (
             <span style={{ color: 'var(--danger-text)', fontSize: 12 }}>{devices.length}대</span>
           )}
@@ -154,35 +146,22 @@ function AlertTable({
         <div className="filters__spacer" />
         <input
           type="search"
-          placeholder="별칭 · MAC · 마을 · 구역"
+          placeholder="별칭 · MAC · 마을"
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
-            setPage(1);
+            pager.setPage(1);
           }}
           style={{ minWidth: 220 }}
-          aria-label="이상단말 검색"
+          aria-label="이상 단말 검색"
         />
-        <select
-          value={size}
-          onChange={(e) => {
-            setSize(Number(e.target.value) as Size);
-            setPage(1);
-          }}
-          aria-label="한 쪽에 보일 줄 수"
-        >
-          {SIZES.map((s) => (
-            <option key={s} value={s}>
-              {s}건씩
-            </option>
-          ))}
-        </select>
+        <PageSizeSelect value={pager.size} onChange={pager.setSize} />
       </div>
       <div className="table-wrap table-wrap--scroll">
         {devices === null ? (
           <div className="empty">불러오는 중…</div>
         ) : filtered.length === 0 ? (
-          <div className="empty">{q ? '조건에 맞는 이상단말이 없습니다.' : '모든 단말이 정상입니다.'}</div>
+          <div className="empty">{q ? '조건에 맞는 이상 단말이 없습니다.' : '모든 단말이 정상입니다.'}</div>
         ) : (
           <table>
             <thead>
@@ -190,7 +169,6 @@ function AlertTable({
                 <th>별칭</th>
                 <th>마을</th>
                 <th className="mono">MAC</th>
-                <th>구역</th>
                 <th>상태</th>
                 <th className="num">RSSI</th>
                 <th className="num">CFG</th>
@@ -209,7 +187,6 @@ function AlertTable({
                   <td className="strong">{d.label || <span className="mono dim">{d.mac}</span>}</td>
                   <td>{d.village_name ?? '미배정'}</td>
                   <td className="mono">{d.mac}</td>
-                  <td>{d.zone_name ?? '—'}</td>
                   <td>
                     {/* 단말 관리와 같은 글자 「오프라인」(문제점 61번). 사유는 마우스를 올리면. */}
                     <span className="badge badge--danger" title={alertReason(d)}>
@@ -230,25 +207,8 @@ function AlertTable({
           </table>
         )}
       </div>
-      {filtered.length > 0 && (
-        <div className="pager">
-          <span className="dim">
-            총 {filtered.length}대 · {safePage}/{pages}쪽
-          </span>
-          <span className="filters__spacer" />
-          <button type="button" className="btn btn--sm" disabled={safePage <= 1} onClick={() => setPage(1)}>
-            처음
-          </button>
-          <button type="button" className="btn btn--sm" disabled={safePage <= 1} onClick={() => setPage(safePage - 1)}>
-            이전
-          </button>
-          <button type="button" className="btn btn--sm" disabled={safePage >= pages} onClick={() => setPage(safePage + 1)}>
-            다음
-          </button>
-          <button type="button" className="btn btn--sm" disabled={safePage >= pages} onClick={() => setPage(pages)}>
-            끝
-          </button>
-        </div>
+      {pager.total > 0 && (
+        <PagerBar total={pager.total} page={pager.page} pages={pager.pages} onPage={pager.setPage} unit="대" />
       )}
     </section>
   );
@@ -264,7 +224,7 @@ export function DashboardPage() {
   const interval = fastMode ? POLL_INTERVAL.broadcasting : POLL_INTERVAL.normal;
   const { data, loading } = usePolling(() => api.dashboard.summary(), interval);
   const map = usePolling(() => api.dashboard.map(), interval);
-  // 이상단말 = 오프라인 단말. 판정은 서버 단말 목록(status=offline)이 요약 타일과 같은 규칙으로 한다.
+  // 이상 단말 = 오프라인 단말. 판정은 서버 단말 목록(status=offline)이 요약 타일과 같은 규칙으로 한다.
   const offline = usePolling(() => api.devices.list({ status: 'offline' }), interval);
 
   const broadcasting = (data?.active_broadcasts.length ?? 0) > 0;
@@ -447,7 +407,7 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* ── 아래: 이상단말 (전체 폭) ── */}
+      {/* ── 아래: 이상 단말 (전체 폭) ── */}
       <AlertTable devices={offline.data} selectedMac={selectedMac} onSelect={setSelectedMac} />
     </div>
   );

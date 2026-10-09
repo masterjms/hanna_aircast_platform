@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import type { Device, Organization, Village, Zone } from '../../api/types';
 import { buildForest, type OrgNode } from '../../lib/orgtree';
+import { FolderIcon, TreeExpandButtons, VillageIcon } from '../TreeIcons';
 
 export type PickMode = 'village' | 'zone' | 'device';
 
@@ -342,6 +343,11 @@ export function TargetTreePicker({
               disabled={!can}
               onChange={(e) => toggleLeaf(leaf, e.target.checked, ancestors)}
             />
+            {mode === 'village' && (
+              <span className="tree__icon tree__icon--village">
+                <VillageIcon />
+              </span>
+            )}
             <span className="tree__name">
               {leaf.name}
               {leaf.note && <span className="dim"> · {leaf.note}</span>}
@@ -393,6 +399,9 @@ export function TargetTreePicker({
                 onChange={(on) => toggleGroup(node, on, ancestors)}
               />
             )}
+            <span className={`tree__icon tree__icon--${node.kind}`}>
+              {node.kind === 'org' ? <FolderIcon open={!isCollapsed} /> : <VillageIcon />}
+            </span>
             <span className={node.kind === 'org' ? 'tree__name strong' : 'tree__name'}>{node.name}</span>
             <span className="tree__kind">
               {node.pending ? '구역 불러오는 중…' : all.length > 0 && unit ? `${unit} ${all.length}개 · ` : ''}
@@ -415,6 +424,10 @@ export function TargetTreePicker({
     );
   };
 
+  // 전체 펼치기·접기(문제점 69번). 접기는 모든 묶음 키를 collapsed 에 넣는다.
+  const expandAll = () => setCollapsed(new Set());
+  const collapseAll = () => setCollapsed(new Set(roots.flatMap(subtreeKeys)));
+
   return (
     <>
       <div className="tree-picker__search">
@@ -427,6 +440,7 @@ export function TargetTreePicker({
           onChange={(e) => setQuery(e.target.value)}
           aria-label="방송 대상 검색"
         />
+        <TreeExpandButtons onExpand={expandAll} onCollapse={collapseAll} />
       </div>
       {shown.length === 0 ? (
         <p className="hint">검색 결과가 없습니다.</p>

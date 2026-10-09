@@ -13,9 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { HistoryKind, HistoryPage, HistoryVerdict } from '../api/types';
-
-const SIZES = [10, 20, 50] as const;
-type Size = (typeof SIZES)[number];
+import { PageSizeSelect, PagerBar, type PageSize } from '../components/Pager';
 
 const KIND_OPTIONS: { value: HistoryKind | ''; label: string }[] = [
   { value: '', label: '모든 종류' },
@@ -62,7 +60,7 @@ function kstDateInput(offsetDays: number): string {
 
 export function EventsPage() {
   const [page, setPage] = useState(1);
-  const [size, setSize] = useState<Size>(10);
+  const [size, setSize] = useState<PageSize>(10);
   const [kind, setKind] = useState<HistoryKind | ''>('');
   const [q, setQ] = useState('');
   // 기본 최근 7일(병목 감사 H6). 비우면 서버가 최근 31일로 본다 — 5개월치를 한 번에 훑지 않는다.
@@ -150,13 +148,7 @@ export function EventsPage() {
           style={{ minWidth: 260 }}
           aria-label="검색"
         />
-        <select value={size} onChange={(e) => setSize(Number(e.target.value) as Size)} aria-label="한 쪽에 보일 줄 수">
-          {SIZES.map((s) => (
-            <option key={s} value={s}>
-              {s}건씩
-            </option>
-          ))}
-        </select>
+        <PageSizeSelect value={size} onChange={setSize} />
       </div>
 
       {error && <div className="alert" style={{ marginBottom: 14 }}>{error}</div>}
@@ -208,24 +200,7 @@ export function EventsPage() {
         )}
       </div>
 
-      <div className="pager">
-        <span className="dim">
-          총 {data?.total ?? 0}건 · {page}/{pages}쪽
-        </span>
-        <span className="filters__spacer" />
-        <button type="button" className="btn btn--sm" disabled={page <= 1} onClick={() => setPage(1)}>
-          처음
-        </button>
-        <button type="button" className="btn btn--sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-          이전
-        </button>
-        <button type="button" className="btn btn--sm" disabled={page >= pages} onClick={() => setPage((p) => p + 1)}>
-          다음
-        </button>
-        <button type="button" className="btn btn--sm" disabled={page >= pages} onClick={() => setPage(pages)}>
-          끝
-        </button>
-      </div>
+      <PagerBar total={data?.total ?? 0} page={page} pages={pages} onPage={setPage} />
       <p className="hint" style={{ marginTop: 8 }}>
         판정: <b>정상</b> 단말이 받아 처리함 · <b>실패</b> 단말이 거절(사유 표시) · <b>응답 없음</b> 보냈지만 답이 없음 ·{' '}
         <b>오프라인</b> 방송 당시 꺼져 있어 보내지 않음. 기록은 {`5개월`}간 보관됩니다.

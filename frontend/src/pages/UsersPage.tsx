@@ -12,7 +12,9 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
-import type { Organization, Role, User, Village } from '../api/types';
+import type { LoginEventPage, Organization, Role, User, Village } from '../api/types';
+import { PageSizeSelect, PagerBar, type PageSize } from '../components/Pager';
+import { TargetTreePicker } from '../components/broadcast/TargetTreePicker';
 import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../components/Modal';
 import { buildForest, flattenForest, pathLabel } from '../lib/orgtree';
@@ -180,15 +182,6 @@ export function UsersPage() {
     } catch (err) {
       fail(err, '삭제에 실패했습니다.');
     }
-  };
-
-  const toggleVillage = (id: number) => {
-    if (!form) return;
-    const has = form.village_ids.includes(id);
-    setForm({
-      ...form,
-      village_ids: has ? form.village_ids.filter((x) => x !== id) : [...form.village_ids, id],
-    });
   };
 
   const villageNames = (ids: number[]) =>
@@ -485,18 +478,19 @@ export function UsersPage() {
               {villages.length === 0 ? (
                 <p className="hint">먼저 마을을 등록하세요.</p>
               ) : (
-                <div className="checks">
-                  {villages.map((v) => (
-                    <label key={v.id} className="check">
-                      <input
-                        type="checkbox"
-                        checked={form.village_ids.includes(v.id)}
-                        onChange={() => toggleVillage(v.id)}
-                      />
-                      <span>{v.name}</span>
-                    </label>
-                  ))}
-                </div>
+                // 지역 관리와 같은 트리에서 고른다(문제점 66번) — 기관을 체크하면 그 아래 마을 전부.
+                <TargetTreePicker
+                  mode="village"
+                  allowOffline
+                  orgs={orgs}
+                  villages={villages}
+                  devices={[]}
+                  zonesOf={{}}
+                  onNeedZones={() => undefined}
+                  value={{ leaves: form.village_ids.map(String), groups: [] }}
+                  onChange={(next) => setForm({ ...form, village_ids: next.leaves.map(Number) })}
+                  renderCount={(_online, total) => <span className="dim">{total === 0 ? '단말 없음' : `단말 ${total}대`}</span>}
+                />
               )}
               {form.village_ids.length === 0 && villages.length > 0 && (
                 <p className="hint hint--warn">
@@ -511,6 +505,104 @@ export function UsersPage() {
           )}
         </Modal>
       )}
+
+      <LoginHistory />
     </>
+  );
+}
+
+/** 로그인 기록(문제점 65번) — 계정 관리 아래. 최고 관리자는 전부, 그 외는 자기 기록만 온다. */
+function LoginHistory() {
+  const [page, setPage] = useState(1);
+  const [size, setSize] = useState<PageSize>(10);
+  const [q, setQ] = useState('');
+  const [data, setData] = useState<LoginEventPage | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api.auth
+      .logins({ page, size, q: q.trim() || undefined })
+      .then((d) => alive && (setData(d), setError(null)))
+      .catch((e) => alive && setError(e instanceof ApiError ? e.message : '로그인 기록을 불러오지 못했습니다.'));
+    return () => {
+      alive = false;
+    };
+  }, [page, size, q]);
+  const pages = Math.max(1, Math.ceil((data?.total ?? 0) / size));
+  const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString('ko-KR', { hour12: false }) : '—');
+  const RESULT: Record<string, { text: string; cls: string }> = {
+    ok: { text: '성공', cls: 'badge badge--ok' },
+    bad_password: { text: '비밀번호 틀림', cls: 'badge badge--danger' },
+    unknown_user: { text: '없는 아이디', cls: 'badge badge--danger' },
+    expired: { text: '기간 만료', cls: 'badge badge--warn' },
+  };
+  return (
+    <section style={{ marginTop: 28 }}>
+      <div className="filters">
+        <h2 className="section-title" style={{ margin: 0 }}>
+          로그인 기록
+        </h2>
+        <div className="filters__spacer" />
+        <input
+          type="search"
+          placeholder="아이디 · IP"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setPage(1);
+          }}
+          style={{ minWidth: 200 }}
+          aria-label="로그인 기록 검색"
+        />
+        <PageSizeSelect
+          value={size}
+          onChange={(s) => {
+            setSize(s);
+            setPage(1);
+          }}
+        />
+      </div>
+      {error && <div className="alert">{error}</div>}
+      <div className="table-wrap table-wrap--scroll">
+        {!data ? (
+          <div className="empty">불러오는 중…</div>
+        ) : data.items.length === 0 ? (
+          <div className="empty">기록이 없습니다.</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>연결 시각</th>
+                <th>연결 해지 시각</th>
+                <th>아이디</th>
+                <th>결과</th>
+                <th>IP</th>
+                <th>브라우저</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.items.map((e) => (
+                <tr key={e.id}>
+                  <td className="dim">{fmt(e.logged_in_at)}</td>
+                  <td className="dim">{e.result === 'ok' ? fmt(e.logged_out_at) : '—'}</td>
+                  <td className="strong">{e.username}</td>
+                  <td>
+                    <span className={RESULT[e.result]?.cls ?? 'badge badge--idle'}>{RESULT[e.result]?.text ?? e.result}</span>
+                  </td>
+                  <td>{e.ip ?? '—'}</td>
+                  <td className="dim" title={e.user_agent ?? undefined}>
+                    {e.user_agent ? e.user_agent.slice(0, 48) : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <PagerBar total={data?.total ?? 0} page={page} pages={pages} onPage={setPage} />
+      <p className="hint" style={{ marginTop: 6 }}>
+        해지 시각은 「로그아웃」을 눌렀을 때만 적힙니다(창을 그냥 닫으면 비어 있음). 기록은 2년 보관됩니다.
+      </p>
+    </section>
   );
 }

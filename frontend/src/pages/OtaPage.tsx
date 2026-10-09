@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { Device, Organization, OtaJob, OtaPackage, Village } from '../api/types';
+import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
 import { StepTitle } from '../components/StepTitle';
 import { TargetTreePicker, type PickMode } from '../components/broadcast/TargetTreePicker';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
@@ -153,7 +154,9 @@ export function OtaPage() {
   // ── 진행·이력 ──
   // 진행 중인 작업이 있을 때만 자주 묻는다. 없으면 15초 — 끝난 작업 목록은 바뀌지 않는다(병목 감사 M3).
   const [jobsInterval, setJobsInterval] = useState<number>(POLL_INTERVAL.broadcasting);
-  const jobs = usePolling(() => api.ota.jobs(20), jobsInterval);
+  const jobs = usePolling(() => api.ota.jobs(100), jobsInterval);
+  // 목록 공통 쪽 넘기기(문제점 64번). 끝난 작업은 요약만 오므로 100개를 받아 화면에서 나눈다.
+  const jobPager = usePager(jobs.data ?? []);
   useEffect(() => {
     const active = (jobs.data ?? []).some((j) => j.broadcast.ended_at === null);
     setJobsInterval(active ? POLL_INTERVAL.broadcasting : 15_000);
@@ -345,7 +348,12 @@ export function OtaPage() {
           <div className="empty">아직 OTA 작업이 없습니다.</div>
         ) : (
           <div className="ota__jobs">
-            {(jobs.data ?? []).map((row) => {
+            <div className="filters" style={{ marginBottom: 4 }}>
+              <span className="dim">작업 {jobPager.total}건</span>
+              <div className="filters__spacer" />
+              <PageSizeSelect value={jobPager.size} onChange={jobPager.setSize} />
+            </div>
+            {jobPager.rows.map((row) => {
               // 진행 중이면 목록의 상세, 끝났으면 펼칠 때 받아 둔 상세(없으면 요약만).
               const j = row.detail ? row : (details[row.broadcast.id] ?? row);
               const b = j.broadcast;
@@ -417,6 +425,7 @@ export function OtaPage() {
                 </div>
               );
             })}
+            <PagerBar total={jobPager.total} page={jobPager.page} pages={jobPager.pages} onPage={jobPager.setPage} />
           </div>
         )}
       </section>

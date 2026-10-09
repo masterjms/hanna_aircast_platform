@@ -531,10 +531,11 @@ table {
 th {
   text-align: left;
   padding: 13px 20px;
-  font-size: 11px;
+  /* 표 제목이 작아 안 보인다(문제점 74번) — 본문 글자(13px)와 같은 크기로, 색도 한 단계 진하게. */
+  font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--text-faint);
+  letter-spacing: 0.01em;
+  color: var(--text-3);
   border-bottom: 1px solid var(--border);
   white-space: nowrap;
   background: var(--surface);
@@ -560,9 +561,12 @@ th.mono {
   font-family: var(--mono);
 }
 
+/* 표 안 서체 통일(문제점 76번): MAC·시각·버전 칸도 본문과 같은 글꼴·크기. 숫자만 같은 폭으로. */
 td.mono {
-  font-family: var(--mono);
-  font-size: 12px;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  font-size: inherit;
   color: var(--text-3);
 }
 
@@ -1266,16 +1270,21 @@ tr.is-selected td {
   padding: 8px 24px 24px;
 }
 
-/* 설정 묶음(단말 CONFIG / 방송 응답 시간). 묶음 사이에만 굵은 구분을 둔다. */
+/* 설정 묶음(문제점 72번): 묶음마다 제 상자에 담아 어디까지가 한 묶음인지 보이게 한다. */
+.settings-group {
+  padding: 14px 18px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  background: var(--surface-sunken);
+  break-inside: avoid;
+}
 .settings-group + .settings-group {
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 2px solid var(--border);
+  margin-top: 14px;
 }
 
 .settings-group__title {
-  margin: 16px 0 4px;
-  font-size: 14px;
+  margin: 0 0 6px;
+  font-size: 15px;
   font-weight: 800;
 }
 
@@ -1866,10 +1875,21 @@ body.is-resizing * {
 /* 대상 검색 — 걸리는 가지만 남기고 펼친다(향후검토 9번). */
 .tree-picker__search {
   margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .tree-picker__search input {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
 }
+/* 트리 공통(문제점 69번): 기관은 폴더, 마을은 핀. 색은 지역 관리 탐색기와 같다. */
+.tree-tools { display: inline-flex; gap: 4px; flex: none; }
+.tree-tools .btn { padding: 4px 8px; font-size: 12px; }
+.tree__icon { display: inline-flex; flex: none; margin-right: 4px; color: var(--text-3); }
+.tree__icon--org { color: #d9a441; }
+.tree__icon--village { color: var(--accent-text); }
+.vlist__tools { display: flex; justify-content: flex-end; padding: 0 4px 6px; }
 .timepick { display: flex; gap: 8px; align-items: center; }
 .timepick select { min-width: 84px; }
 .sentence {
@@ -2996,3 +3016,12 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
   /* 화면에 맞추기: OTA 는 세 덩어리라 본문이 길다 — 이 화면만 안쪽에서 스크롤한다 */
   .main > .ota { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 }
+
+/* 예약 방송 목록(문제점 67번 ①): 표 제목 줄은 스크롤해도 제자리에. */
+.sched-grid .table-wrap--scroll { max-height: calc(100vh - 230px); overflow: auto; }
+.sched-grid .table-wrap--scroll thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); }
+
+/* 상단바 오른쪽(문제점 79번): 시계 · 새로고침 · 담당 범위. */
+.topbar__right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.topbar__clock { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--text-2); white-space: nowrap; }
+@media (max-width: 900px) { .topbar__clock { display: none; } }

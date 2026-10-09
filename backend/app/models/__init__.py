@@ -31,3 +31,4 @@ __all__ = [
     "Village",
     "Zone",
 ]
+from app.models.auth_log import LoginEvent  # noqa: E402,F401

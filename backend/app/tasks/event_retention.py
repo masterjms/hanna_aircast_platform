@@ -17,6 +17,7 @@ from sqlalchemy import delete
 
 from app.config import settings
 from app.db import session_scope
+from app.models.auth_log import LoginEvent
 from app.models.event import BroadcastEvent, DeviceEvent
 from app.models.file import DownloadToken
 from app.models.ota import OtaToken
@@ -46,10 +47,16 @@ async def sweep(now: dt.datetime | None = None) -> dict[str, int]:
             await db.execute(delete(DownloadToken).where(DownloadToken.expires_at < now))
         ).rowcount
         tokens += (await db.execute(delete(OtaToken).where(OtaToken.expires_at < now))).rowcount
+        # 로그인 기록은 더 오래 둔다(문제점 65·68번, 접속기록 보관 기준).
+        login_cutoff = now - dt.timedelta(days=settings.login_retention_days)
+        logins = (
+            await db.execute(delete(LoginEvent).where(LoginEvent.logged_in_at < login_cutoff))
+        ).rowcount
     return {
         "events": int(events or 0),
         "loose_device_events": int(loose or 0),
         "tokens": int(tokens or 0),
+        "logins": int(logins or 0),
     }
 
 

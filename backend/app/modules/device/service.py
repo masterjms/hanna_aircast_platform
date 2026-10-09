@@ -633,30 +633,50 @@ def is_tombstoned(mac: str) -> bool:
     return mac in TOMBSTONES
 
 
-# ── OTA 재부팅 중 단말 (문제점 60번 보조설명) ───────────────────────────────
-#: 패키지를 다 받아간 단말 → 표시한 시각(epoch). 단말은 곧 끊고 재부팅하는데, 그 사이의 STATUS
-#: (끊기 직전 주기 보고, state=OTA)를 받아 주면 방금 오프라인으로 돌린 단말이 도로 온라인이 된다.
-OTA_REBOOTING: dict[str, float] = {}
-#: 다 받은 직후 이 시간 동안은 어떤 STATUS 도 버린다 — 재부팅에 이보다 짧게 걸릴 수는 없다.
-OTA_REBOOT_GRACE_SEC = 10.0
+# ── OTA 재부팅 중 단말 (문제점 60번 보조설명 10/7 · 10/9) ─────────────────────
+#: 패키지를 다 받아간 단말 → (표시 시각, 그 뒤 LWT 를 봤나). 단말은 다 받으면 네트워크를 끊고
+#: 자체 업데이트·재부팅한다. 끊기 전에 보내는 STATUS(10/9: 10초 유예 뒤 state≠OTA 로 온 것이
+#: 있었다)를 받아 주면 방금 오프라인으로 돌린 단말이 도로 「온라인·재접속 완료」가 된다.
+#:
+#: 재접속의 증거는 **LWT 뒤에 오는 STATUS** 다 — 끊김(LWT)을 본 뒤의 STATUS 만 새 세션이다.
+#: 네트워크를 끊으면 브로커가 keepalive(20초)×1.5 뒤 LWT 를 대신 발행하고, 재접속으로 세션이
+#: 넘어가도 Mosquitto 는 옛 세션의 will 을 보낸다. LWT 가 끝내 안 오는 경우(깨끗이 끊은 단말)를
+#: 위해 상한 뒤에는 받는다.
+OTA_REBOOTING: dict[str, tuple[float, bool]] = {}
+#: LWT 없이도 이 시간이 지나면 STATUS 를 받는다(안전망). 단말 업데이트+재부팅은 보통 1~2분.
+OTA_REBOOT_HOLD_SEC = 180.0
 #: 이 시간이 지나면 표시를 지운다(재부팅 뒤 STATUS 가 끝내 안 온 단말).
 OTA_REBOOT_MAX_SEC = 600.0
 
 
 def mark_ota_rebooting(mac: str) -> None:
-    OTA_REBOOTING[mac] = time.monotonic()
+    OTA_REBOOTING[mac] = (time.monotonic(), False)
+
+
+def note_lwt_for_ota(mac: str) -> None:
+    """LWT 가 왔다 — 단말이 정말 끊겼다. 다음 STATUS 부터 재접속으로 본다."""
+    entry = OTA_REBOOTING.get(mac)
+    if entry is not None:
+        OTA_REBOOTING[mac] = (entry[0], True)
 
 
 def drop_status_during_ota_reboot(mac: str, state: str) -> bool:
-    """이 STATUS 를 버려야 하나. 재부팅 뒤 첫 STATUS(state≠OTA, 유예 뒤)는 받고 표시를 지운다."""
-    marked = OTA_REBOOTING.get(mac)
-    if marked is None:
+    """이 STATUS 를 버려야 하나.
+
+    받는 조건(그리고 표시 삭제): LWT 를 본 뒤의 STATUS, 또는 상한(180초)이 지난 STATUS — 단
+    state=OTA 는 아직 업데이트 중이라 늘 버린다. 그 전의 STATUS 는 끊기 직전 보고로 보고 버린다.
+    """
+    entry = OTA_REBOOTING.get(mac)
+    if entry is None:
         return False
+    marked, lwt_seen = entry
     elapsed = time.monotonic() - marked
     if elapsed > OTA_REBOOT_MAX_SEC:
         OTA_REBOOTING.pop(mac, None)
         return False
-    if elapsed < OTA_REBOOT_GRACE_SEC or state == DeviceState.OTA.value:
+    if state == DeviceState.OTA.value:
+        return True
+    if not lwt_seen and elapsed < OTA_REBOOT_HOLD_SEC:
         return True
     OTA_REBOOTING.pop(mac, None)
     return False

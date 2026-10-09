@@ -439,6 +439,13 @@ class MockDevice:
             if not reboot:
                 await self.set_state(client, "IDLE")
         if reboot:
+            # 실제 단말은 네트워크를 끊어 브로커가 LWT 를 대신 발행한다. 여기서는 깨끗이 끊으므로
+            # LWT 와 같은 payload 를 직접 보내 흉내 낸다 — 서버는 LWT 뒤 STATUS 를 재접속으로 본다.
+            await client.publish(
+                f"{ROOT}/device/{self.mac}/status",
+                json.dumps(self.status_payload(offline=True)).encode(),
+                qos=1,
+            )
             raise _Reboot
 
     async def do_file_stop(self, client: aiomqtt.Client, cmd: dict) -> None:

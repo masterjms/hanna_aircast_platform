@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { MapPin, Organization, Village } from '../api/types';
 import { buildForest, type OrgNode } from '../lib/orgtree';
+import { FolderIcon, TreeExpandButtons, VillageIcon } from './TreeIcons';
 
 function statusRank(p: MapPin): number {
   if (!p.online) return 0;
@@ -213,7 +214,11 @@ export function VillageDeviceList({
           onClick={() => toggle(key)}
           aria-expanded={isOpen}
         >
-          <span aria-hidden="true">{isOpen ? '▼' : '▶'}</span> {name} <StatLine s={statsOf(list)} />
+          <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+          <span className="tree__icon tree__icon--village">
+            <VillageIcon />
+          </span>{' '}
+          {name} <StatLine s={statsOf(list)} />
         </button>
         {isOpen && deviceItems(list)}
       </section>
@@ -233,7 +238,10 @@ export function VillageDeviceList({
           onClick={() => toggle(key)}
           aria-expanded={isOpen}
         >
-          <span aria-hidden="true">{isOpen ? '▼' : '▶'}</span>{' '}
+          <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+          <span className="tree__icon tree__icon--org">
+            <FolderIcon open={isOpen} />
+          </span>{' '}
           <span className="strong">{node.org.name}</span> <StatLine s={statsOf(list)} />
         </button>
         {isOpen && (
@@ -250,10 +258,29 @@ export function VillageDeviceList({
 
   const unassigned = pinsByVillage.get(null) ?? [];
 
+  // 전체 펼치기·접기(문제점 69번). 이장(flat)은 set 이 「접은 마을」이라 뜻이 반대다.
+  const allKeys = () => {
+    const keys: string[] = ['v:none'];
+    const walk = (n: OrgNode) => {
+      keys.push(`o:${n.org.id}`);
+      n.villages.forEach((v) => keys.push(`v:${v.id}`));
+      n.children.forEach(walk);
+    };
+    forest.roots.forEach(walk);
+    forest.orphans.forEach((v) => keys.push(`v:${v.id}`));
+    villages.forEach((v) => keys.push(`v:${v.id}`));
+    return new Set(keys);
+  };
+  const expandAll = () => setOpen(flat ? new Set() : allKeys());
+  const collapseAll = () => setOpen(flat ? allKeys() : new Set());
+
   return (
     // 구분선은 묶음 사이에만 둔다. 단말 사이에 줄을 그으면 목록이 표처럼 무거워진다
     // (2026-09-03 현장 요청).
     <div className="vlist">
+      <div className="vlist__tools">
+        <TreeExpandButtons onExpand={expandAll} onCollapse={collapseAll} />
+      </div>
       {flat
         ? villages.map((v) => villageBlock(`v:${v.id}`, v.name, pinsByVillage.get(v.id) ?? [], true))
         : forest.roots.map(orgBlock)}

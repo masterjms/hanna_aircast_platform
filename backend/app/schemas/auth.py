@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+
 from pydantic import BaseModel, Field
 
 from app.constants import Role
@@ -38,6 +40,27 @@ class PasswordChangeRequest(BaseModel):
 
     current_password: str = Field(min_length=1, max_length=72)
     new_password: str = Field(min_length=8, max_length=64)
+
+
+class LoginEventOut(ApiModel):
+    """로그인 기록 한 줄(문제점 65번)."""
+
+    id: int
+    user_id: int | None
+    username: str
+    ip: str | None
+    user_agent: str | None
+    #: ok · bad_password · unknown_user · expired
+    result: str
+    logged_in_at: dt.datetime
+    logged_out_at: dt.datetime | None
+
+
+class LoginEventPage(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: list[LoginEventOut]
 
 
 class LoginResponse(BaseModel):

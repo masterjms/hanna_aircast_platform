@@ -453,7 +453,7 @@ export function BroadcastPage() {
     if (method === 'mic' && micBlocked) return { step: 1, text: micBlocked };
     if (effectiveWhen === 'reserve') {
       if (!reservable)
-        return { step: 2, text: '구역·전체 방송은 예약할 수 없습니다. ②에서 마을이나 단말을 골라 주세요.' };
+        return { step: 2, text: '전체 방송은 예약할 수 없습니다. ②에서 마을이나 단말을 골라 주세요.' };
       if (kind === 'weekly' && weekdays.length === 0) return { step: 4, text: '④ 요일을 골라 주세요.' };
       if (kind === 'once' && !onceDate) return { step: 4, text: '④ 날짜를 골라 주세요.' };
       // 지난 시각이면 서버도 막지만 문구가 막연하다 — 여기서 먼저 알린다.
@@ -731,15 +731,16 @@ export function BroadcastPage() {
                 {(scope === 'all' || targetText) && <span className="bc-where__count">켜진 단말 {onlineTargets}대</span>}
               </div>
               <button type="button" className="bc-link" aria-expanded={pickerOpen} onClick={() => setPickerOpen((v) => !v)}>
-                {pickerOpen ? '고르기 닫기' : villages.length === 1 ? '단말·구역만 골라 보내기' : '방송할 곳 고르기'}
+                {pickerOpen ? '고르기 닫기' : villages.length === 1 ? '단말만 골라 보내기' : '방송할 곳 고르기'}
               </button>
             </div>
             {pickerOpen && (
               <div className="bc-picker">
                 <div className="bc-seg" role="group" aria-label="고르는 단위">
-                  {(['village', 'zone', 'device', ...(isSuperAdmin ? ['all' as const] : [])] as TargetScope[]).map((s) => (
+                  {/* 구역 단위는 화면에서 뺐다(문제점 78번). */}
+                  {(['village', 'device', ...(isSuperAdmin ? ['all' as const] : [])] as TargetScope[]).map((s) => (
                     <button key={s} type="button" aria-pressed={scope === s} onClick={() => setScope(s)}>
-                      {s === 'village' ? '마을' : s === 'zone' ? '구역' : s === 'device' ? '단말 하나하나' : '모든 마을'}
+                      {s === 'village' ? '마을' : s === 'device' ? '단말 하나하나' : '모든 마을'}
                     </button>
                   ))}
                 </div>

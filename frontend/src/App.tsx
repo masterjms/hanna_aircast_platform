@@ -33,16 +33,15 @@ import { UsersPage } from './pages/UsersPage';
 
 /** 상단바에 띄울 화면 이름. 경로가 유일한 출처라 페이지가 따로 알릴 필요가 없다. */
 const PAGE_TITLES: Record<string, [string, string]> = {
-  '/': ['마을 현황', '단말 상태와 지도'],
+  '/': ['전체 현황', '단말 상태와 지도'],
   '/devices': ['단말 관리', '등록 · 배정 · 상태'],
   '/broadcast': ['방송하기', '말로 · 글로 · 저장된 소리로, 지금 또는 예약'],
   '/files': ['방송 자료', '저장된 소리 · 글로 만든 음성'],
   '/events': ['방송 기록', '단말별 수신 결과'],
   '/schedules': ['예약 방송', '예약 목록 · 예정표'],
-  '/costs': ['비용', '마을별 사용량'],
   '/ota': ['OTA 관리', '펌웨어 패키지 · 배포 · 적용 확인'],
   '/settings': ['설정', '전 단말 공통 CONFIG'],
-  '/regions': ['지역 관리', '기관 트리 · 마을 · 구역 · 단말'],
+  '/regions': ['지역 관리', '기관 트리 · 마을 · 단말'],
   '/users': ['계정 관리', '관리자 계정과 범위'],
 };
 
@@ -67,18 +66,6 @@ function RequireRole({ role, children }: { role: Role; children: ReactNode }) {
   return atLeast(role) ? <>{children}</> : <Navigate to="/" replace />;
 }
 
-/** 아직 구현하지 않은 화면. 라우트를 비워두면 404 처럼 보여서 혼선이 생긴다. */
-function ComingSoon({ title, phase }: { title: string; phase: string }) {
-  return (
-    <>
-      <div className="page-head">
-        <h1>{title}</h1>
-        <p>{phase} 에서 구현 예정입니다.</p>
-      </div>
-      <div className="placeholder">다음 단계에서 구현 예정입니다.</div>
-    </>
-  );
-}
 
 export function App() {
   const { user, loading } = useAuth();
@@ -115,7 +102,6 @@ export function App() {
         <Route path="/files" element={<FilesPage />} />
         <Route path="/events" element={<EventsPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />
-        <Route path="/costs" element={<ComingSoon title="비용" phase="Phase 8" />} />
 
         <Route
           path="/settings"

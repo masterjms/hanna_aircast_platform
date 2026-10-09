@@ -2588,7 +2588,7 @@ class TestPerfAudit:
 
 
 class TestOtaRebootGate:
-    """다 받은 단말의 끊기 직전 STATUS 는 버리고, 재부팅 뒤 첫 STATUS 부터 받는다(문제점 60번)."""
+    """다 받은 단말은 LWT(끊김)를 본 뒤의 STATUS 부터 재접속으로 받는다(문제점 60번 10/7·10/9)."""
 
     def test_gate(self, monkeypatch):
         from app.modules.device import service as ds
@@ -2598,14 +2598,45 @@ class TestOtaRebootGate:
         now = [1000.0]
         monkeypatch.setattr(ds.time, "monotonic", lambda: now[0])
         ds.mark_ota_rebooting("aa")
-        assert ds.drop_status_during_ota_reboot("aa", "IDLE") is True  # 유예 안
-        now[0] += 11
+        now[0] += 15
+        assert ds.drop_status_during_ota_reboot("aa", "IDLE") is True  # 끊기 전 보고 — LWT 전
+        ds.note_lwt_for_ota("aa")
         assert ds.drop_status_during_ota_reboot("aa", "OTA") is True  # 아직 OTA 상태
-        assert ds.drop_status_during_ota_reboot("aa", "IDLE") is False  # 재부팅 뒤 첫 STATUS
+        assert ds.drop_status_during_ota_reboot("aa", "IDLE") is False  # LWT 뒤 첫 STATUS = 재접속
         assert "aa" not in ds.OTA_REBOOTING
         ds.mark_ota_rebooting("bb")
+        now[0] += 181
+        assert ds.drop_status_during_ota_reboot("bb", "IDLE") is False  # LWT 없어도 상한 뒤엔 받음
+        ds.mark_ota_rebooting("cc")
         now[0] += 601
-        assert ds.drop_status_during_ota_reboot("bb", "OTA") is False  # 너무 오래 — 표시 소멸
+        assert ds.drop_status_during_ota_reboot("cc", "OTA") is False  # 너무 오래 — 표시 소멸
+
+
+class TestLoginHistory:
+    def test_model_and_retention_default(self):
+        from app.config import Settings
+        from app.models.auth_log import LoginEvent
+
+        assert LoginEvent.__tablename__ == "login_events"
+        assert Settings.model_fields["login_retention_days"].default == 730
+
+    def test_routes(self):
+        from app.modules.auth.router import router
+
+        paths = {getattr(r, "path", "") for r in router.routes}
+        assert "/api/auth/logins" in paths
+
+    def test_client_ip_prefers_real_ip(self):
+        from types import SimpleNamespace
+
+        from app.modules.auth.router import _client_ip
+
+        req = SimpleNamespace(
+            headers={"x-real-ip": "10.0.0.9"}, client=SimpleNamespace(host="1.1.1.1")
+        )
+        assert _client_ip(req) == "10.0.0.9"
+        req = SimpleNamespace(headers={"x-forwarded-for": "2.2.2.2, 3.3.3.3"}, client=None)
+        assert _client_ip(req) == "2.2.2.2"
 
 
 class TestReconcileHours:

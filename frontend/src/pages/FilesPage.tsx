@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { AudioFile } from '../api/types';
+import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
 import { TtsModal } from '../components/TtsModal';
 
 function formatSize(bytes: number): string {
@@ -106,6 +107,8 @@ export function FilesPage() {
   };
 
   const playingFile = files.find((f) => f.id === playing) ?? null;
+  // 목록 공통 쪽 넘기기(문제점 64번).
+  const pager = usePager(files);
 
   return (
     <>
@@ -159,6 +162,13 @@ export function FilesPage() {
         </div>
       )}
 
+      {files.length > 0 && (
+        <div className="filters" style={{ marginBottom: 8 }}>
+          <span className="dim">{files.length}개</span>
+          <div className="filters__spacer" />
+          <PageSizeSelect value={pager.size} onChange={pager.setSize} />
+        </div>
+      )}
       <div className="table-wrap table-wrap--scroll">
         {loading ? (
           <div className="empty">불러오는 중…</div>
@@ -180,7 +190,7 @@ export function FilesPage() {
               </tr>
             </thead>
             <tbody>
-              {files.map((f) => (
+              {pager.rows.map((f) => (
                 <tr key={f.id}>
                   <td className="strong">{f.filename}</td>
                   <td>
@@ -218,6 +228,7 @@ export function FilesPage() {
           </table>
         )}
       </div>
+      {files.length > 0 && <PagerBar total={pager.total} page={pager.page} pages={pager.pages} onPage={pager.setPage} unit="개" />}
 
       {ttsOpen && (
         <TtsModal

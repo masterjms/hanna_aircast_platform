@@ -32,7 +32,8 @@ import { ApiError, api } from '../api/client';
 import type { Organization, Village } from '../api/types';
 import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../components/Modal';
-import { Tile, VillageIcon, VillagePanel } from '../components/regions/VillagePanel';
+import { Chevron, FolderIcon, VillageIcon } from '../components/TreeIcons';
+import { Tile, VillagePanel } from '../components/regions/VillagePanel';
 import {
   buildForest,
   isUnder,
@@ -211,38 +212,7 @@ function flatten(
   return rows;
 }
 
-// ── 아이콘 ────────────────────────────────────────────────────────────────
-function FolderIcon({ open }: { open: boolean }) {
-  return (
-    <svg className="trow__svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      {open ? (
-        <path
-          d="M1.5 3.5A1 1 0 0 1 2.5 2.5h3.2l1.3 1.5h5.5a1 1 0 0 1 1 1V6H3.4a1 1 0 0 0-.95.68L1.5 9.5v-6zm.4 9.5 1.4-5.2a.5.5 0 0 1 .48-.36h11.1l-1.5 5.2a.5.5 0 0 1-.48.36H1.9z"
-          fill="currentColor"
-        />
-      ) : (
-        <path
-          d="M1.5 3.5A1 1 0 0 1 2.5 2.5h3.2l1.3 1.5h5.5a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-10a1 1 0 0 1-1-1v-9z"
-          fill="currentColor"
-        />
-      )}
-    </svg>
-  );
-}
-
-function Chevron({ open }: { open: boolean }) {
-  return (
-    <svg
-      className={`trow__chev${open ? ' is-open' : ''}`}
-      viewBox="0 0 16 16"
-      width="12"
-      height="12"
-      aria-hidden="true"
-    >
-      <path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" strokeWidth="1.8" />
-    </svg>
-  );
-}
+// 아이콘은 components/TreeIcons 로 옮겼다(문제점 69번) — 방송·OTA·현황 트리와 같은 그림을 쓴다.
 
 function ToolButton({
   title,
@@ -1024,7 +994,7 @@ export function RegionsPage() {
               <p className="strong">왼쪽에서 기관이나 마을을 고르세요.</p>
               <p className="dim">
                 기관은 폴더입니다 — 몇 단이든 만들 수 있고 권한은 이 트리를 따릅니다. 마을은 파일입니다 —
-                주소·좌표·구역·단말은 마을에만 있습니다.
+                주소·좌표·단말은 마을에만 있습니다.
               </p>
             </div>
           ) : selectedEntity.kind === 'village' ? (

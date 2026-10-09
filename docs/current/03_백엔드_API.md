@@ -136,9 +136,21 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 ### 2.3 로그아웃
 
-`POST /api/auth/logout` — 인증 불필요, `204`
+`POST /api/auth/logout` — 인증 필요(2026-10-09), `204`
 
-서버 토큰 blacklist는 없다. 클라이언트가 저장 토큰과 사용자 상태를 삭제해야 한다.
+서버 토큰 blacklist는 없다. 클라이언트가 저장 토큰과 사용자 상태를 삭제해야 한다. 서버는 그 계정의 가장 최근 열린 로그인 기록에 해지 시각을 적는다(문제점 65번).
+
+### 2.4 로그인 기록 (2026-10-09, 문제점 65번)
+
+`GET /api/auth/logins?page=&size=&q=` — 로그인 필요. 최고 관리자는 전부, 그 외는 자기 기록만. `size`는 10·20·50(그 외 10), `q`는 아이디·IP 부분 일치.
+
+```json
+{"total": 3, "page": 1, "size": 10, "items": [
+  {"id": 7, "user_id": 1, "username": "super", "ip": "203.0.113.7", "user_agent": "Mozilla/5.0 …",
+   "result": "ok", "logged_in_at": "…", "logged_out_at": null}]}
+```
+
+`result`: `ok` · `bad_password` · `unknown_user` · `expired`. 실패도 남긴다(무차별 대입 흔적). IP는 nginx가 넘기는 `X-Real-IP`(없으면 `X-Forwarded-For` 첫 값). 해지 시각은 「로그아웃」을 눌렀을 때만 채워진다. 보관 `LOGIN_RETENTION_DAYS`(기본 730일) — 매시간 정리 작업이 지운다.
 
 ## 3. 상태와 설정 API
 
@@ -724,6 +736,6 @@ wss://<host>/ingest?session=<broadcast_events.id>
 
 | 영역 | 현재 상태 | 구현 시 필요한 최소 범위 |
 |---|---|---|
-| 비용 | DB 모델과 외부 Slack script만 있음 | 일별 집계, Cost Explorer 결합, 조회 API |
+| 비용 | 메뉴·라우트에서 제거(2026-10-09, 문제점 77번). DB 모델과 외부 Slack script만 남음 | 다시 넣는다면 일별 집계, Cost Explorer 결합, 조회 API |
 
 새 API를 추가할 때는 현재 에러 envelope, JWT·scope 의존성, `target_ids` 규칙, 방송 service의 겹침 검사를 재사용한다.

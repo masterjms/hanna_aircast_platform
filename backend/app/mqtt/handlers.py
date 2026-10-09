@@ -321,6 +321,8 @@ async def handle_status(
         # 덮어써서 죽은 단말이 온라인으로 되살아난다.
         if buffer is not None:
             buffer.discard(mac)
+        # OTA 로 끊긴 단말이면 — 이제부터 오는 STATUS 가 재접속이다(문제점 60번 10/9).
+        device_service.note_lwt_for_ota(mac)
         await _touch_device(db, mac, payload=data, seen_at=None, merge_status=True)
         await _insert_device_event(
             db,

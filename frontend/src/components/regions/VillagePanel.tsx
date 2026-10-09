@@ -12,7 +12,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 
 import { ApiError, api } from '../../api/client';
-import type { Device, Village, VillageInput, Zone } from '../../api/types';
+import type { Device, Village, VillageInput } from '../../api/types';
+import { VillageIcon } from '../TreeIcons';
 import { AddressSearchField } from '../AddressSearchField';
 
 function coord(v: string): number | null {
@@ -58,9 +59,7 @@ export function VillagePanel({
   onDelete: () => void;
 }) {
   const [form, setForm] = useState<Form>(() => formOf(village));
-  const [zones, setZones] = useState<Zone[]>([]);
   const [devices, setDevices] = useState<Device[]>([]);
-  const [zoneName, setZoneName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -90,16 +89,10 @@ export function VillagePanel({
     let cancelled = false;
     void (async () => {
       try {
-        const [z, d] = await Promise.all([
-          api.villages.zones(village.id),
-          api.devices.list({ village_id: village.id }),
-        ]);
-        if (!cancelled) {
-          setZones(z);
-          setDevices(d);
-        }
+        const d = await api.devices.list({ village_id: village.id });
+        if (!cancelled) setDevices(d);
       } catch (err) {
-        if (!cancelled) fail(err, '구역·단말 목록을 불러오지 못했습니다.');
+        if (!cancelled) fail(err, '단말 목록을 불러오지 못했습니다.');
       }
     })();
     return () => {
@@ -127,33 +120,6 @@ export function VillagePanel({
       fail(err, '저장에 실패했습니다.');
     } finally {
       setBusy(false);
-    }
-  };
-
-  const addZone = async () => {
-    if (!zoneName.trim()) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.villages.createZone(village.id, { name: zoneName.trim() });
-      setZoneName('');
-      setZones(await api.villages.zones(village.id));
-    } catch (err) {
-      fail(err, '구역 추가에 실패했습니다.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const removeZone = async (z: Zone) => {
-    if (!window.confirm(`구역 "${z.name}" 을(를) 삭제할까요? 소속 단말은 마을에 그대로 남습니다.`))
-      return;
-    setError(null);
-    try {
-      await api.villages.removeZone(z.id);
-      setZones(await api.villages.zones(village.id));
-    } catch (err) {
-      fail(err, '구역 삭제에 실패했습니다.');
     }
   };
 
@@ -190,7 +156,6 @@ export function VillagePanel({
           unit="대"
           tone={village.device_count > 0 && village.online_count === 0 ? 'danger' : 'ok'}
         />
-        <Tile label="구역" value={zones.length} unit="개" />
         <div className="tile">
           <div className="tile__head">
             <span className="tile__label">village_id</span>
@@ -316,50 +281,6 @@ export function VillagePanel({
         </div>
       </section>
 
-      <section className="card detail__card">
-        <div className="detail__cardhead">
-          <h3 className="section-title">구역</h3>
-        </div>
-        <div className="filters" style={{ marginBottom: 10 }}>
-          <input
-            type="text"
-            placeholder="구역 이름 (예: 마을회관)"
-            value={zoneName}
-            onChange={(e) => setZoneName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void addZone()}
-            style={{ flex: 1 }}
-          />
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void addZone()}
-            disabled={busy || !zoneName.trim()}
-          >
-            추가
-          </button>
-        </div>
-        {zones.length === 0 ? (
-          <div className="empty empty--tight">구역이 없습니다. 없어도 마을 단위로 방송됩니다.</div>
-        ) : (
-          <ul className="plain-list">
-            {zones.map((z) => (
-              <li key={z.id}>
-                <span className="strong">{z.name}</span>
-                <span className="dim num">
-                  {z.device_count}대 · 온라인 {z.online_count}
-                </span>
-                <button
-                  type="button"
-                  className="btn btn--ghost btn--danger"
-                  onClick={() => void removeZone(z)}
-                >
-                  삭제
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
 
       <section className="card detail__card">
         <div className="detail__cardhead">
@@ -380,7 +301,6 @@ export function VillagePanel({
                   <th>MAC</th>
                   <th>별칭</th>
                   <th>상태</th>
-                  <th>구역</th>
                   <th>마지막 접속</th>
                 </tr>
               </thead>
@@ -390,7 +310,6 @@ export function VillagePanel({
                     <td className="mono">{d.mac}</td>
                     <td>{d.label ?? <span className="dim">—</span>}</td>
                     <td>{deviceBadge(d)}</td>
-                    <td>{d.zone_name ?? <span className="dim">—</span>}</td>
                     <td className="dim">
                       {d.last_seen_at ? new Date(d.last_seen_at).toLocaleString('ko-KR') : '—'}
                     </td>
@@ -432,13 +351,4 @@ export function Tile({
   );
 }
 
-export function VillageIcon() {
-  return (
-    <svg className="trow__svg" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path
-        d="M8 1.5c-2.5 0-4.5 2-4.5 4.5 0 3.2 4.5 8.5 4.5 8.5s4.5-5.3 4.5-8.5c0-2.5-2-4.5-4.5-4.5zm0 6.2a1.7 1.7 0 1 1 0-3.4 1.7 1.7 0 0 1 0 3.4z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
+export { VillageIcon } from '../TreeIcons';

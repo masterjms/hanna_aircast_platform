@@ -504,7 +504,9 @@ async def job_out(db: AsyncSession, event: BroadcastEvent) -> OtaJobOut:
     devices: list[OtaDeviceOut] = []
     for rec, dev in recipients:
         status: dict[str, Any] = (dev.last_status if dev is not None else None) or {}
-        p4, c6 = status.get("p4_fw"), status.get("c6_fw")
+        # STATUS 가 버전을 안 실으면 등록 때 적은 값으로(단말 목록과 같은 폴백, 60번 10/9 「-/-」).
+        p4 = status.get("p4_fw") or (dev.p4_version if dev is not None else None)
+        c6 = status.get("c6_fw") or (dev.c6_version if dev is not None else None)
         res = by_mac.get(rec.mac)
         devices.append(
             OtaDeviceOut(

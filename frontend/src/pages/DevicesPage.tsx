@@ -13,7 +13,8 @@ import { LocationPickerMap } from '../components/LocationPickerMap';
 import { Modal } from '../components/Modal';
 import { RegisterDeviceDialog } from '../components/RegisterDeviceDialog';
 import { provisioningFrame } from '../lib/serial';
-import type { Device, DeviceCredential, DeviceStatusFilter, Organization, Village, Zone } from '../api/types';
+import type { Device, DeviceCredential, DeviceStatusFilter, Organization, Village } from '../api/types';
+import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
 import { TargetTreePicker } from '../components/broadcast/TargetTreePicker';
 import { useAuth } from '../auth/AuthContext';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
@@ -61,9 +62,7 @@ function AssignDialog({
   onSaved: () => void;
 }) {
   const [villageId, setVillageId] = useState<number | ''>(device.village_id ?? '');
-  const [zoneId, setZoneId] = useState<number | ''>(device.zone_id ?? '');
   const [label, setLabel] = useState(device.label ?? '');
-  const [zones, setZones] = useState<Zone[]>([]);
   // 마을은 지역 트리에서 고른다(문제점 45번) — 마을이 수십 개면 드롭다운으로는 못 찾는다.
   // 기관 목록은 기관 관리자 이상만 받을 수 있다. 이장은 담당 마을만 뿌리로 보인다.
   const [orgs, setOrgs] = useState<Organization[]>([]);
@@ -108,22 +107,6 @@ function AssignDialog({
     };
   }, [loc.lat, jsKey]);
 
-  // 구역은 마을에 딸린 값이라 마을이 바뀌면 다시 불러온다.
-  useEffect(() => {
-    if (villageId === '') {
-      setZones([]);
-      return;
-    }
-    let alive = true;
-    api.villages
-      .zones(villageId)
-      .then((z) => alive && setZones(z))
-      .catch(() => alive && setZones([]));
-    return () => {
-      alive = false;
-    };
-  }, [villageId]);
-
   const save = async () => {
     setBusy(true);
     setError(null);
@@ -131,8 +114,8 @@ function AssignDialog({
       await api.devices.update(device.mac, {
         label: label.trim() || null,
         village_id: villageId === '' ? null : villageId,
-        // 마을을 바꾸면 이전 마을의 구역은 남아 있을 수 없다.
-        zone_id: villageId === '' ? null : zoneId === '' ? null : zoneId,
+        // 구역은 화면에서 뺐다(문제점 78번) — 배정을 바꾸면 비운다.
+        zone_id: null,
         road_address: loc.road_address,
         jibun_address: loc.jibun_address,
         address_detail: addressDetail.trim() || null,
@@ -177,10 +160,7 @@ function AssignDialog({
             <button
               type="button"
               className="btn btn--sm btn--ghost"
-              onClick={() => {
-                setVillageId('');
-                setZoneId('');
-              }}
+              onClick={() => setVillageId('')}
             >
               배정 해제
             </button>
@@ -199,7 +179,6 @@ function AssignDialog({
           onChange={(next) => {
             const id = next.leaves[0];
             setVillageId(id === undefined ? '' : Number(id));
-            setZoneId('');
           }}
           renderCount={(online, total) => (
             <span className={online > 0 ? 'dim' : 'count--none'}>
@@ -208,23 +187,6 @@ function AssignDialog({
           )}
         />
         <p className="hint">기관을 펼쳐 마을을 하나 고릅니다. 단말이 없는 마을도 고를 수 있습니다.</p>
-      </div>
-
-      <div className="field">
-        <label htmlFor="a-zone">구역 (선택)</label>
-        <select
-          id="a-zone"
-          value={zoneId}
-          disabled={villageId === ''}
-          onChange={(e) => setZoneId(e.target.value === '' ? '' : Number(e.target.value))}
-        >
-          <option value="">지정 안 함</option>
-          {zones.map((z) => (
-            <option key={z.id} value={z.id}>
-              {z.name}
-            </option>
-          ))}
-        </select>
       </div>
 
       <div className="field">
@@ -557,12 +519,11 @@ function DeviceTable({
   return (
     <table>
       <thead>
-        {/* 열 순서는 문제점 49번(2026-10-03): 별칭-마을-MAC-구역-상태-RSSI-CFG-마지막 통신-버전-버튼 */}
+        {/* 열 순서는 문제점 49번(2026-10-03): 별칭-마을-MAC-상태-RSSI-CFG-마지막 통신-버전-버튼. 구역 열은 뺐다(78번) */}
         <tr>
           <th>별칭</th>
           {showVillage && <th>마을</th>}
           <th className="mono">MAC</th>
-          <th>구역</th>
           <th>상태</th>
           <th className="num">RSSI</th>
           <th className="num">CFG</th>
@@ -592,7 +553,6 @@ function DeviceTable({
                 </span>
               )}
             </td>
-            <td>{d.zone_name ?? '—'}</td>
             <td>
               {/* RECONNECTING = 방송은 살아 있는데 스피커가 무음(사양 §5) — 경고색으로 */}
               <span
@@ -666,6 +626,9 @@ export function DevicesPage() {
     [villageId, statusFilter, search],
   );
 
+  // 목록 공통 쪽 넘기기(문제점 64번) — 10·20·50건씩, 처음·이전·다음·끝.
+  const pager = usePager(devices.data ?? []);
+
   // 미배정은 super_admin 만 본다. 마을 필터가 걸려 있으면 의미가 없으므로 숨긴다.
   const showUnassigned = isSuperAdmin && villageId === '' && statusFilter === '';
   const unassigned = usePolling(
@@ -724,6 +687,7 @@ export function DevicesPage() {
           onChange={(e) => setSearch(e.target.value)}
           style={{ minWidth: 240 }}
         />
+        <PageSizeSelect value={pager.size} onChange={pager.setSize} />
       </div>
 
       {devices.error && (
@@ -737,7 +701,7 @@ export function DevicesPage() {
           <div className="empty">불러오는 중…</div>
         ) : (
           <DeviceTable
-            devices={devices.data ?? []}
+            devices={pager.rows}
             showVillage={(user?.villages.length ?? 0) > 1}
             onAssign={setAssigning}
             onCredential={isSuperAdmin ? setCredentialFor : undefined}
@@ -745,6 +709,7 @@ export function DevicesPage() {
           />
         )}
       </div>
+      {pager.total > 0 && <PagerBar total={pager.total} page={pager.page} pages={pager.pages} onPage={pager.setPage} unit="대" />}
 
       {showUnassigned && (unassigned.data?.length ?? 0) > 0 && (
         <section className="unassigned">

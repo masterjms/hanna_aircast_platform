@@ -80,6 +80,25 @@ export interface Me {
   must_change_password: boolean;
 }
 
+/** 로그인 기록 한 줄(문제점 65번). result: ok · bad_password · unknown_user · expired */
+export interface LoginEvent {
+  id: number;
+  user_id: number | null;
+  username: string;
+  ip: string | null;
+  user_agent: string | null;
+  result: string;
+  logged_in_at: string;
+  logged_out_at: string | null;
+}
+
+export interface LoginEventPage {
+  total: number;
+  page: number;
+  size: number;
+  items: LoginEvent[];
+}
+
 export interface LoginResponse {
   access_token: string;
   token_type: string;
