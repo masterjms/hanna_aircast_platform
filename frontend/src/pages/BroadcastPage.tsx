@@ -61,7 +61,7 @@ const MAX_TEXT = 1000;
 const PHRASES = [
   '주민 여러분께 알려드립니다.',
   '다시 한번 알려드립니다.',
-  '이상 마을회관에서 알려드렸습니다.',
+  '이상 회관에서 알려드렸습니다.',
 ];
 
 /** 대상 대수 표시. 방송은 온라인 단말에만 나가므로 꺼진 단말이 있으면 눈에 띄게 한다. */
@@ -421,7 +421,7 @@ export function BroadcastPage() {
 
   const targetText =
     scope === 'all'
-      ? '모든 마을'
+      ? '모든 지역'
       : selectionLabels.length === 0
         ? ''
         : `${selectionLabels.slice(0, 3).join(', ')}${selectionLabels.length > 3 ? ` 외 ${selectionLabels.length - 3}곳` : ''}`;
@@ -453,7 +453,7 @@ export function BroadcastPage() {
     if (method === 'mic' && micBlocked) return { step: 1, text: micBlocked };
     if (effectiveWhen === 'reserve') {
       if (!reservable)
-        return { step: 2, text: '전체 방송은 예약할 수 없습니다. ②에서 마을이나 단말을 골라 주세요.' };
+        return { step: 2, text: '전체 방송은 예약할 수 없습니다. ②에서 지역이나 단말을 골라 주세요.' };
       if (kind === 'weekly' && weekdays.length === 0) return { step: 4, text: '④ 요일을 골라 주세요.' };
       if (kind === 'once' && !onceDate) return { step: 4, text: '④ 날짜를 골라 주세요.' };
       // 지난 시각이면 서버도 막지만 문구가 막연하다 — 여기서 먼저 알린다.
@@ -722,7 +722,7 @@ export function BroadcastPage() {
             <div className="bc-where">
               <div className="bc-where__now">
                 {scope === 'all' ? (
-                  <strong>모든 마을</strong>
+                  <strong>모든 지역</strong>
                 ) : targetText ? (
                   <strong>{targetText}</strong>
                 ) : (
@@ -740,7 +740,7 @@ export function BroadcastPage() {
                   {/* 구역 단위는 화면에서 뺐다(문제점 78번). */}
                   {(['village', 'device', ...(isSuperAdmin ? ['all' as const] : [])] as TargetScope[]).map((s) => (
                     <button key={s} type="button" aria-pressed={scope === s} onClick={() => setScope(s)}>
-                      {s === 'village' ? '마을' : s === 'device' ? '단말 하나하나' : '모든 마을'}
+                      {s === 'village' ? '지역' : s === 'device' ? '단말 하나하나' : '모든 지역'}
                     </button>
                   ))}
                 </div>
@@ -757,7 +757,7 @@ export function BroadcastPage() {
                     renderCount={(online, total) => <DeviceCount online={online} total={total} />}
                   />
                 ) : (
-                  <p className="hint hint--warn">배정된 모든 마을의 켜진 단말에 나갑니다. 대상이 넓으니 내용을 다시 확인하세요.</p>
+                  <p className="hint hint--warn">배정된 모든 지역의 켜진 단말에 나갑니다. 대상이 넓으니 내용을 다시 확인하세요.</p>
                 )}
               </div>
             )}
@@ -801,7 +801,7 @@ export function BroadcastPage() {
                   </div>
                   <div>
                     <div className="bc-live__state">
-                      {mic.state === 'live' ? '말씀하세요 — 마을에 나가고 있습니다' : mic.state === 'connecting' ? '마이크 연결 중…' : '마이크 오류'}
+                      {mic.state === 'live' ? '말씀하세요 — 지역에 나가고 있습니다' : mic.state === 'connecting' ? '마이크 연결 중…' : '마이크 오류'}
                     </div>
                     <div className="dim" title={`Opus 16 kHz · mono · ${liveBitrateKbps} kbps · 40 ms`}>
                       막대가 움직이지 않으면 마이크 소리가 들어가지 않는 것입니다.
@@ -851,7 +851,7 @@ export function BroadcastPage() {
                       rows={5}
                       value={text}
                       onChange={(e) => setText(e.target.value)}
-                      placeholder="예) 주민 여러분께 알려드립니다. 오늘 오후 두 시에 마을회관에서 반상회가 있겠습니다."
+                      placeholder="예) 주민 여러분께 알려드립니다. 오늘 오후 두 시에 회관에서 반상회가 있겠습니다."
                     />
                     <span className={`bc-textwrap__count ${text.length > MAX_TEXT ? 'count--none' : 'dim'}`}>
                       {text.length} / {MAX_TEXT}자
@@ -1032,11 +1032,11 @@ export function BroadcastPage() {
                 <span className="bc-go__missing">{missing}</span>
               ) : method === 'mic' ? (
                 <>
-                  <strong>{targetText || '모든 마을'}</strong>(켜진 단말 {onlineTargets}대)에 <strong>마이크로 말하는 내용</strong>을 지금 바로 방송합니다.
+                  <strong>{targetText || '모든 지역'}</strong>(켜진 단말 {onlineTargets}대)에 <strong>마이크로 말하는 내용</strong>을 지금 바로 방송합니다.
                 </>
               ) : (
                 <>
-                  <strong>{targetText || '모든 마을'}</strong>(켜진 단말 {onlineTargets}대)에{' '}
+                  <strong>{targetText || '모든 지역'}</strong>(켜진 단말 {onlineTargets}대)에{' '}
                   <strong>{method === 'tts' ? '적은 글' : `「${selectedFile?.filename.replace(/\.mp3$/i, '')}」`}</strong>
                   {method === 'tts' ? '을' : '을(를)'}{' '}
                   <strong>{whenText}</strong> 방송합니다.

@@ -12,6 +12,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    SmallInteger,
     String,
     false,
     func,
@@ -141,6 +142,15 @@ class User(Base):
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    #: 마지막으로 비밀번호를 정한 시각(0027). 기간이 지나면 로그인 때 변경을 강제한다.
+    password_changed_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    #: 연속 로그인 실패 수와 잠금 해제 시각(0027, 문제점 70번 ②).
+    failed_login_count: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default="0"
+    )
+    locked_until: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
     def is_expired(self, now: dt.datetime | None = None) -> bool:
         if self.expires_at is None:

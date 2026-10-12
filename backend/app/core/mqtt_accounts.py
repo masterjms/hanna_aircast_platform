@@ -124,7 +124,7 @@ def render_acl(device_villages: dict[str, str | None]) -> str:
     """
     lines = [
         "# 자동 생성 파일 — 손대지 말 것. 정본은 서버 DB 다.",
-        "# 등록·삭제·마을 배정 변경 때마다 통째로 다시 만든다 (app/core/mqtt_accounts.py).",
+        "# 등록·삭제·지역 배정 변경 때마다 통째로 다시 만든다 (app/core/mqtt_accounts.py).",
         "",
         "# 서버 계정 — cmd/config 발행은 여기서만 한다.",
         f"user {settings.mqtt_username or 'xwifi-server'}",
@@ -140,7 +140,7 @@ def render_acl(device_villages: dict[str, str | None]) -> str:
         "pattern read  iotradio/device/%u/cmd",
         "pattern read  iotradio/device/%u/config",
         "",
-        "# 마을 명령 — 단말마다 배정된 마을 하나만. 와일드카드를 쓰지 않는다.",
+        "# 지역 명령 — 단말마다 배정된 지역 하나만. 와일드카드를 쓰지 않는다.",
     ]
     for mac in sorted(device_villages):
         village_id = device_villages[mac]

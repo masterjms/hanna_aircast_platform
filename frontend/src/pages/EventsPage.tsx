@@ -142,7 +142,7 @@ export function EventsPage() {
         <div className="filters__spacer" />
         <input
           type="search"
-          placeholder="단말 별칭 · MAC · 마을 · 파일 이름"
+          placeholder="단말 별칭 · MAC · 지역 · 파일 이름"
           value={q}
           onChange={(e) => setQ(e.target.value)}
           style={{ minWidth: 260 }}
@@ -167,7 +167,7 @@ export function EventsPage() {
                 <th>시작</th>
                 <th>종료</th>
                 <th>대상 단말</th>
-                <th>마을</th>
+                <th>지역</th>
                 <th>판정</th>
                 <th>응답</th>
               </tr>

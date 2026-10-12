@@ -151,7 +151,7 @@ function AssignDialog({
       </p>
 
       <div className="field">
-        <label>마을</label>
+        <label>지역</label>
         <div className="assign-village">
           <span className={pickedVillage ? 'strong' : 'dim'}>
             {pickedVillage ? pickedVillage.name : '미배정'}
@@ -186,7 +186,7 @@ function AssignDialog({
             </span>
           )}
         />
-        <p className="hint">기관을 펼쳐 마을을 하나 고릅니다. 단말이 없는 마을도 고를 수 있습니다.</p>
+        <p className="hint">기관을 펼쳐 지역을 하나 고릅니다. 단말이 없는 지역도 고를 수 있습니다.</p>
       </div>
 
       <div className="field">
@@ -201,7 +201,7 @@ function AssignDialog({
       </div>
 
       <p className="hint">
-        마을을 배정하면 서버가 CONFIG 로 단말에 알려주고, 단말이 그 마을 방송을 구독합니다.
+        지역을 배정하면 서버가 CONFIG 로 단말에 알려주고, 단말이 그 지역 방송을 구독합니다.
         단말 STATUS 에 반영되는 데 몇 초 걸립니다.
       </p>
 
@@ -253,7 +253,7 @@ function AssignDialog({
         />
       </div>
       <p className="hint">
-        위치를 비워 두면 지도에서 마을 좌표 자리에 표시됩니다. 입력하면 그 집 위치에 찍힙니다.
+        위치를 비워 두면 지도에서 지역 좌표 자리에 표시됩니다. 입력하면 그 집 위치에 찍힙니다.
       </p>
 
       {error && <p className="hint hint--warn">{error}</p>}
@@ -477,7 +477,7 @@ function DeleteDialog({
         {device.mac} {device.label && `(${device.label})`}
       </p>
       <p className="hint hint--warn">
-        DB 기록·MQTT 계정·마을 배정이 함께 삭제되며 되돌릴 수 없습니다. 이 단말은 더 이상
+        DB 기록·MQTT 계정·지역 배정이 함께 삭제되며 되돌릴 수 없습니다. 이 단말은 더 이상
         브로커에 접속할 수 없게 됩니다(도난·폐기 단말 차단 수단). 다시 쓰려면 신규 단말
         등록부터 다시 해야 합니다.
       </p>
@@ -522,7 +522,7 @@ function DeviceTable({
         {/* 열 순서는 문제점 49번(2026-10-03): 별칭-마을-MAC-상태-RSSI-CFG-마지막 통신-버전-버튼. 구역 열은 뺐다(78번) */}
         <tr>
           <th>별칭</th>
-          {showVillage && <th>마을</th>}
+          {showVillage && <th>지역</th>}
           <th className="mono">MAC</th>
           <th>상태</th>
           <th className="num">RSSI</th>
@@ -650,9 +650,9 @@ export function DevicesPage() {
         <select
           value={villageId}
           onChange={(e) => setVillageId(e.target.value === '' ? '' : Number(e.target.value))}
-          aria-label="마을"
+          aria-label="지역"
         >
-          <option value="">{user?.all_villages ? '전체 마을' : '담당 마을 전체'}</option>
+          <option value="">{user?.all_villages ? '전체 지역' : '담당 지역 전체'}</option>
           {(villages.data ?? []).map((v) => (
             <option key={v.id} value={v.id}>
               {v.name} ({v.device_count})
@@ -718,7 +718,7 @@ export function DevicesPage() {
             <span className="badge badge--warn badge--plain">{unassigned.data?.length}</span>
           </div>
           <p className="unassigned__desc">
-            STATUS 를 보내와 자동 등록됐지만 아직 마을이 지정되지 않은 단말입니다. 마을을 배정하면
+            STATUS 를 보내와 자동 등록됐지만 아직 지역이 지정되지 않은 단말입니다. 지역을 배정하면
             서버가 CONFIG 로 단말에 알려줍니다.
           </p>
           <div className="table-wrap table-wrap--scroll" style={{ marginTop: 14 }}>

@@ -35,6 +35,9 @@ interface AuthState {
 
 const AuthContext = createContext<AuthState | null>(null);
 
+/** 미사용 자동 로그아웃 시간(문제점 70번 ③). */
+const IDLE_LOGOUT_MS = 30 * 60_000;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,6 +84,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
     }
   }, []);
+
+  // 30분 동안 마우스·키보드·터치가 없으면 로그아웃한다(문제점 70번 ③, 공공 납품 요건).
+  // 화면이 스스로 하는 폴링은 「사용」이 아니다 — 사람의 입력만 센다. 탭 여러 개는 localStorage 로 맞춘다.
+  useEffect(() => {
+    if (!user) return;
+    const KEY = 'xwifi.lastActive';
+    const mark = () => {
+      try {
+        localStorage.setItem(KEY, String(Date.now()));
+      } catch {
+        /* 저장소를 못 쓰면 이 탭 기준으로만 */
+      }
+      lastLocal = Date.now();
+    };
+    let lastLocal = Date.now();
+    mark();
+    const events = ['mousedown', 'keydown', 'wheel', 'touchstart', 'mousemove'] as const;
+    let throttle = 0;
+    const onAct = () => {
+      const now = Date.now();
+      if (now - throttle > 15_000) {
+        throttle = now;
+        mark();
+      }
+    };
+    events.forEach((ev) => window.addEventListener(ev, onAct, { passive: true }));
+    const id = window.setInterval(() => {
+      let last = lastLocal;
+      try {
+        last = Math.max(last, Number(localStorage.getItem(KEY) ?? 0));
+      } catch {
+        /* 무시 */
+      }
+      if (Date.now() - last > IDLE_LOGOUT_MS) {
+        try {
+          sessionStorage.setItem('xwifi.logoutReason', '30분 동안 사용하지 않아 자동으로 로그아웃했습니다.');
+        } catch {
+          /* 무시 */
+        }
+        void logout();
+      }
+    }, 30_000);
+    return () => {
+      events.forEach((ev) => window.removeEventListener(ev, onAct));
+      window.clearInterval(id);
+    };
+  }, [user, logout]);
 
   const value = useMemo<AuthState>(
     () => ({

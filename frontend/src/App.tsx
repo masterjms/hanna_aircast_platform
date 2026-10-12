@@ -40,8 +40,8 @@ const PAGE_TITLES: Record<string, [string, string]> = {
   '/events': ['방송 기록', '단말별 수신 결과'],
   '/schedules': ['예약 방송', '예약 목록 · 예정표'],
   '/ota': ['OTA 관리', '펌웨어 패키지 · 배포 · 적용 확인'],
-  '/settings': ['설정', '전 단말 공통 CONFIG'],
-  '/regions': ['지역 관리', '기관 트리 · 마을 · 단말'],
+  '/settings': ['환경 설정', '전 단말 공통 CONFIG'],
+  '/regions': ['지역 관리', '기관 트리 · 지역 · 단말'],
   '/users': ['계정 관리', '관리자 계정과 범위'],
 };
 

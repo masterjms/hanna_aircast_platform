@@ -55,6 +55,34 @@ class InvalidCredentials(Unauthorized):
     message = "아이디 또는 비밀번호가 올바르지 않습니다."
 
 
+class AccountLocked(Unauthorized):
+    """연속 실패로 잠긴 계정(문제점 70번 ②). 잠금 시각이 지나면 저절로 풀린다."""
+
+    code = "ACCOUNT_LOCKED"
+    message = (
+        "비밀번호를 여러 번 틀려 잠시 잠긴 계정입니다. "
+        "잠시 후 다시 시도하거나 관리자에게 문의하세요."
+    )
+
+
+class PasswordPolicy(ApiError):
+    code = "PASSWORD_POLICY"
+    message = "비밀번호 규칙에 맞지 않습니다."
+
+
+class ConfirmPasswordRequired(ApiError):
+    """지우기·계정 추가처럼 되돌릴 수 없는 일의 마지막 확인(문제점 83·84번)."""
+
+    code = "CONFIRM_PASSWORD_REQUIRED"
+    message = "확인을 위해 내 비밀번호를 입력해 주세요."
+
+
+class ConfirmPasswordWrong(ApiError):
+    status_code = status.HTTP_403_FORBIDDEN
+    code = "CONFIRM_PASSWORD_WRONG"
+    message = "비밀번호가 맞지 않습니다."
+
+
 class AccountExpired(Unauthorized):
     """사용 기간이 끝난 계정(문제점 26번). 정리 작업이 지우기 전에도 막는다."""
 
@@ -99,7 +127,7 @@ class OrganizationOutOfScope(Forbidden):
 
 class VillageOutOfScope(Forbidden):
     code = "VILLAGE_OUT_OF_SCOPE"
-    message = "담당 마을이 아닙니다."
+    message = "담당 지역이 아닙니다."
 
 
 # ── 404 ──────────────────────────────────────────────────────────────────
@@ -116,7 +144,7 @@ class DeviceNotFound(NotFound):
 
 class VillageNotFound(NotFound):
     code = "VILLAGE_NOT_FOUND"
-    message = "존재하지 않는 마을입니다."
+    message = "존재하지 않는 지역입니다."
 
 
 class ZoneNotFound(NotFound):
@@ -143,7 +171,7 @@ class Conflict(ApiError):
 
 class OrganizationInUse(Conflict):
     code = "ORGANIZATION_IN_USE"
-    message = "소속 마을이나 계정이 있는 기관은 삭제할 수 없습니다. 먼저 옮기거나 지우세요."
+    message = "소속 지역이나 계정이 있는 기관은 삭제할 수 없습니다. 먼저 옮기거나 지우세요."
 
 
 class ScheduleTargetInUse(Conflict):

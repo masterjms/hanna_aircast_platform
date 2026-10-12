@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 
 import { ApiError } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
@@ -9,7 +9,22 @@ export function LoginPage() {
   const { login } = useAuth();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => {
+    // 자동 로그아웃 사유(문제점 70번 ③). 지우기는 아래 effect 에서 — 초기화 함수에서 지우면 개발 모드의
+    // 두 번 호출에 메시지가 사라진다.
+    try {
+      return sessionStorage.getItem('xwifi.logoutReason');
+    } catch {
+      return null;
+    }
+  });
+  useEffect(() => {
+    try {
+      sessionStorage.removeItem('xwifi.logoutReason');
+    } catch {
+      /* 무시 */
+    }
+  }, []);
   const [busy, setBusy] = useState(false);
 
   const onSubmit = async (e: FormEvent) => {
@@ -33,7 +48,7 @@ export function LoginPage() {
         </div>
 
         <form className="login__card" onSubmit={onSubmit}>
-          <h1 className="login__title">마을방송 관제 로그인</h1>
+          <h1 className="login__title">IoT 방송 관제 로그인</h1>
           <p className="login__sub">운영서버 관리자 계정으로 접속합니다.</p>
 
           {error && (
@@ -71,7 +86,7 @@ export function LoginPage() {
             {busy ? '확인 중…' : '로그인'}
           </button>
 
-          <div className="login__foot">HANNA ELECTRONICS · 마을방송 운영서버</div>
+          <div className="login__foot">HANNA ELECTRONICS · IoT 방송 운영서버</div>
         </form>
         <LegalLinks className="legal-links--login" />
       </div>

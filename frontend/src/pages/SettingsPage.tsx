@@ -247,7 +247,7 @@ export function SettingsPage() {
     <>
       <div className="page-head">
         <h1>
-          설정
+          환경 설정
           <HelpTip label="저장하면 어떻게 되나요">
             <strong>단말 공통 CONFIG</strong>를 바꾸면 config_version 이 올라가고 서버가 MQTT
             CONFIG(retain)를 다시 발행합니다. 단말은 버전이 바뀔 때만 값을 적용하고 STATUS 로

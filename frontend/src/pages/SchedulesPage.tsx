@@ -60,7 +60,15 @@ export function SchedulesPage() {
   const fail = (err: unknown, fallback: string) =>
     setError(err instanceof ApiError ? err.message : fallback);
 
+  const [quota, setQuota] = useState<{
+    total: number;
+    total_max: number;
+    mine: number;
+    mine_max: number | null;
+    per_minute_max: number;
+  } | null>(null);
   const load = useCallback(async () => {
+    void api.schedules.quota().then(setQuota).catch(() => setQuota(null));
     try {
       const from = startOfTodayKst();
       const to = new Date(from.getTime() + WEEK_DAYS * 86_400_000);
@@ -115,9 +123,22 @@ export function SchedulesPage() {
           <h1>예약 방송</h1>
           <p>자동방송 규칙 {schedules.length}개 · 시각은 한국 시간입니다.</p>
         </div>
-        <button type="button" className="btn btn--primary" onClick={() => setWizard({ open: true })}>
-          예약 추가하기
-        </button>
+        <div className="page-head__side">
+          {/* 개수·상한(문제점 67번) — 계정 상한은 최고 관리자에게 없다 */}
+          {quota && (
+            <span className="quota" title={`같은 시각(분)에는 최대 ${quota.per_minute_max}건까지 예약할 수 있습니다.`}>
+              {quota.mine_max !== null && (
+                <>
+                  내 예약 <b>{quota.mine}</b>/{quota.mine_max} ·{' '}
+                </>
+              )}
+              전체 <b>{quota.total}</b>/{quota.total_max.toLocaleString('ko-KR')}
+            </span>
+          )}
+          <button type="button" className="btn btn--primary" onClick={() => setWizard({ open: true })}>
+            예약 추가하기
+          </button>
+        </div>
       </div>
 
       {error && (

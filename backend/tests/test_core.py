@@ -1418,7 +1418,7 @@ class TestTargetLabel:
 
         # scope=all 은 id 가 없어 DB 를 보지 않는다 — 화면에 영문 "all" 대신
         # 한글이 나가야 한다.
-        assert await describe_targets(None, [("all", [])]) == ["모든 마을"]
+        assert await describe_targets(None, [("all", [])]) == ["모든 지역"]  # 문제점 71번
 
     @pytest.mark.asyncio
     async def test_empty_target_is_blank(self):
@@ -2610,6 +2610,73 @@ class TestOtaRebootGate:
         ds.mark_ota_rebooting("cc")
         now[0] += 601
         assert ds.drop_status_during_ota_reboot("cc", "OTA") is False  # 너무 오래 — 표시 소멸
+
+
+class TestPasswordPolicy:
+    """문제점 70번 ②: 3종 8자 또는 2종 10자."""
+
+    def test_rule(self):
+        from app.core.security import password_ok
+
+        assert password_ok("Abcdef1!") and password_ok("abcdefgh12")
+        assert not password_ok("abcdefgh1") and not password_ok("abcdefghij")
+        assert not password_ok("Ab1!") and password_ok("ABCdef123")
+
+    def test_temp_password_obeys_rule(self):
+        from app.core.security import password_ok
+        from app.modules.org.service import generate_temp_password
+
+        assert all(password_ok(generate_temp_password()) for _ in range(200))
+
+    def test_lock_settings(self):
+        from app.config import Settings
+
+        f = Settings.model_fields
+        assert f["login_lock_threshold"].default == 5 and f["login_lock_minutes"].default == 30
+        assert f["password_max_age_days"].default == 90
+
+
+class TestConfirmPassword:
+    """문제점 83·84번: 계정 추가·삭제, 파일 삭제는 내 비밀번호가 맞아야 한다."""
+
+    def test_check(self):
+        from types import SimpleNamespace
+
+        import pytest
+
+        from app.core.deps import check_confirm_password
+        from app.core.security import hash_password
+        from app.errors import ConfirmPasswordRequired, ConfirmPasswordWrong
+
+        u = SimpleNamespace(password_hash=hash_password("Pw-한글-1234"))
+        check_confirm_password(u, "Pw-%ED%95%9C%EA%B8%80-1234")  # 퍼센트 인코딩 해제
+        with pytest.raises(ConfirmPasswordRequired):
+            check_confirm_password(u, None)
+        with pytest.raises(ConfirmPasswordWrong):
+            check_confirm_password(u, "nope")
+
+    def test_routes_require_it(self):
+        import inspect
+
+        from app.modules.file import router as file_router
+        from app.modules.org import router as org_router
+
+        assert "PasswordConfirmed" in inspect.getsource(org_router.create_user)
+        assert "PasswordConfirmed" in inspect.getsource(org_router.delete_user)
+        assert "check_confirm_password" in inspect.getsource(file_router.delete_file)
+
+
+class TestScheduleQuota:
+    def test_limits(self):
+        from app.constants import SCHEDULE_MAX, SCHEDULE_MAX_PER_MINUTE, SCHEDULE_MAX_PER_USER
+
+        assert (SCHEDULE_MAX, SCHEDULE_MAX_PER_USER, SCHEDULE_MAX_PER_MINUTE) == (2000, 100, 100)
+
+    def test_quota_route_before_id_route(self):
+        from app.modules.schedule.router import router
+
+        paths = [getattr(r, "path", "") for r in router.routes]
+        assert paths.index("/api/schedules/quota") < paths.index("/api/schedules/{schedule_id}")
 
 
 class TestLoginHistory:

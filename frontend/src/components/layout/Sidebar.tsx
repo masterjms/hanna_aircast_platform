@@ -14,6 +14,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { ROLE_LABEL } from '../../lib/roles';
 import { LegalLinks } from '../../pages/legal/LegalLayout';
 import { Logo } from '../Logo';
+import { NAV_ICONS } from './NavIcons';
 
 interface MenuItem {
   to: string;
@@ -41,7 +42,7 @@ const OPERATION: MenuItem[] = [
 
 const ADMIN: MenuItem[] = [
   { to: '/ota', label: 'OTA 관리', minRole: 'super_admin' },
-  { to: '/settings', label: '설정', minRole: 'super_admin' },
+  { to: '/settings', label: '환경 설정', minRole: 'super_admin' },
   { to: '/regions', label: '지역 관리', minRole: 'org_admin' },
   { to: '/users', label: '계정 관리', minRole: 'org_admin' },
 ];
@@ -62,7 +63,13 @@ function MenuLinks({ items, atLeast }: { items: MenuItem[]; atLeast: (r: Role) =
               `navlink${item.primary ? ' navlink--primary' : ''}${isActive ? ' active' : ''}`
             }
           >
-            <span>{item.label}</span>
+            {item.primary ? (
+              // 방송하기 — 특별한 버튼(문제점 85번 ①): 빨간 「ON AIR」 점 + 파란 그라데이션
+              <span className="navlink__onair" aria-hidden="true" />
+            ) : (
+              NAV_ICONS[item.to]?.()
+            )}
+            <span className="navlink__label">{item.label}</span>
             {item.pending && <span className="navlink__tag">준비</span>}
           </NavLink>
         ))}
@@ -76,12 +83,12 @@ export function Sidebar() {
   // 기관 관리자는 기관 이름이 범위를 가장 잘 설명한다. 마을 수십 개를 나열하면
   // 카드가 넘친다.
   const scopeLabel = user?.all_villages
-    ? `전체 ${user.villages.length}개 마을`
+    ? `전체 ${user.villages.length}개 지역`
     : user?.organization_name
-      ? `${user.organization_name} · ${user.villages.length}개 마을`
+      ? `${user.organization_name} · ${user.villages.length}개 지역`
       : user && user.villages.length > 0
         ? user.villages.map((v) => v.name).join(', ')
-        : '담당 마을 없음';
+        : '담당 지역 없음';
 
   return (
     <aside className="sidebar">
@@ -96,10 +103,10 @@ export function Sidebar() {
       </div>
 
       <nav className="sidebar__nav">
-        <div className="sidebar__section">운영</div>
+        <div className="sidebar__section">운영 관리</div>
         <MenuLinks items={OPERATION} atLeast={atLeast} />
         {/* 이장님은 관리 메뉴가 하나도 없다 — 빈 제목만 남기지 않는다. */}
-        {atLeast('org_admin') && <div className="sidebar__section">관리</div>}
+        {atLeast('org_admin') && <div className="sidebar__section">시스템 관리</div>}
         <MenuLinks items={ADMIN} atLeast={atLeast} />
       </nav>
 

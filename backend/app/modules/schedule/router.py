@@ -36,7 +36,20 @@ async def create_schedule(
     payload: ScheduleCreate, db: Db, user: CurrentUser, scope: Scope, org_ids: OrgIds
 ) -> ScheduleOut:
     return await service.create_schedule(
-        db, payload, actor_id=user.id, scope=scope, org_ids=org_ids
+        db,
+        payload,
+        actor_id=user.id,
+        scope=scope,
+        org_ids=org_ids,
+        per_user_limited=user.role != "super_admin",
+    )
+
+
+@router.get("/quota")
+async def schedule_quota(db: Db, user: CurrentUser) -> dict:
+    """예약 개수·상한(문제점 67번). 최고 관리자는 계정 상한이 없다(mine_max=null)."""
+    return await service.quota(
+        db, actor_id=user.id, per_user_limited=user.role != "super_admin"
     )
 
 

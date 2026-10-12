@@ -79,7 +79,7 @@ export function ChangePasswordPage() {
               value={next}
               onChange={(e) => setNext(e.target.value)}
             />
-            <p className="hint">8자 이상 64자 이하</p>
+            <p className="hint">영문 대·소문자·숫자·특수문자 중 3종 이상 8자 이상, 또는 2종 이상 10자 이상. 90일마다 바꿉니다.</p>
           </div>
 
           <div className="field">

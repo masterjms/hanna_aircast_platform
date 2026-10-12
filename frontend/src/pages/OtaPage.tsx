@@ -135,7 +135,7 @@ export function OtaPage() {
 
   const start = async () => {
     if (!pkg || picked.length !== 1) return;
-    const what = mode === 'village' ? `마을 「${targetName}」의 켜진 단말 ${onlineInTarget}대` : `단말 「${targetName}」`;
+    const what = mode === 'village' ? `지역 「${targetName}」의 켜진 단말 ${onlineInTarget}대` : `단말 「${targetName}」`;
     if (!window.confirm(`${what}에 펌웨어 ${pkg.version} 을 보냅니다.\n단말은 다운로드·검증 뒤 스스로 재부팅합니다. 진행할까요?`)) return;
     setStarting(true);
     setError(null);
@@ -283,10 +283,10 @@ export function OtaPage() {
 
         {/* ② 배포 */}
         <section className="card ota__card">
-          <StepTitle n={2}>어디에 보낼까요? — 마을 하나 또는 단말 하나</StepTitle>
+          <StepTitle n={2}>어디에 보낼까요? — 지역 하나 또는 단말 하나</StepTitle>
           <div className="bc-seg ota__seg" role="group" aria-label="대상 단위">
             <button type="button" aria-pressed={mode === 'village'} onClick={() => setMode('village')}>
-              마을 하나
+              지역 하나
             </button>
             <button type="button" aria-pressed={mode === 'device'} onClick={() => setMode('device')}>
               단말 하나
@@ -311,7 +311,7 @@ export function OtaPage() {
               {!pkg ? (
                 <span className="dim">① 에서 패키지를 「배포에 쓰기」로 고르세요.</span>
               ) : !targetName ? (
-                <span className="dim">위 트리에서 {mode === 'village' ? '마을' : '단말'} 하나를 고르세요.</span>
+                <span className="dim">위 트리에서 {mode === 'village' ? '지역' : '단말'} 하나를 고르세요.</span>
               ) : onlineInTarget === 0 ? (
                 <span className="count--none">「{targetName}」에 켜진 단말이 없어 보낼 수 없습니다.</span>
               ) : (
@@ -383,7 +383,7 @@ export function OtaPage() {
                         <thead>
                           <tr>
                             <th>단말</th>
-                            <th>마을</th>
+                            <th>지역</th>
                             <th>상태</th>
                             <th>지금 펌웨어 (P4 / C6)</th>
                             <th>통신</th>

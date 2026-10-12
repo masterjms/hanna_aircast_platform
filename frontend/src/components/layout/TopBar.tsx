@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 
 import { useAuth } from '../../auth/AuthContext';
+import { applyTheme, readTheme, type Theme } from '../../lib/theme';
 
 /** 오른쪽 위 시계 — 「2026. 10. 9. 13:30:54」(문제점 79번). 1초마다 다시 그린다. */
 function Clock() {
@@ -28,14 +29,33 @@ interface TopBarProps {
   subtitle?: string;
 }
 
+/** 밝게·어둡게(문제점 73번). 지금의 반대를 보여 준다. */
+function ThemeToggle() {
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const next: Theme = theme === 'dark' ? 'light' : 'dark';
+  return (
+    <button
+      type="button"
+      className="btn btn--sm btn--ghost theme-toggle"
+      title={next === 'light' ? '밝은 화면으로' : '어두운 화면으로'}
+      onClick={() => {
+        applyTheme(next);
+        setTheme(next);
+      }}
+    >
+      {next === 'light' ? '☀ 밝게' : '☾ 어둡게'}
+    </button>
+  );
+}
+
 export function TopBar({ title, subtitle }: TopBarProps) {
   const { user } = useAuth();
   if (!user) return null;
 
   const scopeText = user.all_villages
-    ? `전체 ${user.villages.length}개 마을`
+    ? `전체 ${user.villages.length}개 지역`
     : user.villages.length === 0
-      ? '담당 마을 없음'
+      ? '담당 지역 없음'
       : user.villages.map((v) => v.name).join(', ');
 
   return (
@@ -47,6 +67,7 @@ export function TopBar({ title, subtitle }: TopBarProps) {
 
       <div className="topbar__right">
         <Clock />
+        <ThemeToggle />
         <button
           type="button"
           className="btn btn--sm btn--ghost"

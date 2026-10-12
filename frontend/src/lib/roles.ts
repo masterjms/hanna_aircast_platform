@@ -19,7 +19,7 @@ export const ROLE_TIER: Record<Role, number> = {
 export const ROLE_LABEL: Record<Role, string> = {
   super_admin: '최고 관리자',
   org_admin: '기관 관리자',
-  village_admin: '마을 관리자',
+  village_admin: '지역 관리자',
 };
 
 /** 위에서 아래 순서. 드롭다운이 이 순서로 보여준다. */

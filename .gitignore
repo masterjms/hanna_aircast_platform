@@ -40,3 +40,6 @@ infra/mosquitto/config/passwd
 # git 이 안으로 들어가지 않아 .gitkeep 예외가 먹지 않는다.
 infra/secrets/*
 !infra/secrets/.gitkeep
+
+# 관리자 접속 허용 IP — 서버마다 다르다(문제점 70번 ⑤). example 만 커밋한다.
+infra/nginx/admin-allow.local.conf

@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
 import type { AudioFile } from '../api/types';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
 import { TtsModal } from '../components/TtsModal';
 
@@ -80,19 +81,9 @@ export function FilesPage() {
     }
   };
 
-  const remove = async (f: AudioFile) => {
-    if (f.schedule_labels.length > 0) return; // 버튼이 이미 비활성이다
-    if (!window.confirm(`"${f.filename}" 을(를) 삭제할까요?\n방송 이력에는 이름이 그대로 남습니다.`))
-      return;
-    setError(null);
-    try {
-      await api.files.remove(f.id);
-      if (playing === f.id) setPlaying(null);
-      await load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : '삭제에 실패했습니다.');
-    }
-  };
+  // 지우기는 확인 창에서 — 네 자리 숫자 + 내 비밀번호(문제점 84번).
+  const [deleting, setDeleting] = useState<AudioFile | null>(null);
+  const remove = (f: AudioFile) => setDeleting(f);
 
   const preview = (f: AudioFile) => {
     // 같은 파일을 다시 누르면 정지 — 재생 버튼이 토글로 동작한다.
@@ -211,7 +202,7 @@ export function FilesPage() {
                     <button
                       type="button"
                       className="btn btn--ghost btn--danger"
-                      onClick={() => void remove(f)}
+                      onClick={() => remove(f)}
                       disabled={f.schedule_labels.length > 0}
                       title={
                         f.schedule_labels.length > 0
@@ -234,6 +225,22 @@ export function FilesPage() {
         <TtsModal
           onClose={() => setTtsOpen(false)}
           onCreated={() => void load()}
+        />
+      )}
+      {deleting && (
+        <ConfirmDialog
+          title="방송 자료 삭제"
+          target={deleting.filename}
+          warning="파일이 영구히 지워집니다. 방송 기록에는 이름이 그대로 남습니다. 이 파일을 쓰는 예약 방송이 있으면 지워지지 않습니다."
+          requireCode
+          danger
+          confirmLabel="영구 삭제"
+          onConfirm={async (pw) => {
+            await api.files.remove(deleting.id, pw);
+            if (playing === deleting.id) setPlaying(null);
+            await load();
+          }}
+          onClose={() => setDeleting(null)}
         />
       )}
     </>

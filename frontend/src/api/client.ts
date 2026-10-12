@@ -137,6 +137,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   return parsed as T;
 }
 
+/** 마지막 확인 비밀번호(문제점 83·84번). 헤더는 latin-1 이라 퍼센트 인코딩해서 보낸다. */
+function confirmHeader(password?: string): Record<string, string> {
+  return password ? { 'X-Confirm-Password': encodeURIComponent(password) } : {};
+}
+
 function query(params: Record<string, string | number | undefined | null>): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
@@ -200,17 +205,28 @@ export const api = {
 
   users: {
     list: () => request<User[]>('/api/users'),
-    create: (body: UserCreate) =>
-      request<User>('/api/users', { method: 'POST', body: JSON.stringify(body) }),
+    /** 계정 추가 — 내 비밀번호 확인 필수(문제점 83번). */
+    create: (body: UserCreate, confirmPassword: string) =>
+      request<User>('/api/users', {
+        method: 'POST',
+        body: JSON.stringify(body),
+        headers: confirmHeader(confirmPassword),
+      }),
     update: (id: number, body: UserUpdate) =>
       request<User>(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-    remove: (id: number) => request<void>(`/api/users/${id}`, { method: 'DELETE' }),
+    remove: (id: number, confirmPassword: string) =>
+      request<void>(`/api/users/${id}`, { method: 'DELETE', headers: confirmHeader(confirmPassword) }),
     /** 임시 비밀번호 발급 — 응답에서 한 번만 나온다. */
     tempPassword: (id: number) =>
       request<{ password: string }>(`/api/users/${id}/temp-password`, { method: 'POST' }),
   },
 
   schedules: {
+    /** 예약 개수·상한(문제점 67번). mine_max 가 null 이면 계정 상한 없음(최고 관리자). */
+    quota: () =>
+      request<{ total: number; total_max: number; mine: number; mine_max: number | null; per_minute_max: number }>(
+        '/api/schedules/quota',
+      ),
     list: () => request<Schedule[]>('/api/schedules'),
     create: (body: ScheduleInput) =>
       request<Schedule>('/api/schedules', { method: 'POST', body: JSON.stringify(body) }),
@@ -227,7 +243,9 @@ export const api = {
 
   files: {
     list: () => request<AudioFile[]>('/api/files'),
-    remove: (id: number) => request<void>(`/api/files/${id}`, { method: 'DELETE' }),
+    /** 목록에서 지울 때는 내 비밀번호(문제점 84번). 방금 만든 미리듣기를 버릴 때는 비워 보낸다. */
+    remove: (id: number, confirmPassword?: string) =>
+      request<void>(`/api/files/${id}`, { method: 'DELETE', headers: confirmHeader(confirmPassword) }),
 
     /**
      * 오디오 업로드. multipart 라 request() 를 안 거친다

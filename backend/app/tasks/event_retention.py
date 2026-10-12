@@ -21,6 +21,7 @@ from app.models.auth_log import LoginEvent
 from app.models.event import BroadcastEvent, DeviceEvent
 from app.models.file import DownloadToken
 from app.models.ota import OtaToken
+from app.models.schedule import ScheduleRun
 
 log = logging.getLogger(__name__)
 
@@ -52,11 +53,17 @@ async def sweep(now: dt.datetime | None = None) -> dict[str, int]:
         logins = (
             await db.execute(delete(LoginEvent).where(LoginEvent.logged_in_at < login_cutoff))
         ).rowcount
+        # 예약 실행 기록 1년(문제점 68번).
+        run_cutoff = now - dt.timedelta(days=settings.schedule_run_retention_days)
+        runs = (
+            await db.execute(delete(ScheduleRun).where(ScheduleRun.created_at < run_cutoff))
+        ).rowcount
     return {
         "events": int(events or 0),
         "loose_device_events": int(loose or 0),
         "tokens": int(tokens or 0),
         "logins": int(logins or 0),
+        "schedule_runs": int(runs or 0),
     }
 
 

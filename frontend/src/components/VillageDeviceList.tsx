@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { MapPin, Organization, Village } from '../api/types';
 import { buildForest, type OrgNode } from '../lib/orgtree';
-import { FolderIcon, TreeExpandButtons, VillageIcon } from './TreeIcons';
+import { Chevron, FolderIcon, TreeToggleButton, VillageIcon } from './TreeIcons';
 
 function statusRank(p: MapPin): number {
   if (!p.online) return 0;
@@ -89,9 +89,40 @@ export function VillageDeviceList({
   const [open, setOpen] = useState<Set<string>>(() => new Set());
   const flat = orgs.length === 0;
 
+  const forest = useMemo(() => buildForest(orgs, villages), [orgs, villages]);
+
+  // 트리 검색(문제점 85번 ④) — 단말 별칭·MAC, 지역 이름, 그 위 기관 이름 어디든 걸리면 남긴다.
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const pathOf = useMemo(() => {
+    const m = new Map<number, string>();
+    const walk = (n: OrgNode, trail: string) => {
+      const here = `${trail} ${n.org.name}`;
+      n.villages.forEach((v) => m.set(v.id, `${here} ${v.name}`.toLowerCase()));
+      n.children.forEach((c) => walk(c, here));
+    };
+    forest.roots.forEach((r) => walk(r, ''));
+    forest.orphans.forEach((v) => m.set(v.id, v.name.toLowerCase()));
+    villages.forEach((v) => m.has(v.id) || m.set(v.id, v.name.toLowerCase()));
+    return m;
+  }, [forest, villages]);
+  const shownPins = useMemo(
+    () =>
+      q
+        ? pins.filter(
+            (p) =>
+              (p.label ?? '').toLowerCase().includes(q) ||
+              p.mac.toLowerCase().includes(q) ||
+              (p.village_id !== null && (pathOf.get(p.village_id) ?? '').includes(q)) ||
+              (p.village_id === null && '미배정'.includes(q)),
+          )
+        : pins,
+    [pins, q, pathOf],
+  );
+
   const pinsByVillage = useMemo(() => {
     const m = new Map<number | null, MapPin[]>();
-    for (const p of pins) {
+    for (const p of shownPins) {
       const list = m.get(p.village_id) ?? [];
       list.push(p);
       m.set(p.village_id, list);
@@ -103,9 +134,8 @@ export function VillageDeviceList({
       );
     }
     return m;
-  }, [pins]);
+  }, [shownPins]);
 
-  const forest = useMemo(() => buildForest(orgs, villages), [orgs, villages]);
 
   // 기관 아래 전부의 단말(요약용).
   const subtreePins = useMemo(() => {
@@ -192,7 +222,7 @@ export function VillageDeviceList({
               onClick={() => onSelect(p.mac === selectedMac ? null : p.mac)}
               onMouseEnter={() => onHover(p.mac)}
               onMouseLeave={() => onHover(null)}
-              title={p.position_source !== 'device' ? '위치 미입력 — 마을 좌표에 표시' : undefined}
+              title={p.position_source !== 'device' ? '위치 미입력 — 지역 좌표에 표시' : undefined}
             >
               <span className="strong vlist__name">{p.label || p.mac}</span>
               {statusBadge(p)}
@@ -205,7 +235,8 @@ export function VillageDeviceList({
 
   const villageBlock = (key: string, name: string, list: MapPin[], forceOpen = false) => {
     if (list.length === 0) return null;
-    const isOpen = forceOpen ? !open.has(key) : open.has(key);
+    // 검색 중에는 걸린 가지를 전부 펼쳐 보인다.
+    const isOpen = q !== '' || (forceOpen ? !open.has(key) : open.has(key));
     return (
       <section key={key} className="vlist__group">
         <button
@@ -214,10 +245,12 @@ export function VillageDeviceList({
           onClick={() => toggle(key)}
           aria-expanded={isOpen}
         >
-          <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+          <span className="tcaret tcaret--inline">
+            <Chevron open={isOpen} />
+          </span>
           <span className="tree__icon tree__icon--village">
             <VillageIcon />
-          </span>{' '}
+          </span>
           {name} <StatLine s={statsOf(list)} />
         </button>
         {isOpen && deviceItems(list)}
@@ -229,7 +262,7 @@ export function VillageDeviceList({
     const list = subtreePins.get(node.org.id) ?? [];
     if (list.length === 0) return null; // 단말 없는 가지는 대시보드에서 뺀다
     const key = `o:${node.org.id}`;
-    const isOpen = open.has(key);
+    const isOpen = q !== '' || open.has(key);
     return (
       <section key={key} className="vlist__group vlist__group--org">
         <button
@@ -238,10 +271,12 @@ export function VillageDeviceList({
           onClick={() => toggle(key)}
           aria-expanded={isOpen}
         >
-          <span aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+          <span className="tcaret tcaret--inline">
+            <Chevron open={isOpen} />
+          </span>
           <span className="tree__icon tree__icon--org">
             <FolderIcon open={isOpen} />
-          </span>{' '}
+          </span>
           <span className="strong">{node.org.name}</span> <StatLine s={statsOf(list)} />
         </button>
         {isOpen && (
@@ -273,14 +308,24 @@ export function VillageDeviceList({
   };
   const expandAll = () => setOpen(flat ? new Set() : allKeys());
   const collapseAll = () => setOpen(flat ? allKeys() : new Set());
+  const keys = allKeys();
+  const allOpen = flat ? open.size === 0 : [...keys].every((k) => open.has(k));
 
   return (
     // 구분선은 묶음 사이에만 둔다. 단말 사이에 줄을 그으면 목록이 표처럼 무거워진다
     // (2026-09-03 현장 요청).
     <div className="vlist">
       <div className="vlist__tools">
-        <TreeExpandButtons onExpand={expandAll} onCollapse={collapseAll} />
+        <input
+          type="search"
+          value={query}
+          placeholder="지역·기관·단말 이름 또는 MAC 검색"
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="현황 트리 검색"
+        />
+        <TreeToggleButton allOpen={allOpen} onExpand={expandAll} onCollapse={collapseAll} />
       </div>
+      {q !== '' && shownPins.length === 0 && <p className="hint">검색 결과가 없습니다.</p>}
       {flat
         ? villages.map((v) => villageBlock(`v:${v.id}`, v.name, pinsByVillage.get(v.id) ?? [], true))
         : forest.roots.map(orgBlock)}

@@ -7,12 +7,13 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Annotated
 
-from fastapi import APIRouter, Response, UploadFile, status
+from fastapi import APIRouter, Header, Response, UploadFile, status
 from fastapi import File as FileParam
 
-from app.core.deps import CurrentUser, Db, MediaUser
+from app.core.deps import CurrentUser, Db, MediaUser, check_confirm_password
 from app.modules.file import service
 from app.schemas.file import FileOut
 from app.schemas.tts import TtsRequest, TtsResult, VoiceCatalogOut, VoiceOut
@@ -72,7 +73,25 @@ async def create_tts(payload: TtsRequest, db: Db, user: CurrentUser) -> TtsResul
 
 
 @router.delete("/api/files/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_file(file_id: int, db: Db, _: CurrentUser) -> None:
+async def delete_file(
+    file_id: int,
+    db: Db,
+    user: CurrentUser,
+    x_confirm_password: Annotated[str | None, Header(alias="X-Confirm-Password")] = None,
+) -> None:
+    """파일 삭제. 내 비밀번호 확인 필수(문제점 84번).
+
+    예외: 내가 1시간 안에 만든 파일(글로 써서 방송·TTS 창에서 만들었다가 버리는 미리듣기)은 확인
+    없이 지운다 — 화면이 「취소」로 정리하는 파일이다.
+    """
+    file = await service.get_file(db, file_id)
+    fresh = (
+        file.uploaded_by == user.id
+        and file.created_at is not None
+        and dt.datetime.now(dt.timezone.utc) - file.created_at < dt.timedelta(hours=1)
+    )
+    if not (fresh and x_confirm_password is None):
+        check_confirm_password(user, x_confirm_password)
     await service.delete_file(db, file_id)
 
 

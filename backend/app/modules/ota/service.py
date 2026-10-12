@@ -396,7 +396,7 @@ async def start(
 ) -> OtaJobOut:
     if payload.target_scope not in (TargetScope.VILLAGE, TargetScope.DEVICE):
         raise ApiError(
-            "OTA 는 마을 하나 또는 단말 하나에만 보낼 수 있습니다.", code="OTA_TARGET_SCOPE"
+            "OTA 는 지역 하나 또는 단말 하나에만 보낼 수 있습니다.", code="OTA_TARGET_SCOPE"
         )
     pkg = await get_package(db, payload.package_id)
     if not package_path(pkg).exists():

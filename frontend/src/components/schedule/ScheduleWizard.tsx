@@ -23,7 +23,9 @@ import type {
   ScheduleInput,
   Village,
 } from '../../api/types';
-import { buildForest, subtreeStats, type OrgNode } from '../../lib/orgtree';
+import { buildForest, subtreeStats } from '../../lib/orgtree';
+import { StepTitle } from '../StepTitle';
+import { TargetTreePicker, type Picked } from '../broadcast/TargetTreePicker';
 import { REPEAT_LABEL, WEEKDAY_LABELS, formatTime, kstToday, repeatLabel } from '../../lib/schedule';
 import { Modal } from '../Modal';
 import { TtsModal } from '../TtsModal';
@@ -46,79 +48,17 @@ const DETAIL_TITLE: Record<Repeat, string> = {
 /** 1번 질문의 선택 — 기관(관할 전체) 또는 마을 하나. */
 type TargetPick = { kind: 'organization'; id: number } | { kind: 'village'; id: number } | null;
 
-// ── 1. 어디에 (기관 → 마을 트리) ─────────────────────────────────────────
-function TargetTree({
-  orgs,
-  villages,
-  value,
-  onChange,
-}: {
-  orgs: Organization[];
-  villages: Village[];
-  value: TargetPick;
-  onChange: (v: TargetPick) => void;
-}) {
-  // 깊이 제한 없는 트리(설계 v2). 지역 관리 화면과 같은 순서로 세운다.
-  const forest = buildForest(orgs, villages);
+// ── 1. 어디에 — 공통 트리(TargetTreePicker, 문제점 69번 ③). 기관을 고르면 관할 전체. ──
+function toPicked(t: TargetPick): Picked {
+  if (t === null) return { leaves: [], groups: [] };
+  return t.kind === 'organization' ? { leaves: [], groups: [`o:${t.id}`] } : { leaves: [String(t.id)], groups: [] };
+}
 
-  const isOn = (kind: 'organization' | 'village', id: number) =>
-    value !== null && value.kind === kind && value.id === id;
-
-  const villageRow = (v: Village) => (
-    <li key={`v${v.id}`}>
-      <label className={isOn('village', v.id) ? 'is-on' : undefined}>
-        <input
-          type="radio"
-          name="sched-target"
-          checked={isOn('village', v.id)}
-          onChange={() => onChange({ kind: 'village', id: v.id })}
-        />
-        <span className="tree__name">{v.name}</span>
-        <span className="tree__kind">단말 {v.device_count}대</span>
-      </label>
-    </li>
-  );
-
-  const orgBlock = (node: OrgNode): React.ReactNode => {
-    const o = node.org;
-    return (
-      <li key={`o${o.id}`}>
-        <label className={isOn('organization', o.id) ? 'is-on' : undefined}>
-          <input
-            type="radio"
-            name="sched-target"
-            checked={isOn('organization', o.id)}
-            onChange={() => onChange({ kind: 'organization', id: o.id })}
-          />
-          <span className="tree__name strong">{o.name}</span>
-          <span className="tree__kind">관할 전체</span>
-        </label>
-        {(node.children.length > 0 || node.villages.length > 0) && (
-          <ul>
-            {node.children.map(orgBlock)}
-            {node.villages.map(villageRow)}
-          </ul>
-        )}
-      </li>
-    );
-  };
-
-  if (orgs.length === 0) {
-    // 이장 — 기관이 없고 담당 마을만 있다.
-    return <ul className="tree">{villages.map(villageRow)}</ul>;
-  }
-
-  return (
-    <ul className="tree">
-      {forest.roots.map(orgBlock)}
-      {forest.orphans.length > 0 && (
-        <li>
-          <div className="tree__group">기관 없음</div>
-          <ul>{forest.orphans.map(villageRow)}</ul>
-        </li>
-      )}
-    </ul>
-  );
+function fromPicked(p: Picked): TargetPick {
+  const g = p.groups[0];
+  if (g && g.startsWith('o:') && g !== 'o:none') return { kind: 'organization', id: Number(g.slice(2)) };
+  const l = p.leaves[0];
+  return l !== undefined ? { kind: 'village', id: Number(l) } : null;
 }
 
 // ── 2. 단말 ───────────────────────────────────────────────────────────────
@@ -136,10 +76,10 @@ function DevicePicker({
   disabled: boolean;
 }) {
   if (disabled) {
-    return <p className="hint">관할 전체를 골랐습니다. 소속 마을의 모든 단말에 나갑니다.</p>;
+    return <p className="hint">관할 전체를 골랐습니다. 소속 지역의 모든 단말에 나갑니다.</p>;
   }
   if (devices.length === 0) {
-    return <p className="hint">마을을 먼저 고르세요.</p>;
+    return <p className="hint">지역을 먼저 고르세요.</p>;
   }
   return (
     <>
@@ -510,7 +450,7 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
     if (!target) return '';
     if (target.kind === 'organization')
       return `${orgs.find((o) => o.id === target.id)?.name ?? '기관'} 관할 전체`;
-    const name = villages.find((v) => v.id === target.id)?.name ?? '마을';
+    const name = villages.find((v) => v.id === target.id)?.name ?? '지역';
     if (allDevices) return `${name} 모든 단말`;
     const labels = devices.filter((d) => macs.includes(d.mac)).map((d) => d.label ?? d.mac);
     return `${name} ${labels.length <= 3 ? labels.join(', ') : `${labels.slice(0, 2).join(', ')} 외 ${labels.length - 2}대`}`;
@@ -615,34 +555,42 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
         {/* 왼쪽 — 목업대로 1·2·3·4 가 번호 순서로 내려간다. */}
         <div>
           <div className="wizard-q">
-            <div className="wizard-q__title">1. 어디에 방송할까요?</div>
-            <div className="wizard-q__body wizard-q__body--scroll">
-              <TargetTree
+            <StepTitle n={1} done={target !== null}>어디에 방송할까요?</StepTitle>
+            <div className="wizard-q__body">
+              <TargetTreePicker
+                mode="village"
+                single
+                allowOffline
+                pick={orgs.length > 0 ? 'both' : 'leaves'}
                 orgs={orgs}
                 villages={villages}
-                value={target}
-                onChange={(t) => {
-                  setTarget(t);
+                devices={[]}
+                zonesOf={{}}
+                onNeedZones={() => undefined}
+                value={toPicked(target)}
+                onChange={(p) => {
+                  setTarget(fromPicked(p));
                   setAllDevices(true);
                   setMacs([]);
                 }}
+                renderCount={(_online, total) => <span className="dim">단말 {total}대</span>}
               />
             </div>
             {orgs.length > 0 && (
               <p className="hint" style={{ marginBottom: 0 }}>
-                기관을 고르면 관할 전체입니다. 나중에 영입한 마을도 자동으로 들어갑니다.
+                기관을 고르면 관할 전체입니다. 나중에 영입한 지역도 자동으로 들어갑니다.
               </p>
             )}
             {emptyOrg && (
               <p className="hint hint--warn" style={{ marginBottom: 0 }}>
-                이 기관에 속한 마을이 없습니다. 지금 저장하면 방송이 나가지 않습니다. 마을
+                이 기관에 속한 지역이 없습니다. 지금 저장하면 방송이 나가지 않습니다. 지역
                 관리에서 관리 기관을 먼저 지정하세요.
               </p>
             )}
           </div>
 
           <div className="wizard-q">
-            <div className="wizard-q__title">2. 어느 단말에 방송할까요?</div>
+            <StepTitle n={2}>어느 단말에 방송할까요?</StepTitle>
             <div className="wizard-q__body wizard-q__body--scroll">
               <DevicePicker
                 devices={devices}
@@ -658,7 +606,7 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
           </div>
 
           <div className="wizard-q">
-            <div className="wizard-q__title">3. 언제 방송할까요?</div>
+            <StepTitle n={3} done={repeat !== null}>언제 방송할까요?</StepTitle>
             <div className="wizard-q__body">
               <div className="choice-row">
                 {(['once', 'daily', 'weekly', 'monthly', 'yearly'] as Repeat[]).map((r) => (
@@ -676,7 +624,7 @@ export function ScheduleWizard({ initial, onClose, onSaved }: Props) {
           </div>
 
           <div className="wizard-q">
-            <div className="wizard-q__title">4. 무엇을 방송할까요?</div>
+            <StepTitle n={4} done={fileId !== ''}>무엇을 방송할까요?</StepTitle>
             <div className="wizard-q__body">
               <FilePicker
                 files={files}

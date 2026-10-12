@@ -80,7 +80,7 @@ async def _fire(db, publisher: MqttPublisher, schedule_id: int, run_id: int) -> 
             db, [int(t) for t in target_ids]
         )
         if not villages:
-            run.status, run.reason = "skipped", "관할에 마을이 없음"
+            run.status, run.reason = "skipped", "관할에 지역이 없음"
             return run.status
         target_scope, target_ids = TargetScope.VILLAGE.value, [str(v) for v in villages]
 

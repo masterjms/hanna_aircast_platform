@@ -6,16 +6,18 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, status
 from sqlalchemy import func, select
 
+from app.config import settings
 from app.core import authz
 from app.core.deps import CurrentUser, Db, Scope
 from app.core.scope import VillageScope
 from app.core.security import create_access_token, verify_password
-from app.errors import AccountExpired, InvalidCredentials
+from app.errors import AccountExpired, AccountLocked, InvalidCredentials
 from app.models.auth_log import LoginEvent
 from app.models.device import Device
 from app.models.org import Organization, User, Village
@@ -108,16 +110,39 @@ async def login(payload: LoginRequest, db: Db, request: Request) -> LoginRespons
             db, request, username=payload.username, user=None, result="unknown_user"
         )
         raise InvalidCredentials()
+
+    now = dt.datetime.now(dt.timezone.utc)
+    # 연속 실패 잠금(문제점 70번 ②). 잠긴 동안은 비밀번호가 맞아도 들이지 않는다.
+    if user.locked_until is not None and user.locked_until > now:
+        await _record_login(db, request, username=payload.username, user=user, result="locked")
+        raise AccountLocked()
     if not verify_password(payload.password, user.password_hash):
+        user.failed_login_count = (user.failed_login_count or 0) + 1
+        if (
+            settings.login_lock_threshold > 0
+            and user.failed_login_count >= settings.login_lock_threshold
+        ):
+            user.locked_until = now + dt.timedelta(minutes=settings.login_lock_minutes)
+            user.failed_login_count = 0
         await _record_login(
             db, request, username=payload.username, user=user, result="bad_password"
         )
         raise InvalidCredentials()
+    user.failed_login_count = 0
+    user.locked_until = None
 
     # 정리 작업은 주기적으로 돈다 — 그 사이에 만료된 계정으로 들어오는 것을 막는다.
     if user.is_expired():
         await _record_login(db, request, username=payload.username, user=user, result="expired")
         raise AccountExpired()
+
+    # 비밀번호 사용 기간(문제점 70번 ②) — 지나면 새 비밀번호를 정하기 전까지 다른 화면을 막는다.
+    if (
+        settings.password_max_age_days > 0
+        and user.password_changed_at is not None
+        and now - user.password_changed_at > dt.timedelta(days=settings.password_max_age_days)
+    ):
+        user.must_change_password = True
 
     await _record_login(db, request, username=payload.username, user=user, result="ok")
 

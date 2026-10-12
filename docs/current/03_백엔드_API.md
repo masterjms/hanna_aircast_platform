@@ -88,6 +88,8 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 `POST /api/auth/login` — 인증 불필요
 
+**비밀번호 정책(2026-10-12, 문제점 70번 ②).** 비밀번호를 `LOGIN_LOCK_THRESHOLD`(기본 5)번 연속 틀리면 `LOGIN_LOCK_MINUTES`(기본 30분) 동안 `401 ACCOUNT_LOCKED`(맞는 비밀번호도 거절, 로그인 기록 result=`locked`). 성공하면 실패 수가 0 으로, 관리자가 임시 비밀번호를 발급해도 풀린다. 마지막 변경(`password_changed_at`)이 `PASSWORD_MAX_AGE_DAYS`(기본 90일)를 넘으면 로그인은 되지만 `must_change_password=true` 가 되어 새 비밀번호를 정하기 전까지 다른 API 가 막힌다. 화면은 30분 동안 사람의 입력이 없으면 스스로 로그아웃한다(③).
+
 ```json
 {
   "username": "admin",
@@ -130,7 +132,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 `POST /api/auth/password` — 로그인, `{current_password, new_password}` → 갱신된 `me`
 
-새 비밀번호는 8~64자. 현재 비밀번호가 틀리면 `WRONG_PASSWORD`, 같은 값이면 `PASSWORD_UNCHANGED`. 성공하면 `must_change_password`가 풀린다.
+새 비밀번호는 **영문 대·소문자·숫자·특수문자 중 3종 이상 8자 이상, 또는 2종 이상 10자 이상**(64자까지, 어기면 `PASSWORD_POLICY` — 계정 추가·수정에도 같은 규칙, 2026-10-12). 현재 비밀번호가 틀리면 `WRONG_PASSWORD`, 같은 값이면 `PASSWORD_UNCHANGED`. 성공하면 `must_change_password`가 풀리고 `password_changed_at`이 지금으로 바뀐다.
 
 **임시 비밀번호 계정(향후검토 10번, 2026-09-21).** 관리자가 임시 비밀번호를 발급하면 그 계정은 새 비밀번호를 정하기 전까지 `/api/auth/me`·`/api/auth/password`·`/api/auth/logout` 외 모든 API가 `403 PASSWORD_CHANGE_REQUIRED`다. 화면만이 아니라 서버가 막는다(`deps.get_current_user`). 비밀번호는 bcrypt 해시로만 저장하므로 원래 값을 「확인」하는 기능은 두지 않는다.
 
@@ -295,9 +297,11 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | Method | Path | 설명 |
 |---|---|---|
 | GET | `/api/users` | 내가 관리할 수 있는 계정 목록 |
-| POST | `/api/users` | 계정 생성 |
+| POST | `/api/users` | 계정 생성 — `X-Confirm-Password` 필수 |
 | PATCH | `/api/users/{id}` | 비밀번호·역할·기관·담당 마을·사용 기간 수정 |
-| DELETE | `/api/users/{id}` | 계정 삭제 |
+| DELETE | `/api/users/{id}` | 계정 삭제 — `X-Confirm-Password` 필수 |
+
+**마지막 확인 비밀번호(2026-10-12, 문제점 83·84번).** 계정 추가·삭제와 방송 자료 삭제는 지금 로그인한 계정의 비밀번호를 헤더 `X-Confirm-Password`(퍼센트 인코딩 — 헤더는 latin-1 이라 한글 비밀번호를 그대로 못 싣는다)로 함께 보내야 한다. 없으면 `400 CONFIRM_PASSWORD_REQUIRED`, 틀리면 `403 CONFIRM_PASSWORD_WRONG`. 연속 실패 제한은 두지 않는다(요청 사항).
 | POST | `/api/users/{id}/temp-password` | 임시 비밀번호 발급 → `{password}`(10자, 헷갈리는 글자 0 O o 1 l I 제외). **응답에서 한 번만** 나오고 그 계정은 `must_change_password=true`. 관리할 수 있는 계정에만(같은 마디 동료·관할 밖은 `TIER_TOO_LOW`), 자기 계정은 `CANNOT_RESET_SELF` |
 
 생성 body:
@@ -489,7 +493,7 @@ PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유�
 |---|---|---|---|
 | GET | `/api/files` | 로그인 | 파일 목록 |
 | POST | `/api/files` | 로그인 | multipart MP3 업로드 |
-| DELETE | `/api/files/{id}` | 로그인 | 파일 삭제. 스케줄이 쓰고 있으면 `FILE_IN_USE`, 방송 이력은 막지 않는다 |
+| DELETE | `/api/files/{id}` | 로그인 + `X-Confirm-Password` | 파일 삭제. 스케줄이 쓰고 있으면 `FILE_IN_USE`, 방송 이력은 막지 않는다. 예외: 내가 1시간 안에 만든 파일(글로 써서 방송·TTS 창에서 만들었다 버리는 미리듣기)은 확인 없이 지운다 |
 | GET | `/api/files/{id}/audio` | 로그인 또는 query token | 관리자 미리듣기 |
 | GET | `/api/tts/voices` | 로그인 | 언어·voice 목록 |
 | POST | `/api/files/tts` | 로그인 | 합성 후 파일함 등록 |
@@ -704,7 +708,8 @@ wss://<host>/ingest?session=<broadcast_events.id>
 | Method | Path | 권한 | 설명 |
 |---|---|---|---|
 | GET | `/api/schedules` | 로그인·범위 적용 | 내 범위와 겹치는 스케줄. 기관 대상은 대상 기관이 내 관할이면 마을이 비어도 보이고, 고치기는 대상 기관 전부가 관할일 때만(이장은 못 고침). `editable`, `next_fire_at`, `last_run` 포함. 질의 수는 규칙 수와 무관(4회) |
-| POST | `/api/schedules` | 로그인 | 생성. 대상은 내 범위 안, `organization`은 내 관할 기관. 전체 100개 상한 |
+| POST | `/api/schedules` | 로그인 | 생성. 대상은 내 범위 안, `organization`은 내 관할 기관. 상한(2026-10-12, 문제점 67번): 전체 2,000개(`SCHEDULE_LIMIT`), 계정당 100개(`SCHEDULE_USER_LIMIT`, 최고 관리자 제외), 같은 시각(시:분) 100개(`SCHEDULE_MINUTE_LIMIT` — 요일·날짜와 상관없이 센다, 수정으로 시각을 바꿀 때도) |
+| GET | `/api/schedules/quota` | 로그인 | `{total, total_max, mine, mine_max, per_minute_max}` — 목록 오른쪽 위 「내 예약 n/100 · 전체 m/2,000」. 최고 관리자는 `mine_max=null` |
 | PATCH | `/api/schedules/{id}` | 대상 전체가 내 범위 | 부분 수정. `{"enabled": false}`만 보내면 끄기 |
 | DELETE | `/api/schedules/{id}` | 대상 전체가 내 범위 | 삭제. 지난 실행 기록은 남음 |
 | GET | `/api/schedules/occurrences?from&to` | 로그인·범위 적용 | `[from, to)`의 예정 회차. ISO 시각에 timezone 필수. 최대 31일 |

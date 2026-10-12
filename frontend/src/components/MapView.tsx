@@ -455,7 +455,7 @@ export function MapView({
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%', borderRadius: 12 }} />
-      {showsBoundary && <div className="map-credit">마을 경계 : 행정안전부 주소정보제공</div>}
+      {showsBoundary && <div className="map-credit">지역 경계 : 행정안전부 주소정보제공</div>}
     </div>
   );
 }

@@ -14,17 +14,20 @@
 from __future__ import annotations
 
 from typing import Annotated
+from urllib.parse import unquote
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.constants import Role
 from app.core import authz
 from app.core.scope import VillageScope
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, verify_password
 from app.db import get_db
 from app.errors import (
+    ConfirmPasswordRequired,
+    ConfirmPasswordWrong,
     OrgAdminRequired,
     PasswordChangeRequired,
     SuperAdminRequired,
@@ -113,6 +116,29 @@ async def require_org_admin(user: CurrentUser) -> User:
 
 
 OrgAdmin = Annotated[User, Depends(require_org_admin)]
+
+
+def check_confirm_password(user: User, header_value: str | None) -> None:
+    """X-Confirm-Password(퍼센트 인코딩)가 지금 로그인한 계정의 비밀번호인가(문제점 83·84번).
+
+    헤더는 latin-1 이라 화면이 encodeURIComponent 로 보내고 여기서 푼다. 연속 실패 제한은 두지
+    않는다(요청 사항) — 이미 로그인한 사람의 마지막 확인이라서다.
+    """
+    if not header_value:
+        raise ConfirmPasswordRequired()
+    if not verify_password(unquote(header_value), user.password_hash):
+        raise ConfirmPasswordWrong()
+
+
+async def require_confirm_password(
+    user: CurrentUser,
+    x_confirm_password: Annotated[str | None, Header(alias="X-Confirm-Password")] = None,
+) -> None:
+    check_confirm_password(user, x_confirm_password)
+
+
+#: 라우트에 붙이면 X-Confirm-Password 가 맞아야 실행된다.
+PasswordConfirmed = Annotated[None, Depends(require_confirm_password)]
 
 
 async def get_user_from_header_or_query(

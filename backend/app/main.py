@@ -201,7 +201,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="xWIFI 운영서버",
     version="0.1.0",
-    description="ESP32 마을방송 단말을 MQTT + Icecast + HTTP 로 제어하는 운영서버 API",
+    description="ESP32 IoT 방송 단말을 MQTT + Icecast + HTTP 로 제어하는 운영서버 API",
     lifespan=lifespan,
 )
 

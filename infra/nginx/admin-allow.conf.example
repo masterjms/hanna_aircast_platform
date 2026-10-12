@@ -1,0 +1,14 @@
+# 관리자 화면·API 접속 허용 IP (문제점 70번 ⑤, 2026-10-12)
+#
+# 이 파일은 예시다. 서버에서는 scripts/deploy.sh 가 처음 한 번 admin-allow.local.conf 로 복사하고,
+# 그 뒤로는 local 파일만 고친다(저장소에 올리지 않는다 — .gitignore).
+#
+# 적용 범위: 관리자 화면(/), API(/api), 마이크 업링크(/ingest).
+# 적용 제외: 단말이 쓰는 /dl/ · /live/ · MQTT(8883), 헬스체크(/health) — 단말은 어디서나 붙는다.
+#
+# 제한하려면 아래 "allow all;" 을 지우고 허용할 주소를 적은 뒤 마지막에 "deny all;" 을 둔다.
+#   allow 203.0.113.10;      # 사무실 고정 IP
+#   allow 198.51.100.0/24;   # 관공서 망
+#   deny  all;
+# 고친 뒤:  docker compose exec nginx nginx -t && docker compose exec nginx nginx -s reload
+allow all;

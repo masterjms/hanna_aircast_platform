@@ -21,6 +21,28 @@ _BCRYPT_ROUNDS = 12
 MAX_PASSWORD_BYTES = 72
 
 
+# ── 비밀번호 규칙 (문제점 70번 ②, 2026-10-12) ───────────────────────────────
+#: KISA 「암호이용 안내서」·개인정보 안전성 확보조치 해설의 권고 그대로: 영문 대문자·소문자·숫자·
+#: 특수문자 중 **3종 이상이면 8자 이상**, **2종이면 10자 이상**.
+PASSWORD_RULE_TEXT = "영문 대·소문자·숫자·특수문자 중 3종 이상 8자 이상, 또는 2종 이상 10자 이상"
+
+
+def password_kinds(plain: str) -> int:
+    return sum(
+        (
+            any(c.isupper() for c in plain),
+            any(c.islower() for c in plain),
+            any(c.isdigit() for c in plain),
+            any(not c.isalnum() for c in plain),
+        )
+    )
+
+
+def password_ok(plain: str) -> bool:
+    kinds = password_kinds(plain)
+    return (kinds >= 3 and len(plain) >= 8) or (kinds >= 2 and len(plain) >= 10)
+
+
 def hash_password(plain: str) -> str:
     raw = plain.encode("utf-8")
     if len(raw) > MAX_PASSWORD_BYTES:

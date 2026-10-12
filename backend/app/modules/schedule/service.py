@@ -23,11 +23,17 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.constants import SCHEDULE_MAX, ScheduleTarget
+from app.constants import (
+    SCHEDULE_MAX,
+    SCHEDULE_MAX_PER_MINUTE,
+    SCHEDULE_MAX_PER_USER,
+    ScheduleTarget,
+)
 from app.core.orgtree import load_tree
 from app.core.scope import VillageScope
 from app.errors import (
@@ -477,6 +483,43 @@ async def _ensure_editable(
 
 
 # ── 생성·수정·삭제 ────────────────────────────────────────────────────────
+async def quota(db: AsyncSession, *, actor_id: int, per_user_limited: bool) -> dict[str, Any]:
+    """예약 개수와 상한(문제점 67번). 목록 오른쪽 위에 그대로 보인다."""
+    total = int(await db.scalar(select(func.count()).select_from(Schedule)) or 0)
+    mine = int(
+        await db.scalar(
+            select(func.count()).select_from(Schedule).where(Schedule.created_by == actor_id)
+        )
+        or 0
+    )
+    return {
+        "total": total,
+        "total_max": SCHEDULE_MAX,
+        "mine": mine,
+        "mine_max": SCHEDULE_MAX_PER_USER if per_user_limited else None,
+        "per_minute_max": SCHEDULE_MAX_PER_MINUTE,
+    }
+
+
+async def _check_minute_limit(
+    db: AsyncSession, fire_time: dt.time, *, exclude_id: int | None = None
+) -> None:
+    """같은 시각(분)에 걸린 예약 수 상한 — 요일·날짜와 상관없이 시:분이 같으면 센다(보수적으로)."""
+    stmt = select(func.count()).select_from(Schedule).where(
+        func.extract("hour", Schedule.fire_time) == fire_time.hour,
+        func.extract("minute", Schedule.fire_time) == fire_time.minute,
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Schedule.id != exclude_id)
+    same = int(await db.scalar(stmt) or 0)
+    if same >= SCHEDULE_MAX_PER_MINUTE:
+        raise ApiError(
+            f"{fire_time.strftime('%H:%M')} 에는 이미 예약이 {same}건 있습니다(같은 시각 최대 "
+            f"{SCHEDULE_MAX_PER_MINUTE}건). 1분이라도 다른 시각으로 정해 주세요.",
+            code="SCHEDULE_MINUTE_LIMIT",
+        )
+
+
 async def create_schedule(
     db: AsyncSession,
     payload: ScheduleCreate,
@@ -484,12 +527,24 @@ async def create_schedule(
     actor_id: int,
     scope: VillageScope,
     org_ids: set[int] | None,
+    per_user_limited: bool = True,
 ) -> ScheduleOut:
     count = await db.scalar(select(func.count()).select_from(Schedule))
     if (count or 0) >= SCHEDULE_MAX:
         raise ApiError(
-            f"스케줄은 최대 {SCHEDULE_MAX}개까지 등록할 수 있습니다.", code="SCHEDULE_LIMIT"
+            f"예약은 전체 최대 {SCHEDULE_MAX}개까지 등록할 수 있습니다.", code="SCHEDULE_LIMIT"
         )
+    if per_user_limited:
+        mine = await db.scalar(
+            select(func.count()).select_from(Schedule).where(Schedule.created_by == actor_id)
+        )
+        if (mine or 0) >= SCHEDULE_MAX_PER_USER:
+            raise ApiError(
+                f"한 계정은 예약을 최대 {SCHEDULE_MAX_PER_USER}개까지 만들 수 있습니다. "
+                "쓰지 않는 예약을 지운 뒤 다시 만들어 주세요.",
+                code="SCHEDULE_USER_LIMIT",
+            )
+    await _check_minute_limit(db, payload.fire_time)
     if await db.get(File, payload.file_id) is None:
         raise ApiError("존재하지 않는 파일입니다.", code="FILE_NOT_FOUND")
     await _validate_target(db, payload.target_scope.value, payload.target_ids, scope, org_ids)
@@ -535,6 +590,8 @@ async def update_schedule(
 
     # 나머지는 바꾼 뒤의 전체 모양을 ScheduleCreate 검증기로 다시 통과시킨다 —
     # 매주로 바꾸면서 요일을 안 주면 영영 안 나가는 규칙이 되는 것을 막는다.
+    if "fire_time" in data and data["fire_time"] is not None and data["fire_time"] != s.fire_time:
+        await _check_minute_limit(db, data["fire_time"], exclude_id=s.id)
     merged = {
         "repeat": s.repeat,
         "weekdays": s.weekdays,

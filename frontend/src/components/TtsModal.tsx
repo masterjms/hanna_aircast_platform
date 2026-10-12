@@ -147,7 +147,7 @@ export function TtsModal({ onClose, onCreated }: TtsModalProps) {
           value={text}
           onChange={(e) => setText(e.target.value)}
           disabled={locked}
-          placeholder="예) 주민 여러분께 알려드립니다. 오늘 오후 두 시에 마을회관에서 반상회가 있겠습니다."
+          placeholder="예) 주민 여러분께 알려드립니다. 오늘 오후 두 시에 회관에서 반상회가 있겠습니다."
         />
         <p className={`hint${over ? ' hint--warn' : ''}`}>
           {text.length} / {MAX_TEXT}자

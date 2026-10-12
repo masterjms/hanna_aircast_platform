@@ -25,7 +25,13 @@ from app.core import authz
 from app.core.orgtree import load_tree, lock_tree
 from app.core.presence import online_clause, online_cutoff
 from app.core.scope import VillageScope
-from app.core.security import hash_password, verify_password
+from app.core.security import (
+    PASSWORD_RULE_TEXT,
+    hash_password,
+    password_kinds,
+    password_ok,
+    verify_password,
+)
 from app.core.village_token import next_village_code, token_for
 from app.errors import (
     ApiError,
@@ -33,6 +39,7 @@ from app.errors import (
     OrganizationInUse,
     OrganizationNotFound,
     OrganizationOutOfScope,
+    PasswordPolicy,
     TierTooLow,
     UserNotFound,
     VillageNotFound,
@@ -586,7 +593,7 @@ async def _check_role_shape(
             raise TierTooLow(detail={"organization_id": organization_id})
         if village_ids:
             raise ApiError(
-                "기관 관리자에게는 담당 마을을 지정하지 않습니다. 기관으로 범위가 정해집니다.",
+                "기관 관리자에게는 담당 지역을 지정하지 않습니다. 기관으로 범위가 정해집니다.",
                 code="ORG_ADMIN_HAS_NO_VILLAGES",
             )
         return
@@ -600,7 +607,7 @@ async def _check_role_shape(
             scope.ensure_allowed(vid)
     elif village_ids:
         raise ApiError(
-            "최고 관리자에게는 담당 마을을 지정하지 않습니다.", code="SUPER_ADMIN_HAS_NO_VILLAGES"
+            "최고 관리자에게는 담당 지역을 지정하지 않습니다.", code="SUPER_ADMIN_HAS_NO_VILLAGES"
         )
 
 
@@ -627,6 +634,7 @@ async def create_user(
         scope=scope,
     )
 
+    _check_password_rule(payload.password)
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
@@ -659,7 +667,11 @@ async def update_user(
 
     data = payload.model_dump(exclude_unset=True)
     if "password" in data and data["password"]:
+        _check_password_rule(data["password"])
         user.password_hash = hash_password(data["password"])
+        user.password_changed_at = dt.datetime.now(dt.timezone.utc)
+        user.failed_login_count = 0
+        user.locked_until = None
     # 보낸 경우에만 만료일을 다시 센다. 값이 null 이면 무기한으로 바꾼다.
     if "valid_days" in data:
         user.expires_at = _expiry_from(data["valid_days"])
@@ -703,7 +715,17 @@ TEMP_PASSWORD_LENGTH = 10
 
 
 def generate_temp_password() -> str:
-    return "".join(secrets.choice(TEMP_PASSWORD_CHARSET) for _ in range(TEMP_PASSWORD_LENGTH))
+    """임시 비밀번호. 비밀번호 규칙(2종 10자)을 반드시 지키도록 대·소문자·숫자를 하나씩 넣는다."""
+    while True:
+        pw = "".join(secrets.choice(TEMP_PASSWORD_CHARSET) for _ in range(TEMP_PASSWORD_LENGTH))
+        if password_ok(pw) and password_kinds(pw) >= 3:
+            return pw
+
+
+def _check_password_rule(plain: str) -> None:
+    """비밀번호 규칙(문제점 70번 ②). 계정 추가·수정·자기 변경에 같이 쓴다."""
+    if not password_ok(plain):
+        raise PasswordPolicy(f"비밀번호 규칙: {PASSWORD_RULE_TEXT}.")
 
 
 async def issue_temp_password(
@@ -736,6 +758,9 @@ async def issue_temp_password(
     password = generate_temp_password()
     user.password_hash = hash_password(password)
     user.must_change_password = True
+    # 잠긴 계정을 푸는 것도 이 버튼의 일이다(문제점 70번 ②).
+    user.failed_login_count = 0
+    user.locked_until = None
     await db.flush()
     return password
 
@@ -750,8 +775,10 @@ async def change_own_password(
         raise ApiError(
             "지금 비밀번호와 다른 값으로 정해 주세요.", code="PASSWORD_UNCHANGED"
         )
+    _check_password_rule(new_password)
     user.password_hash = hash_password(new_password)
     user.must_change_password = False
+    user.password_changed_at = dt.datetime.now(dt.timezone.utc)
     await db.flush()
 
 

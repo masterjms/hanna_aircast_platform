@@ -139,6 +139,12 @@ class Settings(BaseSettings):
     download_token_ttl_sec: int = 600
     #: 방송 기록 보관(일). 끝난 방송·단말 응답을 이 뒤에 지운다(문제점 50번, 5개월).
     event_retention_days: int = 150
+    #: 비밀번호 정책(문제점 70번 ②). 0 이면 끈다.
+    password_max_age_days: int = 90
+    login_lock_threshold: int = 5
+    login_lock_minutes: int = 30
+    #: 예약 실행 기록(schedule_runs) 보관(문제점 68번).
+    schedule_run_retention_days: int = 365
     #: 로그인 기록 보관(문제점 65·68번). 접속기록은 개인정보 안전성 확보조치 기준 1년 이상
     #: (대규모 2년).
     login_retention_days: int = 730

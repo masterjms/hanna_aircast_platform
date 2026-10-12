@@ -144,7 +144,7 @@ export function VillagePanel({
           </h2>
         </div>
         <button type="button" className="btn btn--ghost btn--danger" onClick={onDelete}>
-          마을 삭제
+          지역 삭제
         </button>
       </div>
 
@@ -197,7 +197,7 @@ export function VillagePanel({
           </div>
         </div>
         <p className="hint">
-          지도에서 이 마을의 단말이 찍힐 자리입니다. 주소 검색 한 번으로 도로명·지번·법정동코드·좌표가
+          지도에서 이 지역의 단말이 찍힐 자리입니다. 주소 검색 한 번으로 도로명·지번·법정동코드·좌표가
           같이 채워집니다. 위치를 따로 안 적은 단말은 이 좌표에 표시됩니다.
         </p>
 
@@ -291,7 +291,7 @@ export function VillagePanel({
         </div>
         {devices.length === 0 ? (
           <div className="empty empty--tight">
-            이 마을에 배정된 단말이 없습니다. 단말 관리에서 미배정 단말을 이 마을로 배정하세요.
+            이 지역에 배정된 단말이 없습니다. 단말 관리에서 미배정 단말을 이 지역으로 배정하세요.
           </div>
         ) : (
           <div className="table-wrap">

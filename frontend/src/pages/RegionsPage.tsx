@@ -380,7 +380,7 @@ export function RegionsPage() {
     if (node.org.id === myRootId) return '자기 기관은 지울 수 없습니다';
     const parts = [
       node.org.child_count > 0 && `하위 기관 ${node.org.child_count}`,
-      node.org.village_count > 0 && `마을 ${node.org.village_count}`,
+      node.org.village_count > 0 && `지역 ${node.org.village_count}`,
       node.org.user_count > 0 && `계정 ${node.org.user_count}`,
     ].filter(Boolean);
     return parts.length ? `${parts.join(' · ')} 이(가) 있어 지울 수 없습니다. 먼저 옮기거나 지우세요.` : '';
@@ -573,7 +573,7 @@ export function RegionsPage() {
       what:
         src.kind === 'org'
           ? '이 기관과 그 아래 전부의 관할이 바뀝니다.'
-          : '이 마을을 보는 계정이 바뀝니다. 단말·주소·이력은 그대로입니다.',
+          : '이 지역을 보는 계정이 바뀝니다. 단말·주소·이력은 그대로입니다.',
     };
   };
 
@@ -771,7 +771,7 @@ export function RegionsPage() {
       className="trow__input"
       type="text"
       value={draft}
-      placeholder={row.kind === 'new' && row.newKind === 'org' ? '기관 이름' : '마을 이름'}
+      placeholder={row.kind === 'new' && row.newKind === 'org' ? '기관 이름' : '지역 이름'}
       onChange={(e) => setDraft(e.target.value)}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
@@ -800,8 +800,8 @@ export function RegionsPage() {
         <div>
           <h1>지역 관리</h1>
           <p>
-            기관 {orgs.length}개 · 마을 {villages.length}개. 폴더처럼 다룹니다 — 마디를 고르고 새 기관·새
-            마을을 만들고, 끌어서 옮기고, F2 로 이름을 바꿉니다. 주소는 마을에만 적습니다.
+            기관 {orgs.length}개 · 지역 {villages.length}개. 폴더처럼 다룹니다 — 마디를 고르고 새 기관·새
+            지역을 만들고, 끌어서 옮기고, F2 로 이름을 바꿉니다. 주소는 지역에만 적습니다.
           </p>
         </div>
       </div>
@@ -831,7 +831,7 @@ export function RegionsPage() {
                 </svg>
               </ToolButton>
               <ToolButton
-                title={`새 마을${targetNameForTitle ? ` · ${targetNameForTitle} 아래` : ''}`}
+                title={`새 지역${targetNameForTitle ? ` · ${targetNameForTitle} 아래` : ''}`}
                 onClick={() => startCreate('village')}
                 disabled={!canNewVillage || busy}
               >
@@ -913,7 +913,7 @@ export function RegionsPage() {
                     {row.kind === 'org' || row.kind === 'orphans' ? (
                       <button
                         type="button"
-                        className="trow__toggle"
+                        className="trow__toggle tcaret"
                         tabIndex={-1}
                         aria-label={row.expanded ? '접기' : '펼치기'}
                         onClick={(e) => {
@@ -925,7 +925,7 @@ export function RegionsPage() {
                         <Chevron open={row.expanded} />
                       </button>
                     ) : (
-                      <span className="trow__toggle" />
+                      <span className="trow__toggle tcaret" />
                     )}
                     <span className={`trow__icon trow__icon--${row.kind === 'new' ? row.newKind : row.kind}`}>
                       {row.kind === 'village' || (row.kind === 'new' && row.newKind === 'village') ? (
@@ -948,7 +948,7 @@ export function RegionsPage() {
                         <span className="trow__meta">
                           {row.kind === 'org' && (
                             <>
-                              {row.node!.org.village_count > 0 && `마을 ${row.node!.org.village_count}`}
+                              {row.node!.org.village_count > 0 && `지역 ${row.node!.org.village_count}`}
                               {row.node!.org.village_count > 0 && row.node!.org.child_count > 0 && ' · '}
                               {row.node!.org.child_count > 0 && `기관 ${row.node!.org.child_count}`}
                             </>
@@ -991,10 +991,10 @@ export function RegionsPage() {
         <section className="explorer__detail">
           {!selectedEntity ? (
             <div className="empty explorer__empty">
-              <p className="strong">왼쪽에서 기관이나 마을을 고르세요.</p>
+              <p className="strong">왼쪽에서 기관이나 지역을 고르세요.</p>
               <p className="dim">
-                기관은 폴더입니다 — 몇 단이든 만들 수 있고 권한은 이 트리를 따릅니다. 마을은 파일입니다 —
-                주소·좌표·단말은 마을에만 있습니다.
+                기관은 폴더입니다 — 몇 단이든 만들 수 있고 권한은 이 트리를 따릅니다. 지역은 파일입니다 —
+                주소·좌표·단말은 지역에만 있습니다.
               </p>
             </div>
           ) : selectedEntity.kind === 'village' ? (
@@ -1008,9 +1008,9 @@ export function RegionsPage() {
             />
           ) : selectedEntity.kind === 'orphans' ? (
             <div className="empty explorer__empty">
-              <p className="strong">기관 없음 · 마을 {forest.orphans.length}개</p>
+              <p className="strong">기관 없음 · 지역 {forest.orphans.length}개</p>
               <p className="dim">
-                아무 기관에도 속하지 않은 마을입니다. 최고 관리자만 봅니다. 기관 아래로 끌어다 놓으면 그 기관
+                아무 기관에도 속하지 않은 지역입니다. 최고 관리자만 봅니다. 기관 아래로 끌어다 놓으면 그 기관
                 관리자에게 보이기 시작합니다.
               </p>
             </div>
@@ -1087,7 +1087,7 @@ export function RegionsPage() {
                 </button>
               )}
               <button type="button" role="menuitem" onClick={() => startCreate('village')} disabled={!canNewVillage}>
-                새 마을
+                새 지역
               </button>
             </>
           )}
@@ -1164,7 +1164,7 @@ function OrgPanel({
             + 새 기관
           </button>
           <button type="button" className="btn btn--primary" onClick={onNewVillage}>
-            + 새 마을
+            + 새 지역
           </button>
           <button
             type="button"
@@ -1180,7 +1180,7 @@ function OrgPanel({
 
       <div className="tiles tiles--4">
         <Tile label="하위 기관" value={stats.orgs} unit="개" note={`바로 아래 ${node.org.child_count}개`} />
-        <Tile label="마을" value={stats.villages} unit="개" note={`바로 아래 ${node.org.village_count}개`} />
+        <Tile label="지역" value={stats.villages} unit="개" note={`바로 아래 ${node.org.village_count}개`} />
         <Tile label="단말" value={stats.devices} unit="대" note="아래 전부 합계" />
         <Tile
           label="온라인"
@@ -1191,8 +1191,8 @@ function OrgPanel({
       </div>
 
       <p className="hint">
-        이 기관의 관리자 계정 {node.org.user_count}개는 여기 아래 마을 {stats.villages}개를 전부 봅니다. 나중에
-        붙이는 마을·기관도 자동으로 들어갑니다.
+        이 기관의 관리자 계정 {node.org.user_count}개는 여기 아래 지역 {stats.villages}개를 전부 봅니다. 나중에
+        붙이는 지역·기관도 자동으로 들어갑니다.
       </p>
 
       {node.children.length > 0 && (
@@ -1207,7 +1207,7 @@ function OrgPanel({
                     <FolderIcon open={false} /> {c.org.name}
                   </span>
                   <span className="dim num">
-                    마을 {s.villages} · 단말 {s.online}/{s.devices}
+                    지역 {s.villages} · 단말 {s.online}/{s.devices}
                   </span>
                 </li>
               );
@@ -1217,17 +1217,17 @@ function OrgPanel({
       )}
 
       <section className="card detail__card">
-        <h3 className="section-title">마을 {node.villages.length}</h3>
+        <h3 className="section-title">지역 {node.villages.length}</h3>
         {node.villages.length === 0 ? (
           <div className="empty empty--tight">
-            바로 아래에 마을이 없습니다. 「+ 새 마을」로 만들거나 다른 곳의 마을을 끌어다 놓으세요.
+            바로 아래에 지역이 없습니다. 「+ 새 지역」로 만들거나 다른 곳의 지역을 끌어다 놓으세요.
           </div>
         ) : (
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>마을</th>
+                  <th>지역</th>
                   <th>주소</th>
                   <th className="mono">village_id</th>
                   <th className="num">단말</th>

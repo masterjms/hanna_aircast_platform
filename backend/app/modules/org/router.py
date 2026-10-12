@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.constants import ScheduleTarget
-from app.core.deps import CurrentUser, Db, OrgAdmin, OrgIds, Publisher, Scope
+from app.core.deps import CurrentUser, Db, OrgAdmin, OrgIds, PasswordConfirmed, Publisher, Scope
 from app.modules.device import service as device_service
 from app.modules.org import service
 from app.modules.schedule import service as schedule_service
@@ -129,10 +129,10 @@ async def delete_village(
     scope.ensure_allowed(village_id)
     macs = await service.macs_in_village(db, village_id)
     await schedule_service.ensure_not_schedule_target(
-        db, what="마을", target_scope=ScheduleTarget.VILLAGE.value, ids=[village_id]
+        db, what="지역", target_scope=ScheduleTarget.VILLAGE.value, ids=[village_id]
     )
     await schedule_service.ensure_not_schedule_target(
-        db, what="마을 소속 단말", target_scope=ScheduleTarget.DEVICE.value, ids=macs
+        db, what="지역 소속 단말", target_scope=ScheduleTarget.DEVICE.value, ids=macs
     )
     await service.delete_village(db, village_id)
     # 미배정으로 돌아간 단말들의 village topic 허용을 ACL 에서 먼저 빼고 CONFIG 를 보낸다.
@@ -174,8 +174,14 @@ async def list_users(db: Db, actor: OrgAdmin, org_ids: OrgIds, scope: Scope) -> 
 
 @router.post("/api/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(
-    payload: UserCreate, db: Db, actor: OrgAdmin, org_ids: OrgIds, scope: Scope
+    payload: UserCreate,
+    db: Db,
+    actor: OrgAdmin,
+    org_ids: OrgIds,
+    scope: Scope,
+    _: PasswordConfirmed,
 ) -> UserOut:
+    """계정 추가. 마지막 단계에서 내 비밀번호(X-Confirm-Password)가 맞아야 한다(문제점 83번)."""
     return await service.create_user(db, payload, actor=actor, org_ids=org_ids, scope=scope)
 
 
@@ -201,6 +207,7 @@ async def issue_temp_password(
 
 @router.delete("/api/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
-    user_id: int, db: Db, actor: OrgAdmin, org_ids: OrgIds, scope: Scope
+    user_id: int, db: Db, actor: OrgAdmin, org_ids: OrgIds, scope: Scope, _: PasswordConfirmed
 ) -> None:
+    """계정 삭제. 내 비밀번호 확인 필수(문제점 83번)."""
     await service.delete_user(db, user_id, actor=actor, org_ids=org_ids, scope=scope)

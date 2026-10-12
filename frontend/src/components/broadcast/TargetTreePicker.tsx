@@ -17,11 +17,11 @@
  * 화면에서만 펼쳐지고, 서버·이력·단말 프로토콜은 그대로다.
  */
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import type { Device, Organization, Village, Zone } from '../../api/types';
 import { buildForest, type OrgNode } from '../../lib/orgtree';
-import { FolderIcon, TreeExpandButtons, VillageIcon } from '../TreeIcons';
+import { FolderIcon, TreeCaret, TreeToggleButton, VillageIcon } from '../TreeIcons';
 
 export type PickMode = 'village' | 'zone' | 'device';
 
@@ -229,6 +229,8 @@ export function TargetTreePicker({
   renderCount,
   single = false,
   allowOffline = false,
+  pick = 'leaves',
+  canPickGroup = () => true,
 }: {
   mode: PickMode;
   orgs: Organization[];
@@ -243,7 +245,15 @@ export function TargetTreePicker({
   single?: boolean;
   /** 꺼진(온라인 0) 잎도 고를 수 있게. 배정은 꺼진 마을에도 한다. */
   allowOffline?: boolean;
+  /**
+   * single 에서 무엇을 고르나. leaves=지역·단말(기본), groups=기관만(계정의 소속 기관 — 문제점 81번),
+   * both=기관 또는 지역(예약의 「관할 전체」 — 문제점 69번). 기관을 고르면 {leaves:[], groups:['o:<id>']}.
+   */
+  pick?: 'leaves' | 'groups' | 'both';
+  /** pick 이 groups·both 일 때 이 기관을 고를 수 있나(내 기관 제외 등). 'o:none' 은 늘 못 고른다. */
+  canPickGroup?: (key: string) => boolean;
 }) {
+  const radioName = useId();
   const [query, setQuery] = useState('');
   const pickable = allowOffline ? () => true : pickableOnline;
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -329,20 +339,25 @@ export function TargetTreePicker({
   };
 
   const leafRow = (leaf: Leaf, ancestors: string[], inherited: boolean) => {
-    const on = inherited || leaves.has(leaf.id);
+    // 하나만 고르는 트리에서는 위 묶음의 선택이 내려오지 않는다 — 라디오는 한 무리라 둘이 동시에 켜질 수 없다.
+    const on = (!single && inherited) || leaves.has(leaf.id);
     const can = pickable(leaf);
     return (
       <li key={leaf.id}>
         <div className="tree__row">
-          <span className="tree__caret tree__caret--none" aria-hidden="true" />
+          <TreeCaret />
           <label className={on ? 'is-on' : undefined}>
-            <input
-              type={single ? 'radio' : 'checkbox'}
-              name={single ? 'tree-single' : undefined}
-              checked={on}
-              disabled={!can}
-              onChange={(e) => toggleLeaf(leaf, e.target.checked, ancestors)}
-            />
+            {single && pick === 'groups' ? (
+              <span className="tree__nocheck" aria-hidden="true" />
+            ) : (
+              <input
+                type={single ? 'radio' : 'checkbox'}
+                name={single ? radioName : undefined}
+                checked={on}
+                disabled={!can}
+                onChange={(e) => toggleLeaf(leaf, e.target.checked, ancestors)}
+              />
+            )}
             {mode === 'village' && (
               <span className="tree__icon tree__icon--village">
                 <VillageIcon />
@@ -361,7 +376,7 @@ export function TargetTreePicker({
 
   const groupRow = (node: Node, ancestors: string[], inherited: boolean): ReactNode => {
     const self = groups.has(node.key);
-    const checked = inherited || self;
+    const checked = !single && (inherited || self);
     const all = allLeaves(node);
     const can = all.filter(pickable);
     const onCount = can.filter((l) => leaves.has(l.id)).length;
@@ -370,26 +385,30 @@ export function TargetTreePicker({
     const online = all.reduce((n, l) => n + l.online, 0);
     const total = all.reduce((n, l) => n + l.total, 0);
     const childAncestors = [...ancestors, node.key];
-    const unit = node.kind === 'org' ? (mode === 'village' ? '마을' : '') : mode === 'zone' ? '구역' : '단말';
+    const unit = node.kind === 'org' ? (mode === 'village' ? '지역' : '') : mode === 'zone' ? '구역' : '단말';
     return (
       <li key={node.key}>
         <div className="tree__row">
           {hasKids ? (
-            <button
-              type="button"
-              className="tree__caret"
-              aria-label={isCollapsed ? `${node.name} 펼치기` : `${node.name} 접기`}
-              aria-expanded={!isCollapsed}
+            <TreeCaret
+              open={!isCollapsed}
+              label={isCollapsed ? `${node.name} 펼치기` : `${node.name} 접기`}
               onClick={() => toggleCollapse(node.key, node)}
-            >
-              {isCollapsed ? '▸' : '▾'}
-            </button>
+            />
           ) : (
-            <span className="tree__caret tree__caret--none" aria-hidden="true" />
+            <TreeCaret />
           )}
-          <label className={checked ? 'is-on' : undefined}>
-            {single ? (
-              // 하나만 고르는 화면 — 묶음은 체크 대상이 아니다. 자리만 비워 세로줄을 맞춘다.
+          <label className={(single ? groups.has(node.key) : checked) ? 'is-on' : undefined}>
+            {single && pick !== 'leaves' && node.key !== 'o:none' && canPickGroup(node.key) ? (
+              // 기관을 고르는 화면(예약 「관할 전체」·계정 소속 기관).
+              <input
+                type="radio"
+                name={radioName}
+                checked={groups.has(node.key)}
+                onChange={() => onChange({ leaves: [], groups: [node.key] })}
+              />
+            ) : single ? (
+              // 하나만 고르는 화면 — 이 묶음은 체크 대상이 아니다. 자리만 비워 세로줄을 맞춘다.
               <span className="tree__nocheck" aria-hidden="true" />
             ) : (
               <TriCheckbox
@@ -424,9 +443,10 @@ export function TargetTreePicker({
     );
   };
 
-  // 전체 펼치기·접기(문제점 69번). 접기는 모든 묶음 키를 collapsed 에 넣는다.
+  // 전체 펼치기·접기(문제점 69·85번) — 버튼 하나. 접기는 모든 묶음 키를 collapsed 에 넣는다.
   const expandAll = () => setCollapsed(new Set());
   const collapseAll = () => setCollapsed(new Set(roots.flatMap(subtreeKeys)));
+  const allOpen = collapsed.size === 0;
 
   return (
     <>
@@ -435,12 +455,12 @@ export function TargetTreePicker({
           type="search"
           value={query}
           placeholder={
-            mode === 'device' ? '단말·마을 이름 검색' : mode === 'zone' ? '구역·마을 이름 검색' : '마을·기관 이름 검색'
+            mode === 'device' ? '단말·지역 이름 검색' : mode === 'zone' ? '구역·지역 이름 검색' : '지역·기관 이름 검색'
           }
           onChange={(e) => setQuery(e.target.value)}
           aria-label="방송 대상 검색"
         />
-        <TreeExpandButtons onExpand={expandAll} onCollapse={collapseAll} />
+        <TreeToggleButton allOpen={allOpen} onExpand={expandAll} onCollapse={collapseAll} />
       </div>
       {shown.length === 0 ? (
         <p className="hint">검색 결과가 없습니다.</p>

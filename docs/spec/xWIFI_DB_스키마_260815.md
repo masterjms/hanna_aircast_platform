@@ -55,7 +55,10 @@ CREATE TABLE users (
     organization_id INTEGER REFERENCES organizations(id) ON DELETE RESTRICT,  -- org_admin 만
     expires_at      TIMESTAMPTZ,                                              -- 사용 기간 (0014). NULL = 무기한
     must_change_password BOOLEAN NOT NULL DEFAULT false,                      -- 임시 비밀번호 받음 (0019)
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    password_changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),                   -- 90일 지나면 변경 강제 (0027)
+    failed_login_count SMALLINT NOT NULL DEFAULT 0,                           -- 연속 실패 (0027)
+    locked_until    TIMESTAMPTZ                                               -- 5회 실패 → 30분 잠금 (0027)
 );
 
 CREATE TABLE user_villages (

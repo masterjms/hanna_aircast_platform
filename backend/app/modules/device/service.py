@@ -201,7 +201,7 @@ async def macs_for_target(
         stmt = stmt.where(Device.zone_id.in_(zone_ids))
     elif target_scope == "village":
         if not target_ids:
-            raise ApiError("대상 마을 id 가 필요합니다.")
+            raise ApiError("대상 지역 id 가 필요합니다.")
         village_ids = [int(v) for v in target_ids]
         for village_id in village_ids:
             scope.ensure_allowed(village_id)
@@ -359,11 +359,11 @@ async def describe_targets(
     out: list[str] = []
     for target_scope, target_ids in targets:
         if target_scope == "all":
-            out.append("모든 마을")
+            out.append("모든 지역")
         elif not target_ids:
             out.append("")
         elif target_scope == "village":
-            out.append(_fold([village_names.get(_as_int(v), f"마을 {v}") for v in target_ids]))
+            out.append(_fold([village_names.get(_as_int(v), f"지역 {v}") for v in target_ids]))
         elif target_scope == "zone":
             out.append(_fold([zone_names.get(_as_int(z), f"구역 {z}") for z in target_ids]))
         else:
@@ -515,13 +515,13 @@ async def _validate_assignment(
     if zone_id is not None:
         if village_id is None:
             raise ApiError(
-                "구역만 배정할 수 없습니다. 마을을 먼저 지정하세요.",
+                "구역만 배정할 수 없습니다. 지역을 먼저 지정하세요.",
                 code="ZONE_WITHOUT_VILLAGE",
             )
         owner = await org_service.zone_village_id(db, zone_id)
         if owner != village_id:
             raise ApiError(
-                "구역이 해당 마을 소속이 아닙니다.",
+                "구역이 해당 지역 소속이 아닙니다.",
                 code="ZONE_VILLAGE_MISMATCH",
                 detail={"zone_id": zone_id, "zone_village_id": owner},
             )
@@ -556,7 +556,7 @@ async def update_device(
 
     if not can_move and new_village != device.village_id:
         raise ApiError(
-            "단말의 마을 이동은 기관 관리자 이상이 할 수 있습니다.",
+            "단말의 지역 이동은 기관 관리자 이상이 할 수 있습니다.",
             code="DEVICE_MOVE_REQUIRES_ORG_ADMIN",
         )
 

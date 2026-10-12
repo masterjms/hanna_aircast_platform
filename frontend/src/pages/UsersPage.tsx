@@ -16,8 +16,9 @@ import type { LoginEventPage, Organization, Role, User, Village } from '../api/t
 import { PageSizeSelect, PagerBar, type PageSize } from '../components/Pager';
 import { TargetTreePicker } from '../components/broadcast/TargetTreePicker';
 import { useAuth } from '../auth/AuthContext';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { Modal } from '../components/Modal';
-import { buildForest, flattenForest, pathLabel } from '../lib/orgtree';
+import { buildForest, flattenForest } from '../lib/orgtree';
 import { ROLE_LABEL, isOrgRole, manageableRoles } from '../lib/roles';
 
 interface FormState {
@@ -139,21 +140,37 @@ export function UsersPage() {
     void load();
   }, [load]);
 
+  // 계정 추가·삭제는 마지막에 내 비밀번호를 받는다(문제점 83번).
+  const [confirmCreate, setConfirmCreate] = useState(false);
+  const [deletingUser, setDeletingUser] = useState<User | null>(null);
+
+  const createWith = async (confirmPassword: string) => {
+    if (!form) return;
+    await api.users.create(
+      {
+        username: form.username.trim(),
+        password: form.password,
+        role: form.role,
+        village_ids: form.role === 'village_admin' ? form.village_ids : [],
+        organization_id: isOrgRole(form.role) && form.organization_id !== '' ? form.organization_id : null,
+        valid_days: form.valid_days === '' ? null : form.valid_days,
+      },
+      confirmPassword,
+    );
+    closeForm();
+    await load();
+  };
+
   const save = async () => {
     if (!form) return;
+    if (editingId === null) {
+      setConfirmCreate(true);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      if (editingId === null) {
-        await api.users.create({
-          username: form.username.trim(),
-          password: form.password,
-          role: form.role,
-          village_ids: form.role === 'village_admin' ? form.village_ids : [],
-          organization_id: isOrgRole(form.role) && form.organization_id !== '' ? form.organization_id : null,
-          valid_days: form.valid_days === '' ? null : form.valid_days,
-        });
-      } else {
+      {
         // 비밀번호는 입력했을 때만 보낸다 — 빈 문자열을 보내면 초기화돼 버린다.
         // 기간은 보낼 때마다 오늘부터 다시 센다 — 수정 화면에서 저장하면 연장이다.
         await api.users.update(editingId, {
@@ -173,16 +190,8 @@ export function UsersPage() {
     }
   };
 
-  const remove = async (u: User) => {
-    if (!window.confirm(`계정 "${u.username}" 을(를) 삭제할까요?`)) return;
-    setError(null);
-    try {
-      await api.users.remove(u.id);
-      await load();
-    } catch (err) {
-      fail(err, '삭제에 실패했습니다.');
-    }
-  };
+  // 삭제는 확인 창에서 — 내 비밀번호(문제점 83번).
+  const remove = (u: User) => setDeletingUser(u);
 
   const villageNames = (ids: number[]) =>
     ids.length === 0
@@ -229,7 +238,7 @@ export function UsersPage() {
         </div>
       )}
 
-      <div className="table-wrap table-wrap--scroll">
+      <div className="table-wrap table-wrap--scroll table-wrap--min5">
         {loading ? (
           <div className="empty">불러오는 중…</div>
         ) : (
@@ -267,7 +276,7 @@ export function UsersPage() {
                     ) : isOrgRole(u.role) ? (
                       u.organization_name ?? <span className="badge badge--warn">소속 기관 없음</span>
                     ) : u.village_ids.length === 0 ? (
-                      <span className="badge badge--warn">담당 마을 없음</span>
+                      <span className="badge badge--warn">담당 지역 없음</span>
                     ) : (
                       villageNames(u.village_ids)
                     )}
@@ -439,33 +448,33 @@ export function UsersPage() {
 
           {isOrgRole(form.role) && (
             <div className="field">
-              <label htmlFor="u-org">소속 기관</label>
-              <select
-                id="u-org"
-                value={form.organization_id}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    organization_id: e.target.value === '' ? '' : Number(e.target.value),
-                  })
-                }
-              >
-                <option value="">선택하세요</option>
-                {orgOptions.map((n) => (
-                  <option key={n.org.id} value={n.org.id} title={pathLabel(n)}>
-                    {'\u00a0\u00a0'.repeat(n.depth)}
-                    {n.depth > 0 ? '└ ' : ''}
-                    {n.org.name}
-                  </option>
-                ))}
-              </select>
+              <label>소속 기관</label>
+              {/* 지역 관리와 같은 트리에서 기관 하나를 고른다(문제점 81번). 내 기관은 동료라 못 고른다. */}
+              <TargetTreePicker
+                mode="village"
+                single
+                allowOffline
+                pick="groups"
+                canPickGroup={(key) => orgOptions.some((n) => `o:${n.org.id}` === key)}
+                orgs={orgs}
+                villages={villages}
+                devices={[]}
+                zonesOf={{}}
+                onNeedZones={() => undefined}
+                value={{ leaves: [], groups: form.organization_id === '' ? [] : [`o:${form.organization_id}`] }}
+                onChange={(next) => {
+                  const g = next.groups[0];
+                  setForm({ ...form, organization_id: g ? Number(g.slice(2)) : '' });
+                }}
+                renderCount={(_online, total) => <span className="dim">단말 {total}대</span>}
+              />
               {orgOptions.length === 0 ? (
                 <p className="hint hint--warn">
                   고를 수 있는 기관이 없습니다. 지역 관리에서 내 기관 아래에 기관을 먼저 만드세요.
                 </p>
               ) : (
                 <p className="hint">
-                  이 기관과 그 아래 모든 기관의 마을을 봅니다. 나중에 붙이는 마을·기관도 자동으로
+                  이 기관과 그 아래 모든 기관의 지역을 봅니다. 나중에 붙이는 지역·기관도 자동으로
                   들어갑니다. 주소가 아니라 지역 관리 트리 기준입니다.
                 </p>
               )}
@@ -474,9 +483,9 @@ export function UsersPage() {
 
           {form.role === 'village_admin' && (
             <div className="field">
-              <label>담당 마을</label>
+              <label>담당 지역</label>
               {villages.length === 0 ? (
-                <p className="hint">먼저 마을을 등록하세요.</p>
+                <p className="hint">먼저 지역을 등록하세요.</p>
               ) : (
                 // 지역 관리와 같은 트리에서 고른다(문제점 66번) — 기관을 체크하면 그 아래 마을 전부.
                 <TargetTreePicker
@@ -494,16 +503,41 @@ export function UsersPage() {
               )}
               {form.village_ids.length === 0 && villages.length > 0 && (
                 <p className="hint hint--warn">
-                  담당 마을이 없으면 로그인은 되지만 아무 데이터도 보이지 않습니다.
+                  담당 지역이 없으면 로그인은 되지만 아무 데이터도 보이지 않습니다.
                 </p>
               )}
             </div>
           )}
 
           {form.role === 'super_admin' && (
-            <p className="hint">최고 관리자는 전체 마을에 접근합니다. 담당 마을을 지정하지 않습니다.</p>
+            <p className="hint">최고 관리자는 전체 지역에 접근합니다. 담당 지역을 지정하지 않습니다.</p>
           )}
         </Modal>
+      )}
+
+      {confirmCreate && form && (
+        <ConfirmDialog
+          title="계정 추가 확인"
+          target={`${form.username.trim()} · ${ROLE_LABEL[form.role]}`}
+          warning="이 계정을 만듭니다. 확인을 위해 지금 로그인한 계정의 비밀번호를 입력하세요."
+          confirmLabel="계정 추가"
+          onConfirm={createWith}
+          onClose={() => setConfirmCreate(false)}
+        />
+      )}
+      {deletingUser && (
+        <ConfirmDialog
+          title="계정 삭제"
+          target={`${deletingUser.username} · ${ROLE_LABEL[deletingUser.role]}`}
+          warning="계정이 바로 지워지고 되돌릴 수 없습니다. 로그인 기록은 남습니다."
+          danger
+          confirmLabel="계정 삭제"
+          onConfirm={async (pw) => {
+            await api.users.remove(deletingUser.id, pw);
+            await load();
+          }}
+          onClose={() => setDeletingUser(null)}
+        />
       )}
 
       <LoginHistory />

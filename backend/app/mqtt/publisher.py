@@ -279,14 +279,14 @@ class MqttPublisher:
 
         elif target_scope is TargetScope.VILLAGE:
             if not village_ids:
-                raise ApiError("마을 대상 명령에는 village_ids 가 필요합니다.")
+                raise ApiError("지역 대상 명령에는 village_ids 가 필요합니다.")
             for village_id in village_ids:
                 scope.ensure_allowed(village_id)
             tokens = village_tokens or {}
             missing = [v for v in village_ids if v not in tokens]
             if missing:
                 raise ApiError(
-                    f"마을 MQTT 문자열을 모릅니다: {missing}", code="VILLAGE_TOKEN_MISSING"
+                    f"지역 MQTT 문자열을 모릅니다: {missing}", code="VILLAGE_TOKEN_MISSING"
                 )
             targets = [topics.village_cmd(tokens[v]) for v in village_ids]
 

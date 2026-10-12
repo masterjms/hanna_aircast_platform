@@ -42,6 +42,10 @@ log() { echo -e "\n\033[1m== $*\033[0m"; }
 
 [ -f .env ] || { echo "!! .env 가 없다. 배포 전에 만들어야 한다."; exit 1; }
 
+# 관리자 접속 허용 IP 파일(문제점 70번 ⑤). 없으면 기본(allow all)으로 만든다 — 없으면 docker 가
+# 빈 디렉터리를 만들어 nginx 가 뜨지 않는다. 서버에서 고친 내용은 저장소가 덮지 않는다(.gitignore).
+[ -f infra/nginx/admin-allow.local.conf ] || cp infra/nginx/admin-allow.conf.example infra/nginx/admin-allow.local.conf
+
 PREV_SHA="$(git rev-parse --short HEAD)"
 
 # ── 1. 진행 중인 방송 확인 ──────────────────────────────────────────

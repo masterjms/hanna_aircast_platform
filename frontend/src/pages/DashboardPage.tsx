@@ -29,31 +29,66 @@ import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
 
 type Tone = 'ok' | 'warn' | 'danger' | 'idle';
 
-function Tile({
+/**
+ * 현황 카드(문제점 85번 ②, 2026-10-12) — 제목·상태 배지·큰 숫자·막대 그래프. 기준 설명은 늘 보이지 않고
+ * 카드에 마우스를 올리면(또는 키보드로 초점을 주면) 나타난다. 숫자가 주인공이 되게 한다.
+ */
+function StatCard({
   label,
   value,
   unit,
-  note,
+  ratio,
+  percent,
+  badge,
+  tip,
   tone = 'idle',
+  onClick,
+  action,
 }: {
   label: string;
   value: number;
   unit: string;
-  note: string;
+  /** 막대의 채움(0~1). 없으면 막대를 비워 둔다. */
+  ratio: number;
+  /** 숫자 옆 백분율 칩 */
+  percent?: number;
+  badge: string;
+  tip: string;
   tone?: Tone;
+  onClick?: () => void;
+  /** 숫자 옆 짧은 행동 안내(예: 「원인 확인 ›」) */
+  action?: string;
 }) {
+  const fill = Math.max(0, Math.min(1, Number.isFinite(ratio) ? ratio : 0));
+  const Tag = onClick ? 'button' : 'div';
   return (
-    <div className={`tile tile--${tone}`}>
-      <div className="tile__head">
-        <span className="tile__label">{label}</span>
-        <span className="tile__dot" aria-hidden="true" />
+    <Tag
+      type={onClick ? 'button' : undefined}
+      className={`stat stat--${tone}${onClick ? ' stat--action' : ''}`}
+      onClick={onClick}
+      tabIndex={onClick ? undefined : 0}
+      aria-label={`${label} ${value}${unit}. ${tip}`}
+    >
+      <div className="stat__head">
+        <span className="stat__label">{label}</span>
+        <span className={`stat__badge stat__badge--${tone}`}>
+          <span className="stat__dot" aria-hidden="true" />
+          {badge}
+        </span>
       </div>
-      <div className="tile__row">
-        <span className="tile__value">{value}</span>
-        <span className="tile__unit">{unit}</span>
+      <div className="stat__row">
+        <span className="stat__value">{value}</span>
+        <span className="stat__unit">{unit}</span>
+        {percent !== undefined && <span className={`stat__pct stat__pct--${tone}`}>{percent.toFixed(1)}%</span>}
+        {action && <span className="stat__action">{action} ›</span>}
       </div>
-      <div className="tile__note">{note}</div>
-    </div>
+      <div className="stat__bar" aria-hidden="true">
+        <span style={{ width: `${(fill * 100).toFixed(1)}%` }} />
+      </div>
+      <div className="stat__tip" role="tooltip">
+        {tip}
+      </div>
+    </Tag>
   );
 }
 
@@ -146,7 +181,7 @@ function AlertTable({
         <div className="filters__spacer" />
         <input
           type="search"
-          placeholder="별칭 · MAC · 마을"
+          placeholder="별칭 · MAC · 지역"
           value={q}
           onChange={(e) => {
             setQ(e.target.value);
@@ -167,7 +202,7 @@ function AlertTable({
             <thead>
               <tr>
                 <th>별칭</th>
-                <th>마을</th>
+                <th>지역</th>
                 <th className="mono">MAC</th>
                 <th>상태</th>
                 <th className="num">RSSI</th>
@@ -304,38 +339,53 @@ export function DashboardPage() {
       <div ref={rowRef} className="dash__top">
         {/* ── 왼쪽: 요약 + 기관·마을별 단말 ──
             타일은 제자리에 있고 단말 목록이 남는 높이(지도 아래 끝까지)를 차지해 안에서
-            스크롤한다. 단말·마을이 늘어도 화면 전체가 길어지지 않는다. */}
+            스크롤한다. 단말·지역이 늘어도 화면 전체가 길어지지 않는다. */}
         <div className="dash__left" style={{ flex: `1 1 ${100 - mapPct}%` }}>
           {/* 좁은 왼쪽 칼럼에서도 와이어프레임처럼 2×2 를 유지한다 */}
-          <div className="tiles" style={{ gridTemplateColumns: 'repeat(2, 1fr)', marginBottom: 0 }}>
-            <Tile
-              label="온라인"
+          <div className="stats">
+            <StatCard
+              label="온라인 단말"
               value={devices.online}
               unit={`/ ${total}`}
-              note="최근 5분 내 STATUS 수신 기준"
-              tone="ok"
+              percent={total > 0 ? (devices.online / total) * 100 : 0}
+              ratio={total > 0 ? devices.online / total : 0}
+              badge={devices.offline === 0 && total > 0 ? '정상 가동' : total === 0 ? '단말 없음' : '일부 끊김'}
+              tone={devices.offline === 0 && total > 0 ? 'ok' : total === 0 ? 'idle' : 'warn'}
+              tip="최근 5분 안에 STATUS 를 보낸 단말 수 / 전체 단말 수"
             />
-            <Tile
-              label="오프라인"
+            <StatCard
+              label="오프라인 단말"
               value={devices.offline}
               unit="대"
-              note="LWT 수신 또는 5분 이상 무응답"
-              tone={devices.offline ? 'danger' : 'idle'}
+              ratio={total > 0 ? devices.offline / total : 0}
+              badge={devices.offline > 0 ? '통신 장애' : '이상 없음'}
+              tone={devices.offline > 0 ? 'danger' : 'ok'}
+              tip="LWT(연결 끊김)를 받았거나 5분 이상 응답이 없는 단말. 누르면 아래 이상 단말 표로 갑니다."
+              action={devices.offline > 0 ? '원인 확인' : undefined}
+              onClick={
+                devices.offline > 0
+                  ? () => document.querySelector('.dash__alerts')?.scrollIntoView({ behavior: 'smooth' })
+                  : undefined
+              }
             />
-            <Tile
-              label="방송 중"
+            <StatCard
+              label="진행 중인 방송"
               value={data.active_broadcasts.length}
               unit="건"
-              note={broadcasting ? '진행 중 — 방송 제어에서 확인' : '진행 중인 방송 없음'}
+              ratio={broadcasting ? 1 : 0}
+              badge={broadcasting ? '송출 중' : '대기 중'}
               tone={broadcasting ? 'warn' : 'idle'}
+              tip={broadcasting ? '진행 중인 방송이 있습니다. 방송하기 화면에서 확인·중지합니다.' : '진행 중인 방송 없음'}
             />
             {user?.all_villages && (
-              <Tile
-                label="미배정"
+              <StatCard
+                label="미배정 단말"
                 value={devices.unassigned}
                 unit="대"
-                note="마을 배정 대기 중"
-                tone={devices.unassigned ? 'warn' : 'idle'}
+                ratio={total > 0 ? devices.unassigned / total : 0}
+                badge={devices.unassigned > 0 ? '배정 대기' : '관리 정상'}
+                tone={devices.unassigned > 0 ? 'warn' : 'ok'}
+                tip="지역 배정을 기다리는 단말. 단말 관리에서 배정합니다."
               />
             )}
           </div>
