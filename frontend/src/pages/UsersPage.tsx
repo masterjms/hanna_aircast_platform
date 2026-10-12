@@ -17,6 +17,7 @@ import { PageSizeSelect, PagerBar, type PageSize } from '../components/Pager';
 import { TargetTreePicker } from '../components/broadcast/TargetTreePicker';
 import { useAuth } from '../auth/AuthContext';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { PASSWORD_RULE_TEXT, passwordOk } from '../lib/password';
 import { Modal } from '../components/Modal';
 import { buildForest, flattenForest } from '../lib/orgtree';
 import { ROLE_LABEL, isOrgRole, manageableRoles } from '../lib/roles';
@@ -83,6 +84,7 @@ export function UsersPage() {
   const [copied, setCopied] = useState(false);
 
   const closeForm = () => {
+    setFormError(null);
     setForm(null);
     setEditingId(null);
     setTempPw(null);
@@ -144,19 +146,29 @@ export function UsersPage() {
   const [confirmCreate, setConfirmCreate] = useState(false);
   const [deletingUser, setDeletingUser] = useState<User | null>(null);
 
+  // 확인 창 안에서는 「내 비밀번호」 오류만 보여 준다. 그 밖의 오류(새 계정 비밀번호 규칙, 아이디 중복 등)는
+  // 확인 창을 닫고 계정 폼에 띄운다 — 안 그러면 관리자 비밀번호가 틀린 것처럼 읽힌다(2026-10-12).
+  const [formError, setFormError] = useState<string | null>(null);
   const createWith = async (confirmPassword: string) => {
     if (!form) return;
-    await api.users.create(
-      {
-        username: form.username.trim(),
-        password: form.password,
-        role: form.role,
-        village_ids: form.role === 'village_admin' ? form.village_ids : [],
-        organization_id: isOrgRole(form.role) && form.organization_id !== '' ? form.organization_id : null,
-        valid_days: form.valid_days === '' ? null : form.valid_days,
-      },
-      confirmPassword,
-    );
+    setFormError(null);
+    try {
+      await api.users.create(
+        {
+          username: form.username.trim(),
+          password: form.password,
+          role: form.role,
+          village_ids: form.role === 'village_admin' ? form.village_ids : [],
+          organization_id: isOrgRole(form.role) && form.organization_id !== '' ? form.organization_id : null,
+          valid_days: form.valid_days === '' ? null : form.valid_days,
+        },
+        confirmPassword,
+      );
+    } catch (err) {
+      if (err instanceof ApiError && err.code.startsWith('CONFIRM_PASSWORD')) throw err;
+      setFormError(err instanceof ApiError ? err.message : '계정을 만들지 못했습니다.');
+      return; // 확인 창은 닫히고 폼에 사유가 남는다
+    }
     closeForm();
     await load();
   };
@@ -200,10 +212,12 @@ export function UsersPage() {
           .map((id) => villages.find((v) => v.id === id)?.name ?? `#${id}`)
           .join(', ');
 
+  // 새 비밀번호는 서버와 같은 규칙으로 미리 본다(문제점 70번 ②).
+  const pwBad = form !== null && form.password !== '' && !passwordOk(form.password);
   const canSubmit =
     form !== null &&
-    (editingId !== null || (form.username.trim().length >= 3 && form.password.length >= 8)) &&
-    (form.password === '' || form.password.length >= 8) &&
+    (editingId !== null || (form.username.trim().length >= 3 && form.password !== '')) &&
+    !pwBad &&
     // 기관형 역할은 기관이 있어야 범위가 생긴다.
     (!isOrgRole(form.role) || form.organization_id !== '');
 
@@ -340,6 +354,7 @@ export function UsersPage() {
             </>
           }
         >
+          {formError && <div className="alert" style={{ marginBottom: 12 }}>{formError}</div>}
           <div className="field">
             <label htmlFor="u-name">아이디</label>
             <input
@@ -363,7 +378,10 @@ export function UsersPage() {
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
             />
-            <p className="hint">8자 이상 64자 이하</p>
+            <p className={pwBad ? 'hint hint--warn' : 'hint'}>
+              {pwBad ? '규칙에 맞지 않습니다 — ' : ''}
+              {PASSWORD_RULE_TEXT} (64자까지)
+            </p>
             {editingId !== null && editingId !== me?.id && (
               <div className="temp-pw">
                 {tempPw === null ? (
