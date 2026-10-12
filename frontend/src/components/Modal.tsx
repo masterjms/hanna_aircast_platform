@@ -17,15 +17,17 @@ interface ModalProps {
    * 폭. 기본은 460px 로 폼 한 줄짜리에 맞춘다.
    *   mid   620px — 문장·확인처럼 조금 넓어야 읽히는 것
    *   wide  920px — 2단 위자드
+   *   xl   1120px — 지도처럼 크게 봐야 하는 것(단말 배정). 높이도 화면 가득
    * 내용이 2단인데 좁은 모달에 넣으면 각 칸이 200px 밑으로 떨어져 전부 줄바꿈된다.
    */
-  size?: 'default' | 'mid' | 'wide';
+  size?: 'default' | 'mid' | 'wide' | 'xl';
 }
 
 const SIZE_CLASS: Record<NonNullable<ModalProps['size']>, string> = {
   default: '',
   mid: ' modal--mid',
   wide: ' modal--wide',
+  xl: ' modal--xl',
 };
 
 export function Modal({ title, onClose, children, footer, size = 'default' }: ModalProps) {

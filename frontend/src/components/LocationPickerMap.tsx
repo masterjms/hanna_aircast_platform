@@ -21,11 +21,17 @@ export function LocationPickerMap({
   lat,
   lng,
   onChange,
+  height = 220,
+  showHint = true,
 }: {
   jsKey: string;
   lat: number;
   lng: number;
   onChange: (lat: number, lng: number) => void;
+  /** 지도 높이(px). 'fill' 이면 부모 높이를 채운다. */
+  height?: number | 'fill';
+  /** 아래 안내 문단. 부모가 따로 안내를 그리면 끈다. */
+  showHint?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
@@ -88,11 +94,16 @@ export function LocationPickerMap({
   if (error) return <p className="hint hint--warn">지도를 불러오지 못했습니다 — {error}</p>;
   return (
     <>
-      <div ref={containerRef} style={{ width: '100%', height: 220, borderRadius: 8 }} />
-      <p className="hint">
-        주소 검색은 지번 대표 지점까지만 정확합니다(아파트는 단지당 한 점). 마커를 끌거나
-        지도를 클릭해 실제 설치 위치(동 앞 등)로 맞춰 주세요 — 저장하면 그 좌표가 쓰입니다.
-      </p>
+      <div
+        ref={containerRef}
+        style={{ width: '100%', height: height === 'fill' ? '100%' : height, borderRadius: 10 }}
+      />
+      {showHint && (
+        <p className="hint">
+          주소 검색은 지번 대표 지점까지만 정확합니다(아파트는 단지당 한 점). 마커를 끌거나
+          지도를 클릭해 실제 설치 위치(동 앞 등)로 맞춰 주세요 — 저장하면 그 좌표가 쓰입니다.
+        </p>
+      )}
     </>
   );
 }

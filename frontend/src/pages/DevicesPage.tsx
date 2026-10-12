@@ -15,6 +15,7 @@ import { RegisterDeviceDialog } from '../components/RegisterDeviceDialog';
 import { provisioningFrame } from '../lib/serial';
 import type { Device, DeviceCredential, DeviceStatusFilter, Organization, Village } from '../api/types';
 import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
+import { StepTitle } from '../components/StepTitle';
 import { TargetTreePicker } from '../components/broadcast/TargetTreePicker';
 import { useAuth } from '../auth/AuthContext';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
@@ -92,11 +93,20 @@ function AssignDialog({
     lng: device.lng,
   });
   const [addressDetail, setAddressDetail] = useState(device.address_detail ?? '');
-  //: 위치 보정 미니맵용 JS 키. 좌표가 있을 때만 한 번 받아온다.
-  const [jsKey, setJsKey] = useState<string | null>(null);
+  //: 위치 보정 지도용 JS 키. 열 때 한 번 받아온다 — 주소를 아직 안 찾았어도 고른 지역 좌표에서
+  //: 지도를 바로 띄워 클릭으로 찍을 수 있게 한다.
+  // undefined = 아직 안 물어봄, null = 서버에 키가 없음
+  const [jsKey, setJsKey] = useState<string | null | undefined>(undefined);
+  // 지도 중심: 설치 위치가 있으면 그것, 없으면 고른 지역의 좌표.
+  const center =
+    loc.lat !== null && loc.lng !== null
+      ? { lat: loc.lat, lng: loc.lng, placed: true }
+      : pickedVillage?.lat != null && pickedVillage?.lng != null
+        ? { lat: pickedVillage.lat, lng: pickedVillage.lng, placed: false }
+        : null;
 
   useEffect(() => {
-    if (loc.lat === null || jsKey !== null) return;
+    if (center === null || jsKey !== undefined) return;
     let alive = true;
     api.dashboard
       .map()
@@ -105,7 +115,7 @@ function AssignDialog({
     return () => {
       alive = false;
     };
-  }, [loc.lat, jsKey]);
+  }, [center === null, jsKey]);
 
   const save = async () => {
     setBusy(true);
@@ -131,12 +141,16 @@ function AssignDialog({
     }
   };
 
+  const address = loc.road_address ?? loc.jibun_address;
+
   return (
     <Modal
       title="단말 배정"
+      size="xl"
       onClose={onClose}
       footer={
         <>
+          {error && <span className="hint hint--warn assign__error">{error}</span>}
           <button type="button" className="btn btn--ghost" onClick={onClose} disabled={busy}>
             취소
           </button>
@@ -146,117 +160,168 @@ function AssignDialog({
         </>
       }
     >
-      <p className="mono dim" style={{ marginTop: 0 }}>
-        {device.mac}
-      </p>
+      <div className="assign">
+        {/* ── 왼쪽: 어느 지역 · 별칭 ── */}
+        <section className="assign__col assign__col--left">
+          <div className="assign__device">
+            <span className="assign__device-label">{label.trim() || '별칭 없음'}</span>
+            <span className="mono assign__device-mac">{device.mac}</span>
+          </div>
 
-      <div className="field">
-        <label>지역</label>
-        <div className="assign-village">
-          <span className={pickedVillage ? 'strong' : 'dim'}>
-            {pickedVillage ? pickedVillage.name : '미배정'}
-          </span>
-          {pickedVillage && (
-            <button
-              type="button"
-              className="btn btn--sm btn--ghost"
-              onClick={() => setVillageId('')}
-            >
-              배정 해제
-            </button>
-          )}
-        </div>
-        <TargetTreePicker
-          mode="village"
-          single
-          allowOffline
-          orgs={orgs}
-          villages={villages}
-          devices={[]}
-          zonesOf={{}}
-          onNeedZones={() => undefined}
-          value={{ leaves: villageId === '' ? [] : [String(villageId)], groups: [] }}
-          onChange={(next) => {
-            const id = next.leaves[0];
-            setVillageId(id === undefined ? '' : Number(id));
-          }}
-          renderCount={(online, total) => (
-            <span className={online > 0 ? 'dim' : 'count--none'}>
-              {total === 0 ? '단말 없음' : `${online}/${total}`}
+          <StepTitle n={1} done={pickedVillage !== undefined}>
+            어느 지역에 배정할까요?
+          </StepTitle>
+          <div className="assign-village">
+            <span className={pickedVillage ? 'assign__chip' : 'assign__chip assign__chip--none'}>
+              {pickedVillage ? pickedVillage.name : '미배정'}
             </span>
-          )}
-        />
-        <p className="hint">기관을 펼쳐 지역을 하나 고릅니다. 단말이 없는 지역도 고를 수 있습니다.</p>
+            {pickedVillage && (
+              <button type="button" className="btn btn--sm btn--ghost" onClick={() => setVillageId('')}>
+                배정 해제
+              </button>
+            )}
+          </div>
+          <div className="assign__tree">
+            <TargetTreePicker
+              mode="village"
+              single
+              allowOffline
+              orgs={orgs}
+              villages={villages}
+              devices={[]}
+              zonesOf={{}}
+              onNeedZones={() => undefined}
+              value={{ leaves: villageId === '' ? [] : [String(villageId)], groups: [] }}
+              onChange={(next) => {
+                const id = next.leaves[0];
+                setVillageId(id === undefined ? '' : Number(id));
+              }}
+              renderCount={(online, total) => (
+                <span className={online > 0 ? 'dim' : 'count--none'}>
+                  {total === 0 ? '단말 없음' : `${online}/${total}`}
+                </span>
+              )}
+            />
+          </div>
+          <p className="hint">
+            지역을 배정하면 서버가 CONFIG 로 단말에 알려주고, 단말이 그 지역 방송을 받습니다. 단말 상태에
+            반영되기까지 몇 초 걸립니다.
+          </p>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label htmlFor="a-label">별칭 (선택)</label>
+            <input
+              id="a-label"
+              value={label}
+              maxLength={40}
+              placeholder="비우면 목록에 MAC 이 표시됩니다"
+              onChange={(e) => setLabel(e.target.value)}
+            />
+          </div>
+        </section>
+
+        {/* ── 오른쪽: 설치 위치 ── */}
+        <section className="assign__col assign__col--right">
+          <StepTitle n={2} done={center?.placed === true}>
+            어디에 설치했나요? <span className="assign__optional">선택</span>
+          </StepTitle>
+
+          <AddressSearchField
+            placeholder="그 집 주소 검색 (예: 월선리 123-4, 당정로75번길 23)"
+            onSelect={(r) =>
+              setLoc({
+                road_address: r.road_address,
+                jibun_address: r.jibun_address ?? r.address_name,
+                lat: r.lat,
+                lng: r.lng,
+              })
+            }
+          />
+
+          {/* 선택된 주소 — 크고 또렷하게 */}
+          <div className={`addr-card${address ? '' : ' addr-card--empty'}`}>
+            <svg className="addr-card__icon" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+              <path
+                d="M12 21s-6-6.2-6-11a6 6 0 0 1 12 0c0 4.8-6 11-6 11z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinejoin="round"
+              />
+              <circle cx="12" cy="10" r="2.2" fill="currentColor" />
+            </svg>
+            <div className="addr-card__text">
+              {address ? (
+                <>
+                  <div className="addr-card__main">
+                    {address}
+                    {addressDetail.trim() && <span className="addr-card__detail"> {addressDetail.trim()}</span>}
+                  </div>
+                  {loc.road_address && loc.jibun_address && loc.jibun_address !== loc.road_address && (
+                    <div className="addr-card__sub">지번 {loc.jibun_address}</div>
+                  )}
+                </>
+              ) : loc.lat !== null ? (
+                <div className="addr-card__main">지도에서 찍은 위치 (주소 없음)</div>
+              ) : (
+                <div className="addr-card__placeholder">
+                  아직 설치 위치가 없습니다. 주소를 검색하거나 아래 지도를 눌러 찍어 주세요.
+                </div>
+              )}
+            </div>
+            {(address || loc.lat !== null) && (
+              <button
+                type="button"
+                className="btn btn--sm btn--ghost"
+                onClick={() => setLoc({ road_address: null, jibun_address: null, lat: null, lng: null })}
+              >
+                지우기
+              </button>
+            )}
+          </div>
+
+          {/* 지도 — 남는 높이를 다 쓴다. 지오코딩은 지번 대표점까지라(아파트 단지 = 한 점)
+              마커를 끌거나 눌러 실제 자리로 맞추는 것이 정석이다. */}
+          <div className="assign__map">
+            {center && jsKey ? (
+              <>
+                <LocationPickerMap
+                  jsKey={jsKey}
+                  lat={center.lat}
+                  lng={center.lng}
+                  height="fill"
+                  showHint={false}
+                  onChange={(lat, lng) => setLoc((prev) => ({ ...prev, lat, lng }))}
+                />
+                <div className="assign__map-hint">
+                  {center.placed
+                    ? '마커를 끌거나 지도를 눌러 실제 설치 자리로 맞추세요'
+                    : '지역 위치입니다 — 지도를 눌러 설치 자리를 찍으세요'}
+                </div>
+              </>
+            ) : (
+              <div className="assign__map-empty">
+                {center === null
+                  ? '왼쪽에서 지역을 고르거나 주소를 검색하면 지도가 열립니다.'
+                  : jsKey === null
+                    ? '지도 키(KAKAO_JS_KEY)가 서버에 설정되지 않아 지도를 띄울 수 없습니다. 주소 검색만으로도 저장됩니다.'
+                    : '지도를 불러오는 중…'}
+              </div>
+            )}
+          </div>
+
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label htmlFor="a-detail">동/호 (선택)</label>
+            <input
+              id="a-detail"
+              value={addressDetail}
+              maxLength={100}
+              placeholder="예: 201호, 안채"
+              onChange={(e) => setAddressDetail(e.target.value)}
+            />
+          </div>
+        </section>
       </div>
-
-      <div className="field">
-        <label htmlFor="a-label">별칭 (선택)</label>
-        <input
-          id="a-label"
-          value={label}
-          maxLength={40}
-          placeholder="비우면 목록에 MAC 이 표시됩니다"
-          onChange={(e) => setLabel(e.target.value)}
-        />
-      </div>
-
-      <p className="hint">
-        지역을 배정하면 서버가 CONFIG 로 단말에 알려주고, 단말이 그 지역 방송을 구독합니다.
-        단말 STATUS 에 반영되는 데 몇 초 걸립니다.
-      </p>
-
-      <hr style={{ margin: '14px 0', opacity: 0.2 }} />
-      <p className="strong" style={{ margin: '0 0 8px' }}>
-        설치 위치 (선택)
-      </p>
-      <AddressSearchField
-        placeholder="그 집 주소 검색 (예: 월선리 123-4)"
-        onSelect={(r) =>
-          setLoc({
-            road_address: r.road_address,
-            jibun_address: r.jibun_address ?? r.address_name,
-            lat: r.lat,
-            lng: r.lng,
-          })
-        }
-      />
-      {(loc.road_address || loc.jibun_address) && (
-        <p className="hint">
-          선택된 주소: <span className="strong">{loc.road_address ?? loc.jibun_address}</span>{' '}
-          <button
-            type="button"
-            className="btn btn--sm btn--ghost"
-            onClick={() => setLoc({ road_address: null, jibun_address: null, lat: null, lng: null })}
-          >
-            지우기
-          </button>
-        </p>
-      )}
-      {/* 지오코딩은 지번 대표점까지라(아파트 단지 = 한 점) 마커가 동 단위로
-          어긋난다 — 지도에서 끌어 보정하는 것이 정석이다. */}
-      {loc.lat !== null && loc.lng !== null && jsKey && (
-        <LocationPickerMap
-          jsKey={jsKey}
-          lat={loc.lat}
-          lng={loc.lng}
-          onChange={(lat, lng) => setLoc((prev) => ({ ...prev, lat, lng }))}
-        />
-      )}
-      <div className="field">
-        <label htmlFor="a-detail">동/호 (선택 — 사람이 치는 유일한 주소 항목)</label>
-        <input
-          id="a-detail"
-          value={addressDetail}
-          maxLength={100}
-          placeholder="예: 201호, 안채"
-          onChange={(e) => setAddressDetail(e.target.value)}
-        />
-      </div>
-      <p className="hint">
-        위치를 비워 두면 지도에서 지역 좌표 자리에 표시됩니다. 입력하면 그 집 위치에 찍힙니다.
-      </p>
-
-      {error && <p className="hint hint--warn">{error}</p>}
     </Modal>
   );
 }

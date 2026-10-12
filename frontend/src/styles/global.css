@@ -3276,3 +3276,49 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
 
 /* 테마 전환 버튼 */
 .theme-toggle { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ══ 단말 배정 창(2026-10-12) — 넓은 두 칸, 큰 지도, 또렷한 주소 ═══════════════
+   지도에서 직접 마커를 찍는 창이라 지도가 주인공이다. 화면 높이 가득, 지도는 남는 높이를 다 쓴다. */
+.modal--xl { max-width: 1120px; height: min(860px, calc(100vh - 48px)); }
+.modal--xl .modal__body { flex: 1 1 auto; min-height: 0; display: flex; }
+.assign { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 24px; }
+.assign__col { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.assign__col--left { padding-right: 24px; border-right: 1px solid var(--border); }
+.assign__col .bc-step__title { font-size: 17px; margin: 4px 0 0; gap: 10px; }
+.assign__col .bc-step__num { width: 26px; height: 26px; font-size: 14px; }
+.assign__col .field { margin-bottom: 0; }
+.assign__device { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: var(--r-lg); background: var(--surface-sunken); border: 1px solid var(--border); }
+.assign__device-label { font-size: 16px; font-weight: 800; color: var(--text); }
+.assign__device-mac { font-size: 13px; color: var(--text-3); letter-spacing: 0.03em; }
+.assign-village { margin-bottom: 0; }
+.assign__chip { display: inline-flex; align-items: center; padding: 5px 12px; border-radius: var(--r-pill); background: var(--accent-tint); color: var(--accent-text); font-size: 15px; font-weight: 800; }
+.assign__chip--none { background: var(--idle-tint); color: var(--text-3); font-weight: 700; }
+.assign__tree { flex: 1 1 auto; min-height: 160px; display: flex; flex-direction: column; }
+.assign__tree .tree-picker { flex: 1 1 auto; max-height: none; min-height: 0; }
+.assign__optional { margin-left: 4px; padding: 1px 8px; border-radius: 6px; background: var(--idle-tint); color: var(--text-3); font-size: 12px; font-weight: 700; }
+.assign__error { margin: 0 auto 0 0; align-self: center; }
+/* 선택된 주소 카드 — 흐리지 않게 크게 */
+.addr-card { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--r-lg); border: 1px solid var(--accent); background: var(--accent-soft); }
+.addr-card--empty { border-style: dashed; border-color: var(--border-strong); background: var(--surface-sunken); }
+.addr-card__icon { flex: none; color: var(--accent-text); }
+.addr-card--empty .addr-card__icon { color: var(--text-muted); }
+.addr-card__text { flex: 1 1 auto; min-width: 0; }
+.addr-card__main { font-size: 17px; font-weight: 800; color: var(--text); line-height: 1.35; word-break: keep-all; }
+.addr-card__detail { color: var(--accent-text); }
+.addr-card__sub { margin-top: 2px; font-size: 13.5px; color: var(--text-2); }
+.addr-card__placeholder { font-size: 14px; color: var(--text-3); }
+/* 지도 — 남는 높이 전부 */
+.assign__map { position: relative; flex: 1 1 auto; min-height: 200px; border-radius: 12px; overflow: hidden; border: 1px solid var(--border-strong); background: var(--surface-sunken); }
+.assign__map-hint { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 2; padding: 6px 14px; border-radius: var(--r-pill); background: rgba(17, 24, 39, 0.82); color: #fff; font-size: 13px; font-weight: 700; white-space: nowrap; pointer-events: none; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); }
+.assign__map-empty { height: 100%; display: grid; place-items: center; padding: 24px; color: var(--text-3); font-size: 14px; text-align: center; }
+/* 좁은 화면 — 한 칸으로 쌓는다 */
+@container (max-width: 760px) {
+  .assign { grid-template-columns: 1fr; }
+  .assign__col--left { padding-right: 0; border-right: 0; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .assign__tree .tree-picker { max-height: 280px; }
+  .assign__map { min-height: 300px; }
+}
+@media (max-width: 900px) {
+  .modal--xl { height: auto; }
+  .modal--xl .modal__body { display: block; }
+}
