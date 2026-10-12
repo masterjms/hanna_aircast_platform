@@ -41,5 +41,6 @@ infra/mosquitto/config/passwd
 infra/secrets/*
 !infra/secrets/.gitkeep
 
-# 관리자 접속 허용 IP — 서버마다 다르다(문제점 70번 ⑤). example 만 커밋한다.
+# 관리자 접속 허용 IP — 서버마다 다르다(문제점 70번 ⑤). 폴더와 example 만 커밋한다.
+infra/nginx/admin-allow.d/*.conf
 infra/nginx/admin-allow.local.conf

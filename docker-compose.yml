@@ -134,8 +134,9 @@ services:
       - "443:443"
     volumes:
       - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      # 관리자 접속 허용 IP(문제점 70번 ⑤). deploy.sh 가 없으면 example 에서 만든다.
-      - ./infra/nginx/admin-allow.local.conf:/etc/nginx/admin-allow.conf:ro
+      # 관리자 접속 허용 IP(문제점 70번 ⑤). 폴더째 마운트한다 — 저장소에 늘 있는 폴더라 deploy.sh 없이
+      # 띄워도(CI·수동 compose·온프레미스) nginx 가 뜬다. 안에 local.conf 가 없으면 제한 없음.
+      - ./infra/nginx/admin-allow.d:/etc/nginx/admin-allow.d:ro
       # 단말 다운로드 파일을 nginx 가 직접 서빙한다(X-Accel-Redirect). 읽기전용.
       - files:/var/lib/iotradio/files:ro
       - ./infra/certs:/etc/nginx/certs:ro
