@@ -32,7 +32,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.constants import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, FileSource
+from app.constants import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE, FileSource, Role
 from app.core.ids import new_download_token
 from app.errors import ApiError, NotFound
 from app.models.file import DownloadToken, File
@@ -259,15 +259,17 @@ def _write_and_hash(upload: UploadFile, dest: Path) -> tuple[int, str]:
 
 
 # ── 조회 ─────────────────────────────────────────────────────────────────
-async def list_files(db: AsyncSession) -> list[FileOut]:
-    """파일함 목록. 마을 범위를 타지 않는다 — 파일은 전체 공용이다."""
-    rows = (
-        await db.execute(
-            select(File, User.username)
-            .outerjoin(User, File.uploaded_by == User.id)
-            .order_by(File.created_at.desc())
-        )
-    ).all()
+async def list_files(db: AsyncSession, *, user: User) -> list[FileOut]:
+    """파일함 목록 — **계정별**(문제점 86번, 2026-10-14). 내가 올리거나 만든 파일만 보인다.
+    최고 관리자는 전부 본다(누가 올렸는지 함께). 예전에는 전 계정 공용이었다."""
+    stmt = (
+        select(File, User.username)
+        .outerjoin(User, File.uploaded_by == User.id)
+        .order_by(File.created_at.desc())
+    )
+    if not is_file_admin(user):
+        stmt = stmt.where(File.uploaded_by == user.id)
+    rows = (await db.execute(stmt)).all()
 
     used = await schedules_using(db, [f.id for f, _ in rows])
     result = []
@@ -282,6 +284,23 @@ async def list_files(db: AsyncSession) -> list[FileOut]:
 async def get_file(db: AsyncSession, file_id: int) -> File:
     file = await db.get(File, file_id)
     if file is None:
+        raise FileNotFound()
+    return file
+
+
+def is_file_admin(user: User) -> bool:
+    """남의 방송 자료까지 볼 수 있는 계정 — 최고 관리자뿐(문제점 86번)."""
+    return user.role == Role.SUPER_ADMIN.value
+
+
+async def get_own_file(db: AsyncSession, file_id: int, user: User) -> File:
+    """내 파일(또는 최고 관리자)만. 남의 파일은 「없는 파일」로 답한다 — 있는지조차 알리지 않는다.
+
+    미리듣기·삭제·방송 시작·예약 등록이 모두 이 문을 지난다(문제점 86번). 예약 실행기는 사람이
+    아니라 이미 등록된 예약을 실행하는 것이라 이 검사를 받지 않는다(get_file 을 쓴다).
+    """
+    file = await get_file(db, file_id)
+    if not is_file_admin(user) and file.uploaded_by != user.id:
         raise FileNotFound()
     return file
 

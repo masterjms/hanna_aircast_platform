@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query, WebSocket
 from app.core.deps import CurrentUser, Db, LiveReg, Publisher, Scope
 from app.live.ingest import ingest_endpoint
 from app.modules.broadcast import service
+from app.modules.file import service as file_service
 from app.schemas.broadcast import (
     BroadcastOut,
     BroadcastStopRequest,
@@ -38,6 +39,8 @@ async def start_file(
     대상 단말이 이미 다른 방송에 잡혀 있으면 409 BROADCAST_OVERLAP 이 나간다.
     서버는 진행 중인 방송을 자동으로 끊지 않는다.
     """
+    # 내 방송 자료만(문제점 86번). 남의 파일 id 를 넣으면 「없는 파일」.
+    await file_service.get_own_file(db, payload.file_id, user)
     return await service.start_file_broadcast(db, payload, scope, publisher, user_id=user.id)
 
 

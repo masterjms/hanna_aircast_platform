@@ -24,9 +24,9 @@ router = APIRouter(tags=["file"])
 
 
 @router.get("/api/files", response_model=list[FileOut])
-async def list_files(db: Db, _: CurrentUser) -> list[FileOut]:
-    """파일함은 전체 공용이다 — 마을 범위로 나누지 않는다."""
-    return await service.list_files(db)
+async def list_files(db: Db, user: CurrentUser) -> list[FileOut]:
+    """파일함 — 계정별(문제점 86번). 최고 관리자는 전부."""
+    return await service.list_files(db, user=user)
 
 
 @router.post("/api/files", response_model=FileOut, status_code=status.HTTP_201_CREATED)
@@ -84,7 +84,7 @@ async def delete_file(
     예외: 내가 1시간 안에 만든 파일(글로 써서 방송·TTS 창에서 만들었다가 버리는 미리듣기)은 확인
     없이 지운다 — 화면이 「취소」로 정리하는 파일이다.
     """
-    file = await service.get_file(db, file_id)
+    file = await service.get_own_file(db, file_id, user)
     fresh = (
         file.uploaded_by == user.id
         and file.created_at is not None
@@ -96,14 +96,14 @@ async def delete_file(
 
 
 @router.get("/api/files/{file_id}/audio")
-async def stream_audio(file_id: int, db: Db, _: MediaUser) -> Response:
+async def stream_audio(file_id: int, db: Db, user: MediaUser) -> Response:
     """관리자 미리듣기.
 
     <audio src> 는 Authorization 헤더를 못 붙이므로 ?access_token= 도 받는다
     (MediaUser 의존성이 둘 다 처리한다).
     단말 다운로드는 이 경로가 아니라 /dl/<token> 을 쓴다.
     """
-    audio = await service.get_file(db, file_id)
+    audio = await service.get_own_file(db, file_id, user)
     return service.serve_file(audio)
 
 

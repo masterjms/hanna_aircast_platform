@@ -42,6 +42,7 @@ async def create_schedule(
         scope=scope,
         org_ids=org_ids,
         per_user_limited=user.role != "super_admin",
+        actor=user,
     )
 
 
@@ -77,9 +78,16 @@ async def get_schedule(schedule_id: int, db: Db, scope: Scope, org_ids: OrgIds) 
 
 @router.patch("/{schedule_id}", response_model=ScheduleOut)
 async def update_schedule(
-    schedule_id: int, payload: ScheduleUpdate, db: Db, scope: Scope, org_ids: OrgIds
+    schedule_id: int,
+    payload: ScheduleUpdate,
+    db: Db,
+    scope: Scope,
+    org_ids: OrgIds,
+    user: CurrentUser,
 ) -> ScheduleOut:
-    return await service.update_schedule(db, schedule_id, payload, scope=scope, org_ids=org_ids)
+    return await service.update_schedule(
+        db, schedule_id, payload, scope=scope, org_ids=org_ids, actor=user
+    )
 
 
 @router.delete("/{schedule_id}", status_code=status.HTTP_204_NO_CONTENT)

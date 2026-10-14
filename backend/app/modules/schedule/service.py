@@ -47,9 +47,10 @@ from app.errors import (
 )
 from app.models.device import Device
 from app.models.file import File
-from app.models.org import Organization, Village
+from app.models.org import Organization, User, Village
 from app.models.schedule import Schedule, ScheduleRun
 from app.modules.device import service as device_service
+from app.modules.file import service as file_service
 from app.modules.schedule import rules
 from app.schemas.schedule import (
     OccurrenceOut,
@@ -528,6 +529,7 @@ async def create_schedule(
     scope: VillageScope,
     org_ids: set[int] | None,
     per_user_limited: bool = True,
+    actor: User | None = None,
 ) -> ScheduleOut:
     count = await db.scalar(select(func.count()).select_from(Schedule))
     if (count or 0) >= SCHEDULE_MAX:
@@ -545,7 +547,9 @@ async def create_schedule(
                 code="SCHEDULE_USER_LIMIT",
             )
     await _check_minute_limit(db, payload.fire_time)
-    if await db.get(File, payload.file_id) is None:
+    if actor is not None:
+        await file_service.get_own_file(db, payload.file_id, actor)  # 내 방송 자료만(문제점 86번)
+    elif await db.get(File, payload.file_id) is None:
         raise ApiError("존재하지 않는 파일입니다.", code="FILE_NOT_FOUND")
     await _validate_target(db, payload.target_scope.value, payload.target_ids, scope, org_ids)
 
@@ -576,6 +580,7 @@ async def update_schedule(
     *,
     scope: VillageScope,
     org_ids: set[int] | None,
+    actor: User | None = None,
 ) -> ScheduleOut:
     s = await _load(db, schedule_id, scope, org_ids)
     await _ensure_editable(db, s, scope, org_ids)
@@ -612,8 +617,12 @@ async def update_schedule(
     except ValueError as exc:
         raise ApiError(str(exc), code="VALIDATION_FAILED") from exc
 
-    if checked.file_id != s.file_id and await db.get(File, checked.file_id) is None:
-        raise ApiError("존재하지 않는 파일입니다.", code="FILE_NOT_FOUND")
+    if checked.file_id != s.file_id:
+        # 파일을 바꿀 때는 내 방송 자료로만(문제점 86번). 그대로 두면 남이 만든 예약도 고칠 수 있다.
+        if actor is not None:
+            await file_service.get_own_file(db, checked.file_id, actor)
+        elif await db.get(File, checked.file_id) is None:
+            raise ApiError("존재하지 않는 파일입니다.", code="FILE_NOT_FOUND")
     target_changed = checked.target_scope.value != s.target_scope or list(
         checked.target_ids
     ) != list(s.target_ids)

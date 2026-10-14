@@ -133,10 +133,10 @@ export function EventsPage() {
           <button
             type="button"
             className="btn btn--sm btn--ghost"
-            title="기간을 비우면 최근 31일을 봅니다"
+            title="기간 조건만 풉니다(기록은 지워지지 않습니다). 최근 31일을 봅니다."
             onClick={() => (setFrom(''), setTo(''))}
           >
-            기간 지우기 (최근 31일)
+            최근 31일 보기
           </button>
         )}
         <div className="filters__spacer" />

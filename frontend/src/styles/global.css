@@ -3175,7 +3175,7 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
 .stat__badge--idle { color: var(--idle-text); background: var(--idle-tint); }
 .stat__row { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .stat__value { font-size: 34px; font-weight: 800; letter-spacing: -0.04em; line-height: 1.05; font-variant-numeric: tabular-nums; }
-.stat--ok .stat__value { color: var(--text); }
+.stat--ok .stat__value { color: var(--ok-text); }
 .stat--danger .stat__value { color: var(--danger-text); }
 .stat--warn .stat__value { color: var(--warn-text); }
 .stat__unit { font-size: 15px; font-weight: 700; color: var(--text-3); }

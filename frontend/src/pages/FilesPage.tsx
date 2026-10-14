@@ -1,7 +1,7 @@
 /**
  * 파일함.
  *
- * 파일은 전체 공용이다 — 마을 범위로 나누지 않는다.
+ * 파일은 계정별이다(문제점 86번, 2026-10-14) — 내가 올리거나 만든 것만 보인다. 최고 관리자는 전부.
  *
  * 삭제를 막는 것은 **스케줄뿐**이다(0017). 방송 이력은 파일명을 자기 행에 갖고 있어
  * 파일이 지워져도 「무엇을」이 남는다. 어느 스케줄이 막는지는 목록에서 미리 보여준다 —
@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { ApiError, api } from '../api/client';
+import { useAuth } from '../auth/AuthContext';
 import type { AudioFile } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
@@ -32,6 +33,7 @@ function formatDuration(sec: number | null): string {
 }
 
 export function FilesPage() {
+  const { isSuperAdmin } = useAuth();
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +129,10 @@ export function FilesPage() {
             {uploading ? '올리는 중…' : '＋ 소리 파일 올리기'}
           </button>
         </div>
-        <p>방송용 소리 {files.length}개 · mp3 파일을 올리거나, 글을 적어 음성(TTS)으로 만듭니다.</p>
+        <p>
+          {isSuperAdmin ? '모든 계정의 방송용 소리' : '내 방송용 소리'} {files.length}개 · mp3 파일을 올리거나, 글을 적어
+          음성(TTS)으로 만듭니다. 방송 자료는 계정마다 따로입니다.
+        </p>
       </div>
 
       {error && (

@@ -349,8 +349,9 @@ export function DashboardPage() {
               unit={`/ ${total}`}
               percent={total > 0 ? (devices.online / total) * 100 : 0}
               ratio={total > 0 ? devices.online / total : 0}
-              badge={devices.offline === 0 && total > 0 ? '정상 가동' : total === 0 ? '단말 없음' : '일부 끊김'}
-              tone={devices.offline === 0 && total > 0 ? 'ok' : total === 0 ? 'idle' : 'warn'}
+              // 정상 상태를 세는 카드라 늘 초록 「정상 가동」(문제점 85번 10/12). 끊긴 단말은 오프라인 카드가 알린다.
+              badge={total === 0 ? '단말 없음' : '정상 가동'}
+              tone={total === 0 ? 'idle' : 'ok'}
               tip="최근 5분 안에 STATUS 를 보낸 단말 수 / 전체 단말 수"
             />
             <StatCard
@@ -383,8 +384,9 @@ export function DashboardPage() {
                 value={devices.unassigned}
                 unit="대"
                 ratio={total > 0 ? devices.unassigned / total : 0}
+                // 없을 때는 회색 「관리 정상」, 생기면 노랑(문제점 85번 10/12)
                 badge={devices.unassigned > 0 ? '배정 대기' : '관리 정상'}
-                tone={devices.unassigned > 0 ? 'warn' : 'ok'}
+                tone={devices.unassigned > 0 ? 'warn' : 'idle'}
                 tip="지역 배정을 기다리는 단말. 단말 관리에서 배정합니다."
               />
             )}

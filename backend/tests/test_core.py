@@ -2612,6 +2612,34 @@ class TestOtaRebootGate:
         assert ds.drop_status_during_ota_reboot("cc", "OTA") is False  # 너무 오래 — 표시 소멸
 
 
+class TestFilesPerAccount:
+    """문제점 86번: 방송 자료는 계정별. 최고 관리자만 전부."""
+
+    def test_admin_rule(self):
+        from types import SimpleNamespace
+
+        from app.modules.file.service import is_file_admin
+
+        assert is_file_admin(SimpleNamespace(role="super_admin"))
+        assert not is_file_admin(SimpleNamespace(role="org_admin"))
+        assert not is_file_admin(SimpleNamespace(role="village_admin"))
+
+    def test_tts_cache_is_per_account(self):
+        from app.tts.service import _storage_path
+
+        assert _storage_path("abc", 1) != _storage_path("abc", 2)
+
+    def test_entry_points_use_owner_check(self):
+        import inspect
+
+        from app.modules.broadcast import router as broadcast_router
+        from app.modules.file import router as file_router
+
+        assert "get_own_file" in inspect.getsource(file_router.stream_audio)
+        assert "get_own_file" in inspect.getsource(file_router.delete_file)
+        assert "get_own_file" in inspect.getsource(broadcast_router)
+
+
 class TestPasswordPolicy:
     """문제점 70번 ②: 3종 8자 또는 2종 10자."""
 

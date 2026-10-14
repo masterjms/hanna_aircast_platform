@@ -64,18 +64,23 @@ def cache_key(text: str, language: str, voice_id: str, bitrate_kbps: int) -> str
     return hashlib.sha256(raw).hexdigest()
 
 
-def _storage_path(key: str) -> Path:
-    """FILE_ROOT 기준 상대 경로. 캐시 키가 곧 파일명이다."""
-    return Path("tts") / f"{key}.mp3"
+def _storage_path(key: str, owner_id: int) -> Path:
+    """FILE_ROOT 기준 상대 경로. 캐시 키 + 계정이 파일명이다.
+
+    계정이 들어가는 이유(문제점 86번, 2026-10-14): 방송 자료가 계정별이 됐다. 같은 문구를 다른
+    계정이 합성하면 예전에는 남의 파일을 그대로 돌려줬다 — 이제는 계정마다 제 파일을 만든다.
+    디스크 파일도 따로라, 한 계정이 지워도 다른 계정의 같은 문구 파일이 남는다.
+    """
+    return Path("tts") / f"{key}-u{owner_id}.mp3"
 
 
-async def _find_cached(db: AsyncSession, key: str) -> File | None:
+async def _find_cached(db: AsyncSession, key: str, owner_id: int) -> File | None:
     """같은 캐시 키로 만든 파일이 이미 있는지.
 
     DB 와 디스크가 어긋났으면(파일만 지워진 경우) 없는 것으로 본다 —
     있다고 답했다가 방송할 때 404 가 나는 쪽이 훨씬 나쁘다.
     """
-    rel = _storage_path(key).as_posix()
+    rel = _storage_path(key, owner_id).as_posix()
     file = await db.scalar(select(File).where(File.storage_path == rel))
     if file is None:
         return None
@@ -117,7 +122,7 @@ async def synthesize(
     bitrate_kbps = (await load_config(db)).file_bitrate_kbps
     key = cache_key(text, language, voice.id, bitrate_kbps)
 
-    cached = await _find_cached(db, key)
+    cached = await _find_cached(db, key, uploader.id)
     if cached is not None:
         log.info("TTS 캐시 적중 %s (%s)", key[:12], voice.id)
         out = FileOut.model_validate(cached)
@@ -131,7 +136,7 @@ async def synthesize(
         raise ApiError("합성 결과가 비어 있습니다.", code="TTS_EMPTY_RESULT")
     audio = await asyncio.to_thread(normalize_mp3, raw, bitrate_kbps)
 
-    rel = _storage_path(key)
+    rel = _storage_path(key, uploader.id)
     dest = settings.file_root / rel
     dest.parent.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(dest.write_bytes, audio)
