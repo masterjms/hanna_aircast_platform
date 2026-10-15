@@ -37,7 +37,7 @@ services:
       - mosquitto-data-dev:/mosquitto/data
 
   icecast:
-    image: libretime/icecast:latest
+    image: libretime/icecast:2.4.4-debian
     container_name: xwifi-icecast-dev
     ports:
       # 호스트도 8000 을 그대로 쓴다. 단말 펌웨어가 <ip>:8000/live 로 고정 접속하고

@@ -123,7 +123,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (res.status === 204) return undefined as T;
 
   const text = await res.text();
-  const parsed: unknown = text ? JSON.parse(text) : null;
+  // nginx 가 직접 돌려주는 오류(429·502 등)는 HTML 이다 — 파싱 실패로 상태 코드를 잃지 않게 한다.
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    if (res.ok) throw new ApiError(res.status, 'UNKNOWN', '서버 응답을 읽지 못했습니다.');
+  }
 
   if (!res.ok) {
     const body = parsed as ApiErrorBody | null;

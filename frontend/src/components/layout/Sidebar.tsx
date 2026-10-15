@@ -80,27 +80,13 @@ function MenuLinks({ items, atLeast }: { items: MenuItem[]; atLeast: (r: Role) =
 export function Sidebar() {
   const { user, atLeast, logout } = useAuth();
 
-  // 기관 관리자는 기관 이름이 범위를 가장 잘 설명한다. 마을 수십 개를 나열하면
-  // 카드가 넘친다.
-  const scopeLabel = user?.all_villages
-    ? `전체 ${user.villages.length}개 지역`
-    : user?.organization_name
-      ? `${user.organization_name} · ${user.villages.length}개 지역`
-      : user && user.villages.length > 0
-        ? user.villages.map((v) => v.name).join(', ')
-        : '담당 지역 없음';
-
   return (
     <aside className="sidebar">
       <div className="sidebar__brand">
         <Logo size={26} />
       </div>
 
-      <div className="scope-card">
-        <div className="scope-card__label">담당 범위</div>
-        <div className="scope-card__value">{scopeLabel}</div>
-        <div className="scope-card__meta">단말 {user?.device_count ?? 0}대</div>
-      </div>
+      {/* 담당 범위 카드는 뺐다 — 상단바 오른쪽 알약과 같은 내용이라 메뉴 자리만 먹었다(문제점 90번). */}
 
       <nav className="sidebar__nav">
         <div className="sidebar__section">운영 관리</div>

@@ -52,11 +52,15 @@ export function TopBar({ title, subtitle }: TopBarProps) {
   const { user } = useAuth();
   if (!user) return null;
 
+  // 왼쪽 메뉴의 담당 범위 카드를 이 알약으로 합쳤다(문제점 90번). 기관 관리자는 기관 이름이 범위를
+  // 가장 잘 설명한다 — 마을 수십 개를 나열하면 넘친다.
   const scopeText = user.all_villages
     ? `전체 ${user.villages.length}개 지역`
-    : user.villages.length === 0
-      ? '담당 지역 없음'
-      : user.villages.map((v) => v.name).join(', ');
+    : user.organization_name
+      ? `${user.organization_name} · ${user.villages.length}개 지역`
+      : user.villages.length === 0
+        ? '담당 지역 없음'
+        : user.villages.map((v) => v.name).join(', ');
 
   return (
     <header className="topbar">
@@ -77,7 +81,7 @@ export function TopBar({ title, subtitle }: TopBarProps) {
         >
           ↻ 새로고침
         </button>
-        <div className="status-pill">
+        <div className="status-pill" title={`담당 범위 ${scopeText} · 단말 ${user.device_count}대`}>
           <span className="status-pill__dot" aria-hidden="true" />
           담당 범위 {scopeText} · {user.device_count}대
         </div>

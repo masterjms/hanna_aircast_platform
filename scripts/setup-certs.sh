@@ -28,7 +28,8 @@ echo "== 도메인: $DOMAIN"
 
 # ── 0. DNS 가 이 서버를 가리키는지 먼저 본다 ────────────────────────
 # 이 확인을 건너뛰고 실패를 반복하면 Let's Encrypt 발급 한도에 걸린다.
-MY_IP="$(curl -fsS https://checkip.amazonaws.com || echo '')"
+# 공인 IP 조회 — 클라우드와 무관한 공개 서비스 셋 중 먼저 답하는 것(문제점 88번).
+MY_IP="$(curl -fsS --max-time 5 https://api.ipify.org || curl -fsS --max-time 5 https://ifconfig.me || curl -fsS --max-time 5 https://checkip.amazonaws.com || echo '')"
 DNS_IP="$(getent hosts "$DOMAIN" | awk '{print $1}' | head -1 || echo '')"
 echo "   서버 IP: ${MY_IP:-알 수 없음} / DNS: ${DNS_IP:-응답 없음}"
 if [ -n "$MY_IP" ] && [ -n "$DNS_IP" ] && [ "$MY_IP" != "$DNS_IP" ]; then

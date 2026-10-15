@@ -2,6 +2,8 @@
 #
 # AWS 비용 일일 요약 → Slack (cron 으로 매일 아침 실행)
 #
+# ⚠ AWS 전용(Cost Explorer). 다른 클라우드·온프레미스·납품 묶음 설치에서는 쓰지 않는다 — cron 에 걸지 말 것(문제점 88번).
+#
 #   bash scripts/cost-report.sh          Slack 으로 보낸다
 #   bash scripts/cost-report.sh --dry    화면에만 출력 (설정 확인용)
 #

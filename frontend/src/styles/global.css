@@ -261,34 +261,6 @@ a:hover {
   padding: 22px 20px 18px;
 }
 
-/* 담당 범위 카드 — 로그인한 계정이 무엇을 볼 수 있는지 항상 띄워둔다. */
-.scope-card {
-  margin: 0 14px 16px;
-  padding: 12px 14px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-}
-
-.scope-card__label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-}
-
-.scope-card__value {
-  margin-top: 3px;
-  font-size: 13.5px;
-  font-weight: 700;
-}
-
-.scope-card__meta {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--text-3);
-  font-variant-numeric: tabular-nums;
-}
-
 .sidebar__nav {
   padding: 0 10px 10px;
   display: flex;
@@ -2911,7 +2883,6 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
 /* 낮은 창 — 왼쪽 메뉴도 스크롤 없이 들어오게 여백만 줄인다(글자 크기는 그대로). */
 @media (min-width: 901px) and (max-height: 800px) {
   .sidebar__brand { padding: 14px 20px 10px; }
-  .scope-card { margin-bottom: 8px; padding-top: 10px; padding-bottom: 10px; }
   .sidebar__section { padding: 6px 10px 3px; }
   .sidebar__section + .sidebar__section, .navlink + .sidebar__section { padding-top: 8px; }
   .navlink { padding: 5px 11px; }
@@ -3321,4 +3292,157 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
 @media (max-width: 900px) {
   .modal--xl { height: auto; }
   .modal--xl .modal__body { display: block; }
+}
+
+/* ── 로그인(문제점 89번) — 태양광 관제와 같은 유리 상자. 바탕이 늘 밤 그림이라 밝은/어두운 화면과 무관하게
+   색을 직접 정한다. lg- 접두어로 앱 화면 클래스와 섞이지 않게 한다. ── */
+.lg-page {
+  --lg-accent: #6fc3ff;
+  --lg-text: #eef3fa;
+  --lg-muted: rgba(226, 234, 246, 0.64);
+  --lg-line: rgba(255, 255, 255, 0.14);
+  --lg-glass: rgba(10, 18, 40, 0.42);
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  color: var(--lg-text);
+  background: #070d1f;
+  overflow: hidden;
+}
+.lg-bgwrap { position: fixed; inset: 0; z-index: 0; transition: transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1); }
+.lg-bg {
+  position: absolute; inset: -3%;
+  background-position: center; background-size: cover; background-repeat: no-repeat;
+  animation: lg-kenburns 40s ease-in-out infinite alternate; transform-origin: 60% 60%;
+}
+@keyframes lg-kenburns { from { transform: scale(1); } to { transform: scale(1.08) translate(-1%, -1%); } }
+.lg-fx { position: absolute; inset: 0; display: block; }
+.lg-shade {
+  position: fixed; inset: 0; z-index: 1; pointer-events: none;
+  background:
+    radial-gradient(ellipse 46% 52% at 50% 46%, rgba(5, 10, 26, 0.32), rgba(5, 10, 26, 0) 100%),
+    linear-gradient(180deg, rgba(5, 10, 26, 0.25) 0%, rgba(5, 10, 26, 0) 40%, rgba(5, 10, 26, 0.35) 100%);
+}
+.lg-main {
+  position: relative; z-index: 3;
+  min-height: 100vh; min-height: 100dvh;
+  display: grid; place-items: center;
+  padding: 24px 16px 84px;
+}
+.lg-card {
+  width: min(390px, 100%);
+  padding: 34px 34px 24px;
+  border-radius: 20px;
+  background: var(--lg-glass);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  border: 1px solid var(--lg-line);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  position: relative; overflow: hidden;
+  opacity: 0; transform: translateY(18px);
+  animation: lg-rise 0.9s 0.2s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+/* 테두리를 도는 빛 — 파랑(송출)에서 빨강(ON AIR)으로, 로고 두 색 */
+.lg-card::before {
+  content: ""; position: absolute; inset: -1px; border-radius: inherit; padding: 1px; pointer-events: none;
+  background: conic-gradient(from var(--lg-a), transparent 0 70%, rgba(111, 195, 255, 0.9) 80%, rgba(239, 37, 64, 0.75) 88%, transparent 95%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor; mask-composite: exclude;
+  animation: lg-spin 6s linear infinite;
+}
+@property --lg-a { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
+@keyframes lg-spin { to { --lg-a: 360deg; } }
+@keyframes lg-rise { to { opacity: 1; transform: none; } }
+.lg-card.lg-shake { opacity: 1; transform: none; animation: lg-shake 0.4s; }
+@keyframes lg-shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+
+/* 로고 마크의 H 기둥은 var(--text) 로 그린다 — 밝은 화면에서도 흰색이 되게 여기서 덮는다. */
+.lg-brand { --text: #f2f6fc; --text-muted: rgba(226, 234, 246, 0.6); display: grid; justify-items: center; margin-bottom: 26px; text-align: center; color: var(--text); }
+.lg-brand .logo__name { font-size: 15px; }
+.lg-brand .logo__sub { font-size: 11.5px; }
+.lg-brand h1 { margin: 16px 0 0; font-size: 19px; font-weight: 800; letter-spacing: -0.02em; color: var(--lg-text); text-wrap: balance; }
+.lg-brand p { margin: 4px 0 0; font-size: 11px; color: var(--lg-muted); letter-spacing: 0.12em; }
+
+.lg-note {
+  margin: -8px 0 16px; padding: 9px 12px; border-radius: 10px;
+  background: rgba(111, 195, 255, 0.12); border: 1px solid rgba(111, 195, 255, 0.3);
+  font-size: 12.5px; line-height: 1.5; color: var(--lg-text);
+}
+.lg-field { position: relative; margin-bottom: 14px; }
+.lg-field input {
+  width: 100%; height: 52px; padding: 18px 14px 6px 44px;
+  border-radius: 12px; border: 1px solid var(--lg-line);
+  background: rgba(255, 255, 255, 0.06); color: var(--lg-text);
+  font: inherit; font-size: 16px; outline: none;
+  transition: border-color 0.25s, box-shadow 0.25s, background 0.25s;
+}
+.lg-field input#lg-pw { padding-right: 44px; }
+.lg-field input:focus {
+  border-color: rgba(111, 195, 255, 0.7); background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 0 0 4px rgba(111, 195, 255, 0.15), 0 0 22px rgba(111, 195, 255, 0.22);
+}
+/* 브라우저 자동 완성의 노란·흰 바탕이 유리 상자를 깨지 않게 */
+.lg-field input:-webkit-autofill {
+  -webkit-text-fill-color: var(--lg-text);
+  box-shadow: 0 0 0 1000px #18223f inset;
+  caret-color: var(--lg-text);
+}
+.lg-field label { position: absolute; left: 44px; top: 16px; font-size: 14px; color: var(--lg-muted); pointer-events: none; transition: all 0.2s; }
+.lg-field input:focus + label,
+.lg-field input:not(:placeholder-shown) + label { top: 7px; font-size: 11px; color: var(--lg-accent); }
+.lg-field input:-webkit-autofill + label { top: 7px; font-size: 11px; color: var(--lg-accent); }
+.lg-field > svg { position: absolute; left: 14px; top: 17px; color: var(--lg-muted); transition: color 0.25s; }
+.lg-field input:focus ~ svg { color: var(--lg-accent); }
+.lg-toggle {
+  position: absolute; right: 10px; top: 12px; width: 28px; height: 28px;
+  border: 0; background: none; color: var(--lg-muted); cursor: pointer; border-radius: 8px;
+  display: grid; place-items: center;
+}
+.lg-toggle:hover { color: var(--lg-text); }
+.lg-toggle:focus-visible, .lg-link:focus-visible, .lg-btn:focus-visible { outline: 2px solid var(--lg-accent); outline-offset: 2px; }
+.lg-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 4px 2px 16px; font-size: 12.5px; color: var(--lg-muted); }
+.lg-link { border: 0; background: none; padding: 0; font: inherit; color: var(--lg-muted); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.lg-link:hover { color: var(--lg-text); }
+.lg-hint { margin: -6px 2px 14px; font-size: 12px; line-height: 1.55; color: var(--lg-muted); }
+.lg-err { margin: -4px 2px 14px; font-size: 13px; line-height: 1.5; color: #ffb4ab; }
+.lg-btn {
+  position: relative; width: 100%; height: 52px; border: 0; border-radius: 12px; cursor: pointer; overflow: hidden;
+  font: inherit; font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: #fff;
+  background: linear-gradient(90deg, #2f7cf0, #19b3e6);
+  box-shadow: 0 8px 28px rgba(49, 130, 246, 0.4);
+  transition: transform 0.15s, box-shadow 0.25s;
+}
+.lg-btn:hover { box-shadow: 0 10px 34px rgba(49, 130, 246, 0.6); }
+.lg-btn:active { transform: scale(0.985); }
+.lg-btn:disabled { cursor: progress; }
+.lg-btn::after {
+  content: ""; position: absolute; top: 0; left: -60%; width: 40%; height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  transform: skewX(-20deg); animation: lg-shine 3.6s ease-in-out infinite;
+}
+@keyframes lg-shine { 0%, 60% { left: -60%; } 100% { left: 130%; } }
+.lg-btn .spin { display: none; width: 20px; height: 20px; margin: 0 auto; border: 2px solid rgba(255, 255, 255, 0.3); border-top-color: #fff; border-radius: 50%; animation: lg-rot 0.7s linear infinite; }
+.lg-btn.loading .label { display: none; }
+.lg-btn.loading .spin { display: block; }
+@keyframes lg-rot { to { transform: rotate(360deg); } }
+.lg-status {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--lg-line);
+  font-size: 12px; color: var(--lg-muted); text-align: center;
+}
+.lg-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: #4ade80; animation: lg-pulse 2s infinite; }
+.lg-dot.down { background: #f87171; animation: none; }
+.lg-dot.warn { background: #fbbf24; animation: none; }
+.lg-dot.wait { background: #94a3b8; animation: none; }
+@keyframes lg-pulse { 0% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0.55); } 70% { box-shadow: 0 0 0 9px rgba(74, 222, 128, 0); } 100% { box-shadow: 0 0 0 0 rgba(74, 222, 128, 0); } }
+.lg-foot { position: fixed; bottom: 14px; left: 0; right: 0; z-index: 3; }
+.lg-foot .legal-links { color: rgba(226, 234, 246, 0.45); margin-top: 0; font-size: 12px; }
+.lg-foot .legal-links a { color: rgba(226, 234, 246, 0.72); }
+.lg-foot .legal-links a:hover { color: #fff; }
+.lg-foot .legal-links .legal-links__privacy { color: #fff !important; }
+@media (max-width: 420px) { .lg-card { padding: 28px 22px 20px; } }
+@media (max-height: 640px) { .lg-foot { position: static; padding: 0 16px 14px; } .lg-main { padding-bottom: 16px; } }
+@media (prefers-reduced-motion: reduce) {
+  .lg-bg, .lg-card::before, .lg-btn::after, .lg-dot { animation: none; }
+  .lg-card { animation: none; opacity: 1; transform: none; }
 }
