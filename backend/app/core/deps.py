@@ -20,6 +20,7 @@ from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.constants import Role
 from app.core import authz
 from app.core.scope import VillageScope
@@ -30,6 +31,7 @@ from app.errors import (
     ConfirmPasswordWrong,
     OrgAdminRequired,
     PasswordChangeRequired,
+    SessionReplaced,
     SuperAdminRequired,
     Unauthorized,
 )
@@ -65,6 +67,7 @@ async def get_current_user(
     if user is None:
         # 토큰은 유효하지만 계정이 삭제된 경우.
         raise Unauthorized()
+    _check_session(payload, user)
     # 토큰 유효기간이 계정 만료보다 길 수 있다. 이미 발급된 토큰도 막는다.
     if user.is_expired():
         raise Unauthorized()
@@ -73,6 +76,19 @@ async def get_current_user(
     if user.must_change_password and request.url.path not in PASSWORD_CHANGE_ALLOWED_PATHS:
         raise PasswordChangeRequired()
     return user
+
+
+def _check_session(payload: dict, user: User) -> None:
+    """토큰의 세션 키가 계정의 지금 세션과 같아야 한다(동시 접속 제한, 문제점 70번 10/15 ③).
+
+    다른 곳에서 새로 로그인하면 session_key 가 바뀌어 먼저 쓰던 토큰은 다음 요청에서 401.
+    로그아웃하면 session_key 를 비우므로 그 토큰도 더 못 쓴다. 0028 전에 받은 토큰(sid 없음)은
+    session_key 가 비어 있는 동안만 통한다.
+    """
+    if not settings.single_session:
+        return
+    if payload.get("sid") != user.session_key:
+        raise SessionReplaced() if user.session_key else Unauthorized()
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
@@ -167,6 +183,7 @@ async def get_user_from_header_or_query(
     user = await db.get(User, user_id)
     if user is None:
         raise Unauthorized()
+    _check_session(payload, user)
     return user
 
 

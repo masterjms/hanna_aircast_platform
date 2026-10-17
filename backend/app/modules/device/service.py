@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import time
 from collections.abc import Sequence
@@ -442,18 +443,29 @@ async def issue_credential(
         raise DeviceNotFound()
 
     issued = False
+    now = dt.datetime.now(dt.timezone.utc)
     if device.mqtt_password is None or reissue:
         device.mqtt_password = mqtt_accounts.generate_device_password()
+        device.mqtt_password_issued_at = now
         await db.flush()
         issued = True
         # DB 와 브로커는 한 묶음이다(레지스트리 사양 §3.6). flush 직후 바로 내보낸다.
         await export_broker_accounts(db)
 
+    # 열람 제한(문제점 70번 10/15 ⑤) — 생산 라인에서 넣는 동안(발행 뒤 몇 시간)만 다시
+    # 보여 준다. 그 뒤에는 재발행(라인 재작업)해야 본다. 이미 단말에 들어간 비밀번호를
+    # 화면으로 꺼내 보지 못하게.
+    window = dt.timedelta(hours=settings.device_password_view_hours)
+    hidden = not issued and (
+        device.mqtt_password_issued_at is None or now - device.mqtt_password_issued_at > window
+    )
     return DeviceCredentialOut(
         username=device.mac,
-        password=device.mqtt_password,
+        password=None if hidden else device.mqtt_password,
         server_host=mqtt_accounts.server_host(),
         issued=issued,
+        hidden=hidden,
+        view_hours=settings.device_password_view_hours,
     )
 
 
@@ -477,7 +489,7 @@ async def create_device(
     data = payload.model_dump()
     if not data.get("mqtt_password"):
         data["mqtt_password"] = mqtt_accounts.generate_device_password()
-    device = Device(**data)
+    device = Device(**data, mqtt_password_issued_at=dt.datetime.now(dt.timezone.utc))
     db.add(device)
     await db.flush()
     await export_broker_accounts(db)

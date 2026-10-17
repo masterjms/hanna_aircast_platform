@@ -22,6 +22,7 @@ import type { Device, Organization, OtaJob, OtaPackage, Village } from '../api/t
 import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
 import { StepTitle } from '../components/StepTitle';
 import { TargetTreePicker, type PickMode } from '../components/broadcast/TargetTreePicker';
+import { PageHead } from '../components/PageHead';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
 
 function fmt(iso: string | null): string {
@@ -174,6 +175,8 @@ export function OtaPage() {
   const canStart = !!pkg && picked.length === 1 && onlineInTarget > 0 && !starting;
 
   return (
+    <>
+    <PageHead title="OTA 관리">펌웨어 패키지를 올리고 고른 단말에 업데이트를 보냅니다. 단말이 받아 검증·적용·재부팅까지 스스로 합니다.</PageHead>
     <div className="ota">
       {error && <div className="alert" style={{ marginBottom: 14 }}>{error}</div>}
       {notice && (
@@ -240,7 +243,7 @@ export function OtaPage() {
                     <th>버전</th>
                     <th className="num">pkg_version</th>
                     <th className="num">크기</th>
-                    <th>올린 사람 · 때</th>
+                    <th>아이디 · 때</th>
                     <th />
                   </tr>
                 </thead>
@@ -385,7 +388,7 @@ export function OtaPage() {
                             <th>단말</th>
                             <th>지역</th>
                             <th>상태</th>
-                            <th>지금 펌웨어 (P4 / C6)</th>
+                            <th title="지금 펌웨어 — APP(P4) / Wi-Fi(C6) 모듈">버전 (APP / Wi-Fi)</th>
                             <th>통신</th>
                           </tr>
                         </thead>
@@ -430,5 +433,6 @@ export function OtaPage() {
         )}
       </section>
     </div>
+    </>
   );
 }

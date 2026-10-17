@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.constants import MAC_LENGTH
+from app.core.secretbox import EncryptedText
 from app.models.base import Base
 
 
@@ -56,10 +57,14 @@ class Device(Base):
     lng: Mapped[float | None] = mapped_column(Float)
 
     #: 단말별 MQTT 계정 비밀번호 (username 은 MAC 그 자체라 열이 없다).
-    #: 평문 보관이 맞다 — 등록 화면에 보여줘서 시리얼로 단말에 넣어야 하는 값이다
-    #: (사양 §2.1). 브로커 쪽은 해시로 저장되므로 브로커가 뚫려도 평문이 안 나온다.
+    #: 등록 화면에 보여줘서 시리얼로 단말에 넣고, 브로커 passwd 를 만들 때 쓰므로
+    #: 되돌릴 수 있어야 한다(사양 §2.1) — 해시가 아니라 **암호화**해 둔다
+    #: (0028, 문제점 70번 10/15 ⑤). 코드에서는 평문 str.
     #: NULL = 계정 미발행. 브로커에는 붙는데 이 값이 없으면 「미등록*」(동기화 어긋남).
-    mqtt_password: Mapped[str | None] = mapped_column(String(16))
+    mqtt_password: Mapped[str | None] = mapped_column(EncryptedText)
+    #: 비밀번호를 만든 시각. DEVICE_PASSWORD_VIEW_HOURS 가 지나면 화면에 다시 보여 주지
+    #: 않는다(0028).
+    mqtt_password_issued_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
     #: 최근 STATUS payload 원본. 대시보드가 이력 테이블을 뒤지지 않게 하는 캐시다.
     last_status: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

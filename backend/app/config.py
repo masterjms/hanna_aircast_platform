@@ -148,6 +148,19 @@ class Settings(BaseSettings):
     #: 로그인 기록 보관(문제점 65·68번). 접속기록은 개인정보 안전성 확보조치 기준 1년 이상
     #: (대규모 2년).
     login_retention_days: int = 730
+    #: 관리 행위 감사 기록(audit_events) 보관(문제점 70번 10/15 ①). 기록 보호 트리거가 1년이 안 된
+    #: 기록은 지우지 못하게 막으므로 365 보다 작게 하지 말 것.
+    audit_retention_days: int = 730
+    #: 같은 계정 동시 접속 제한(문제점 70번 10/15 ③). 새로 로그인하면 먼저 쓰던 쪽은 다음 요청에서
+    #: 로그아웃된다. false 면 예전처럼 여러 곳에서 함께 쓴다.
+    single_session: bool = True
+    #: 비밀번호 재사용 금지 — 직전 몇 개와 같은 값을 거부할지(문제점 70번 10/15 ③). 0 이면 끈다.
+    password_history_count: int = 2
+    #: 저장 데이터 암호화 키(단말 MQTT 비밀번호, 문제점 70번 10/15 ⑤). base64 32바이트.
+    #: 비우면 JWT_SECRET 에서 파생한다 — 그 경우 JWT_SECRET 을 바꾸면 기존 값을 못 푼다(10 문서).
+    data_encryption_key: str = ""
+    #: 단말 MQTT 비밀번호를 발행 뒤 몇 시간까지 화면에 다시 보여 줄지. 지나면 재발행해야 본다.
+    device_password_view_hours: int = 24
     #: OTA 작업이 이 시간 안에 전 단말 OTA_RESULT 를 못 받으면 종료로 확정한다(초).
     #: 다 받은 신호도 OTA_RESULT 도 없는 단말을 포기하기까지. 패키지 몇 MB 는 몇 분이면 받는다.
     #: 30분이었을 때 실패한 OTA 가 그 단말의 방송을 수십 분 막았다(문제점 48번 보조설명 3).

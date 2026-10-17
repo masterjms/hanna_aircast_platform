@@ -22,7 +22,7 @@ COPY pyproject.toml ./
 RUN pip install --no-cache-dir \
       "fastapi>=0.115" "uvicorn[standard]>=0.32" "pydantic>=2.9" "pydantic-settings>=2.6" \
       "sqlalchemy[asyncio]>=2.0.36" "asyncpg>=0.30" "alembic>=1.14" "aiomqtt>=2.3" \
-      "apscheduler>=3.10,<4" "pyjwt>=2.10" "bcrypt>=4.2" "python-multipart>=0.0.17" \
+      "apscheduler>=3.10,<4" "pyjwt>=2.10" "bcrypt>=4.2" "python-multipart>=0.0.17" "cryptography>=42" \
       "google-cloud-texttospeech>=2.16"
 
 COPY alembic.ini ./

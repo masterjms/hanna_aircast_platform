@@ -7,11 +7,20 @@
 # backend·frontend 이미지 이름에 버전을 붙인다(APP_VERSION). 서버에서 빌드하는 지금 방식은 `local`,
 # 납품 묶음(scripts/package-release.sh)은 그 버전 — 묶음으로 설치한 서버는 빌드 없이 이 이름의 이미지를 쓴다.
 
+# 컨테이너 로그 크기 상한(문제점 70번 10/15 ⑥) — 서비스마다 10MB × 5개. 상한이 없으면 docker 의
+# json-file 로그가 디스크를 다 채울 때까지 자란다. 1년 보관이 필요한 웹 접근 기록은 nginx-logs 볼륨 쪽.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   backend:
     build: ./backend
     image: xwifi-backend:${APP_VERSION:-local}
     container_name: xwifi-backend
+    logging: *default-logging
     restart: unless-stopped
     env_file: .env
     environment:
@@ -48,6 +57,7 @@ services:
       context: ./frontend
     image: xwifi-frontend:${APP_VERSION:-local}
     container_name: xwifi-frontend-build
+    logging: *default-logging
     # 정적 파일만 만들어 볼륨에 떨어뜨리고 종료한다. nginx 가 그걸 서빙한다.
     command: ["sh", "-c", "npm run build && cp -r dist/. /out/"]
     volumes:
@@ -58,6 +68,7 @@ services:
   postgres:
     image: postgres:18-alpine
     container_name: xwifi-postgres
+    logging: *default-logging
     restart: unless-stopped
     profiles: ["local-db"]
     environment:
@@ -83,6 +94,7 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     container_name: xwifi-mosquitto
+    logging: *default-logging
     restart: unless-stopped
     ports:
       # 단말은 8883(TLS)만 쓴다. 1883 리스너는 컨테이너 네트워크 안에서 백엔드가
@@ -109,6 +121,7 @@ services:
     # latest 는 받을 때마다 내용이 바뀔 수 있어 버전을 고정한다(납품 자산 목록, 문제점 88번).
     image: libretime/icecast:2.4.4-debian
     container_name: xwifi-icecast
+    logging: *default-logging
     restart: unless-stopped
     environment:
       # 소스와 관리자 비밀번호를 분리한다. 같은 값이면 하나가 유출될 때
@@ -134,6 +147,7 @@ services:
   nginx:
     image: nginx:alpine
     container_name: xwifi-nginx
+    logging: *default-logging
     restart: unless-stopped
     ports:
       - "80:80"
@@ -148,12 +162,15 @@ services:
       - ./infra/certs:/etc/nginx/certs:ro
       - ./infra/certbot-webroot:/var/www/certbot:ro
       - web:/usr/share/nginx/html:ro
+      - nginx-logs:/var/log/nginx-archive
     depends_on:
       - backend
       - icecast
 
 volumes:
   pgdata:
+  # nginx 접근 로그 1년 보관(scripts/rotate-nginx-logs.sh)
+  nginx-logs:
   mosquitto-data:
   files:
   web:

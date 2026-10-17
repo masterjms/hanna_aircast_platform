@@ -20,6 +20,7 @@ from collections.abc import Iterable, Sequence
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.constants import Role
 from app.core import authz
 from app.core.orgtree import load_tree, lock_tree
@@ -40,6 +41,7 @@ from app.errors import (
     OrganizationNotFound,
     OrganizationOutOfScope,
     PasswordPolicy,
+    PasswordReused,
     TierTooLow,
     UserNotFound,
     VillageNotFound,
@@ -668,10 +670,13 @@ async def update_user(
     data = payload.model_dump(exclude_unset=True)
     if "password" in data and data["password"]:
         _check_password_rule(data["password"])
+        _remember_old_password(user)
         user.password_hash = hash_password(data["password"])
         user.password_changed_at = dt.datetime.now(dt.timezone.utc)
         user.failed_login_count = 0
         user.locked_until = None
+        # 관리자가 비밀번호를 바꾸면 그 계정이 쓰던 화면은 로그아웃된다(세션 키, 0028).
+        user.session_key = None
     # 보낸 경우에만 만료일을 다시 센다. 값이 null 이면 무기한으로 바꾼다.
     if "valid_days" in data:
         user.expires_at = _expiry_from(data["valid_days"])
@@ -722,6 +727,25 @@ def generate_temp_password() -> str:
             return pw
 
 
+def _remember_old_password(user: User) -> None:
+    """지금 비밀번호 해시를 이력 앞에 둔다(재사용 금지, 문제점 70번 10/15 ③).
+
+    임시 비밀번호는 넣지 않는다 — 사람이 정한 값만 막을 대상이다.
+    """
+    n = settings.password_history_count
+    if n <= 0 or user.must_change_password:
+        return
+    user.password_history = [user.password_hash, *(user.password_history or [])][:n]
+
+
+def _reject_reused(user: User, plain: str) -> None:
+    n = settings.password_history_count
+    if n <= 0:
+        return
+    if any(verify_password(plain, h) for h in (user.password_history or [])[:n]):
+        raise PasswordReused()
+
+
 def _check_password_rule(plain: str) -> None:
     """비밀번호 규칙(문제점 70번 ②). 계정 추가·수정·자기 변경에 같이 쓴다."""
     if not password_ok(plain):
@@ -756,8 +780,11 @@ async def issue_temp_password(
     if not await _manageable(db, user, actor, org_ids, scope):
         raise TierTooLow(detail={"user_id": user_id})
     password = generate_temp_password()
+    _remember_old_password(user)
     user.password_hash = hash_password(password)
     user.must_change_password = True
+    # 쓰던 화면은 로그아웃 — 임시 비밀번호로 새로 들어와야 한다(세션 키, 0028).
+    user.session_key = None
     # 잠긴 계정을 푸는 것도 이 버튼의 일이다(문제점 70번 ②).
     user.failed_login_count = 0
     user.locked_until = None
@@ -776,6 +803,8 @@ async def change_own_password(
             "지금 비밀번호와 다른 값으로 정해 주세요.", code="PASSWORD_UNCHANGED"
         )
     _check_password_rule(new_password)
+    _reject_reused(user, new_password)
+    _remember_old_password(user)
     user.password_hash = hash_password(new_password)
     user.must_change_password = False
     user.password_changed_at = dt.datetime.now(dt.timezone.utc)

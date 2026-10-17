@@ -61,8 +61,10 @@ def verify_password(plain: str, hashed: str) -> bool:
         return False
 
 
-def create_access_token(*, user_id: int, username: str, role: str) -> tuple[str, int]:
-    """(토큰, 만료까지 남은 초) 를 돌려준다."""
+def create_access_token(
+    *, user_id: int, username: str, role: str, sid: str | None = None
+) -> tuple[str, int]:
+    """(토큰, 만료까지 남은 초) 를 돌려준다. sid = 로그인 세션 키(동시 접속 제한, 0028)."""
     expires_in = settings.jwt_expire_minutes * 60
     now = dt.datetime.now(dt.timezone.utc)
     payload: dict[str, Any] = {
@@ -72,6 +74,8 @@ def create_access_token(*, user_id: int, username: str, role: str) -> tuple[str,
         "iat": int(now.timestamp()),
         "exp": int((now + dt.timedelta(seconds=expires_in)).timestamp()),
     }
+    if sid:
+        payload["sid"] = sid
     token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
     return token, expires_in
 

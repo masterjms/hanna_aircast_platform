@@ -17,6 +17,7 @@ from sqlalchemy import delete
 
 from app.config import settings
 from app.db import session_scope
+from app.models.audit import AuditEvent
 from app.models.auth_log import LoginEvent
 from app.models.event import BroadcastEvent, DeviceEvent
 from app.models.file import DownloadToken
@@ -53,6 +54,11 @@ async def sweep(now: dt.datetime | None = None) -> dict[str, int]:
         logins = (
             await db.execute(delete(LoginEvent).where(LoginEvent.logged_in_at < login_cutoff))
         ).rowcount
+        # 관리 행위 감사 기록(문제점 70번 10/15 ①) — 보호 트리거가 1년 미만은 막는다.
+        audit_cutoff = now - dt.timedelta(days=max(settings.audit_retention_days, 366))
+        audits = (
+            await db.execute(delete(AuditEvent).where(AuditEvent.at < audit_cutoff))
+        ).rowcount
         # 예약 실행 기록 1년(문제점 68번).
         run_cutoff = now - dt.timedelta(days=settings.schedule_run_retention_days)
         runs = (
@@ -63,6 +69,7 @@ async def sweep(now: dt.datetime | None = None) -> dict[str, int]:
         "loose_device_events": int(loose or 0),
         "tokens": int(tokens or 0),
         "logins": int(logins or 0),
+        "audits": int(audits or 0),
         "schedule_runs": int(runs or 0),
     }
 

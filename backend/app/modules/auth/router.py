@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import secrets
 from typing import Annotated
 
 from fastapi import APIRouter, Query, Request, status
@@ -148,8 +149,11 @@ async def login(payload: LoginRequest, db: Db, request: Request) -> LoginRespons
 
     scope = await authz.resolve_scope(db, user)
 
+    # 동시 접속 제한(문제점 70번 10/15 ③) — 새 세션 키. 먼저 쓰던 곳의 토큰은 다음 요청에서 401.
+    sid = secrets.token_hex(16) if settings.single_session else None
+    user.session_key = sid
     token, expires_in = create_access_token(
-        user_id=user.id, username=user.username, role=user.role
+        user_id=user.id, username=user.username, role=user.role, sid=sid
     )
     return LoginResponse(
         access_token=token,
@@ -173,6 +177,8 @@ async def logout(user: CurrentUser, db: Db) -> None:
     )
     if last is not None:
         last.logged_out_at = func.now()
+    # 이 토큰도 더는 못 쓴다(토큰 자체는 만료 전이라도) — 동시 접속 제한과 같은 세션 키.
+    user.session_key = None
     return None
 
 

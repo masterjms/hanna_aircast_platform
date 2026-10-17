@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError, api } from '../api/client';
 import type { Occurrence, Schedule } from '../api/types';
 import { ScheduleWizard } from '../components/schedule/ScheduleWizard';
+import { PageHead } from '../components/PageHead';
 import { kstDateKey, kstDayHeader, kstTime, whenLabel } from '../lib/schedule';
 
 const WEEK_DAYS = 7;
@@ -118,28 +119,16 @@ export function SchedulesPage() {
 
   return (
     <>
-      <div className="page-head page-head--row">
-        <div>
-          <h1>예약 방송</h1>
-          <p>자동방송 규칙 {schedules.length}개 · 시각은 한국 시간입니다.</p>
-        </div>
-        <div className="page-head__side">
-          {/* 개수·상한(문제점 67번) — 계정 상한은 최고 관리자에게 없다 */}
-          {quota && (
-            <span className="quota" title={`같은 시각(분)에는 최대 ${quota.per_minute_max}건까지 예약할 수 있습니다.`}>
-              {quota.mine_max !== null && (
-                <>
-                  내 예약 <b>{quota.mine}</b>/{quota.mine_max} ·{' '}
-                </>
-              )}
-              전체 <b>{quota.total}</b>/{quota.total_max.toLocaleString('ko-KR')}
-            </span>
-          )}
-          <button type="button" className="btn btn--primary" onClick={() => setWizard({ open: true })}>
+      <PageHead
+        title="예약 방송"
+        actions={
+          <button type="button" className="btn btn--primary btn--lg" onClick={() => setWizard({ open: true })}>
             예약 추가하기
           </button>
-        </div>
-      </div>
+        }
+      >
+        자동방송 규칙 {schedules.length}개 · 시각은 한국 시간입니다.
+      </PageHead>
 
       {error && (
         <div className="alert" style={{ marginBottom: 16 }}>
@@ -165,6 +154,21 @@ export function SchedulesPage() {
           )}
         </div>
 
+        <div className="sched-list">
+          {/* 개수·상한(문제점 67번)은 예약 목록 오른쪽 위(96번 ②) — 계정 상한은 최고 관리자에게 없다 */}
+          <div className="list-head">
+            <span className="list-head__title">예약 목록</span>
+            {quota && (
+              <span className="quota" title={`같은 시각(분)에는 최대 ${quota.per_minute_max}건까지 예약할 수 있습니다.`}>
+                {quota.mine_max !== null && (
+                  <>
+                    내 예약 <b>{quota.mine}</b>/{quota.mine_max} ·{' '}
+                  </>
+                )}
+                전체 <b>{quota.total}</b>/{quota.total_max.toLocaleString('ko-KR')}
+              </span>
+            )}
+          </div>
         <div className="table-wrap table-wrap--scroll">
           {loading ? (
             <div className="empty">불러오는 중…</div>
@@ -230,6 +234,7 @@ export function SchedulesPage() {
               </tbody>
             </table>
           )}
+        </div>
         </div>
       </div>
 

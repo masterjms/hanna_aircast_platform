@@ -130,6 +130,8 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 ### 2.2a 자기 비밀번호 변경
 
+직전 비밀번호 `PASSWORD_HISTORY_COUNT`(기본 2)개와 같은 값이면 `400 PASSWORD_REUSED`(2026-10-17, 문제점 70번 10/15 ③). 지금 비밀번호와 같은 값은 예전처럼 `PASSWORD_UNCHANGED`. 임시 비밀번호는 이력에 넣지 않는다.
+
 `POST /api/auth/password` — 로그인, `{current_password, new_password}` → 갱신된 `me`
 
 새 비밀번호는 **영문 대·소문자·숫자·특수문자 중 3종 이상 8자 이상, 또는 2종 이상 10자 이상**(64자까지, 어기면 `PASSWORD_POLICY` — 계정 추가·수정에도 같은 규칙, 2026-10-12). 현재 비밀번호가 틀리면 `WRONG_PASSWORD`, 같은 값이면 `PASSWORD_UNCHANGED`. 성공하면 `must_change_password`가 풀리고 `password_changed_at`이 지금으로 바뀐다.
@@ -140,7 +142,9 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 
 `POST /api/auth/logout` — 인증 필요(2026-10-09), `204`
 
-서버 토큰 blacklist는 없다. 클라이언트가 저장 토큰과 사용자 상태를 삭제해야 한다. 서버는 그 계정의 가장 최근 열린 로그인 기록에 해지 시각을 적는다(문제점 65번).
+서버는 그 계정의 가장 최근 열린 로그인 기록에 해지 시각을 적고(문제점 65번), 계정의 `session_key`를 비워 이 토큰도 더 못 쓰게 한다(2026-10-17).
+
+**동시 접속 제한(2026-10-17, 문제점 70번 10/15 ③).** 로그인할 때마다 새 세션 키(`users.session_key`)를 만들어 토큰에 `sid`로 싣는다. 요청의 `sid`가 계정의 지금 세션 키와 다르면 `401 SESSION_REPLACED`(「다른 곳에서 같은 계정으로 로그인해 이 화면은 로그아웃되었습니다」) — 같은 계정은 한 곳에서만 쓴다. 관리자가 그 계정의 비밀번호를 바꾸거나 임시 비밀번호를 발급해도 세션이 끊긴다. `SINGLE_SESSION=false`면 끈다. 0028 전에 받은 토큰(`sid` 없음)은 세션 키가 빈 동안만 통한다. 마이크 업링크 WebSocket은 시작할 때 한 번만 검사한다(방송 중에 끊지 않는다).
 
 ### 2.4 로그인 기록 (2026-10-09, 문제점 65번)
 
@@ -152,7 +156,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
    "result": "ok", "logged_in_at": "…", "logged_out_at": null}]}
 ```
 
-`result`: `ok` · `bad_password` · `unknown_user` · `expired`. 실패도 남긴다(무차별 대입 흔적). IP는 nginx가 넘기는 `X-Real-IP`(없으면 `X-Forwarded-For` 첫 값). 해지 시각은 「로그아웃」을 눌렀을 때만 채워진다. 보관 `LOGIN_RETENTION_DAYS`(기본 730일) — 매시간 정리 작업이 지운다.
+`result`: `ok` · `bad_password` · `unknown_user` · `expired` · `locked`. 실패도 남긴다(무차별 대입 흔적). IP는 nginx가 넘기는 `X-Real-IP`(없으면 `X-Forwarded-For` 첫 값). 해지 시각은 「로그아웃」을 눌렀을 때만 채워진다. 보관 `LOGIN_RETENTION_DAYS`(기본 730일) — 매시간 정리 작업이 지운다.
 
 ## 3. 상태와 설정 API
 
@@ -411,6 +415,28 @@ PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유�
 
 설치 위치 필드는 `road_address`, `jibun_address`, `address_detail`, `lat`, `lng`다. 좌표가 없으면 지도 API가 zone, village 순으로 fallback한다.
 
+### 2.5 관리 기록 · 기록 점검 (2026-10-17, 문제점 70번 10/15 ①④)
+
+| Method | Path | 권한 | 설명 |
+|---|---|---|---|
+| GET | `/api/audit?page=&size=&q=` | 로그인 | 관리 행위 기록. 최고 관리자는 전부, 그 외는 자기 것만. `q`는 아이디·행위·대상·IP |
+| GET | `/api/audit/verify` | `super_admin` | 접속기록·관리 기록 해시 체인을 DB 안에서 다시 계산 |
+| POST | `/api/audit/review` | `super_admin` | 월 점검 — verify 결과와 두 기록의 끝 해시(앵커)를 관리 기록 한 줄(`기록 점검`)로 남김 |
+| GET | `/api/audit/export?kind=login\|audit&month=YYYY-MM` | `super_admin` | 한 달치 CSV(UTF-8 BOM, 엑셀). 응답 머리 `X-Content-SHA256` = 파일 해시 |
+
+**무엇이 남나.** `/api`의 변경 요청(POST·PUT·PATCH·DELETE) 전부를 응답이 나간 뒤 입구 미들웨어(`app/core/audit.py`)가 한 줄씩 남긴다 — 라우터마다 넣지 않아 새 기능도 빠지지 않는다. 누가(토큰의 계정·역할, 만료 토큰도 서명이 맞으면 이름은 남김)·언제·IP·행위 이름(「계정 추가」「단말 삭제」…, 표에 없는 경로는 `METHOD 경로`)·대상(경로의 id·MAC)·결과(HTTP 상태, 실패·403도)·요청 요약(JSON 본문 — `pass`·`token`·`secret`·`key`·`credential` 들어간 키는 `***`, 2KB까지. 파일 올리기는 크기만). 로그인·로그아웃은 `login_events`가 따로 남기므로 뺀다.
+
+verify 응답:
+
+```json
+{"ok": true, "checked_at": "…", "last_review_at": "…", "last_review_by": "super",
+ "chains": [{"table": "login_events", "label": "접속기록", "rows": 812, "ok": true,
+             "first_bad_seq": null, "unchained": 0, "last_seq": 812, "last_hash": "6ea9…",
+             "anchor_mismatch": []}, {"table": "audit_events", "label": "감사 기록", …}]}
+```
+
+`first_bad_seq` — 저장된 해시가 다시 계산한 값과 다르거나 앞 줄 해시와 안 이어지는 첫 줄. `unchained` — 체인 번호 없이 들어온 줄(트리거를 끄고 넣은 흔적). `anchor_mismatch` — 지난 점검 때 적어 둔 끝 해시와 지금 그 자리 해시가 다른 순번(체인을 통째로 다시 계산해 덮어쓴 흔적). 보관 기간 정리로 앞부분이 지워진 것은 문제로 보지 않는다.
+
 ### 6.4 credential
 
 | Method | Path | 권한 | 설명 |
@@ -435,9 +461,13 @@ PATCH에서는 필드 생략과 명시적 `null`이 다르다. 생략하면 유�
   "username":"58e6c5f2cc74",
   "password":"aB3#kP9_",
   "server_host":"example.invalid",
-  "issued":false
+  "issued":false,
+  "hidden":false,
+  "view_hours":24
 }
 ```
+
+**열람 제한(2026-10-17, 문제점 70번 10/15 ⑤).** 비밀번호는 발행(등록·재발행) 뒤 `DEVICE_PASSWORD_VIEW_HOURS`(기본 24시간)까지만 다시 보여 준다. 지나면 `password: null`, `hidden: true` — 다시 넣어야 하면 `reissue=true`. 0028 전에 발행된 단말은 발행 시각을 몰라 처음부터 가려진다. DB에는 AES-GCM 암호문으로 저장한다(`app/core/secretbox.py`, 키 `DATA_ENCRYPTION_KEY` — 비우면 `JWT_SECRET`에서 파생).
 
 기본은 기존 값을 재사용한다. `reissue=true`는 생산 라인 재작업에만 사용한다. 현장 단말 비밀번호를 서버에서만 바꾸면 단말이 다시 접속할 수 없게 된다.
 

@@ -65,6 +65,20 @@ class AccountLocked(Unauthorized):
     )
 
 
+class SessionReplaced(Unauthorized):
+    """같은 계정이 다른 곳에서 로그인했다(동시 접속 제한, 문제점 70번 10/15 ③)."""
+
+    code = "SESSION_REPLACED"
+    message = "다른 곳에서 같은 계정으로 로그인해 이 화면은 로그아웃되었습니다."
+
+
+class PasswordReused(ApiError):
+    """직전 비밀번호 재사용(문제점 70번 10/15 ③)."""
+
+    code = "PASSWORD_REUSED"
+    message = "최근에 쓴 비밀번호는 다시 쓸 수 없습니다. 다른 값으로 정해 주세요."
+
+
 class PasswordPolicy(ApiError):
     code = "PASSWORD_POLICY"
     message = "비밀번호 규칙에 맞지 않습니다."

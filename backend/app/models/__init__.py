@@ -31,4 +31,5 @@ __all__ = [
     "Village",
     "Zone",
 ]
+from app.models.audit import AuditEvent  # noqa: E402,F401
 from app.models.auth_log import LoginEvent  # noqa: E402,F401

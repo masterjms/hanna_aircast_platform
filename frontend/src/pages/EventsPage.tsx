@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ApiError, api } from '../api/client';
 import type { HistoryKind, HistoryPage, HistoryVerdict } from '../api/types';
 import { PageSizeSelect, PagerBar, type PageSize } from '../components/Pager';
+import { PageHead } from '../components/PageHead';
 
 const KIND_OPTIONS: { value: HistoryKind | ''; label: string }[] = [
   { value: '', label: '모든 종류' },
@@ -112,6 +113,8 @@ export function EventsPage() {
 
   return (
     <>
+      {/* 다른 화면처럼 제목(문제점 98번) */}
+      <PageHead title="방송 기록">방송마다 단말별 수신 결과 · 150일 보관</PageHead>
       <div className="filters">
         <select value={kind} onChange={(e) => setKind(e.target.value as HistoryKind | '')} aria-label="종류">
           {KIND_OPTIONS.map((o) => (

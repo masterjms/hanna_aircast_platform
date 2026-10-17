@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 
 import { api } from '../api/client';
 import { AddressSearchField } from '../components/AddressSearchField';
@@ -17,6 +18,7 @@ import type { Device, DeviceCredential, DeviceStatusFilter, Organization, Villag
 import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
 import { StepTitle } from '../components/StepTitle';
 import { TargetTreePicker } from '../components/broadcast/TargetTreePicker';
+import { PageHead } from '../components/PageHead';
 import { useAuth } from '../auth/AuthContext';
 import { POLL_INTERVAL, usePolling } from '../hooks/usePolling';
 
@@ -357,7 +359,7 @@ function CredentialDialog({ device, onClose }: { device: Device; onClose: () => 
   }, [device.mac]);
 
   const copy = async () => {
-    if (!cred) return;
+    if (!cred?.password) return;
     try {
       await navigator.clipboard.writeText(
         provisioningFrame({
@@ -467,14 +469,27 @@ function CredentialDialog({ device, onClose }: { device: Device; onClose: () => 
           </div>
           <div className="field">
             <label>password</label>
-            <input className="mono" readOnly value={cred.password} />
+            <input
+              className="mono"
+              readOnly
+              value={cred.password ?? '••••••••'}
+              aria-label={cred.password ? 'password' : '가려진 password'}
+            />
           </div>
-          <button type="button" className="btn btn--sm" onClick={copy} disabled={busy}>
+          {cred.hidden && (
+            /* 열람 제한(문제점 70번 10/15 ⑤) — 발행 뒤 정해진 시간이 지나면 다시 보여 주지 않는다. */
+            <p className="hint hint--warn">
+              발행한 지 {cred.view_hours}시간이 지나 비밀번호를 보여 주지 않습니다(보안). 단말에 다시 넣어야 하면
+              「재발행 (라인 전용)」으로 새로 만드세요.
+            </p>
+          )}
+          <button type="button" className="btn btn--sm" onClick={copy} disabled={busy || !cred.password}>
             {copied ? '복사됨 ✓' : '시리얼 명령 복사 (@SERVER/@MQTTID/@MQTTPW)'}
           </button>
           <p className="hint">
             생산 라인에서 시리얼로 단말에 넣는 값입니다. 발행된 계정은 단말 폐기 전까지 바뀌지
-            않습니다{cred.issued ? ' — 방금 새로 발행됐습니다.' : ' — 기존 값을 다시 표시했습니다.'}
+            않습니다
+            {cred.issued ? ' — 방금 새로 발행됐습니다.' : cred.hidden ? '.' : ' — 기존 값을 다시 표시했습니다.'}
           </p>
         </>
       )}
@@ -593,7 +608,7 @@ function DeviceTable({
           <th className="num">RSSI</th>
           <th className="num">CFG</th>
           <th>마지막 통신</th>
-          <th title="실행 중 펌웨어 — P4 / C6. STATUS 가 없으면 등록 때 값">버전 (P4 / C6)</th>
+          <th title="실행 중 펌웨어 — APP(P4) / Wi-Fi(C6) 모듈. STATUS 가 없으면 등록 때 값">버전 (APP / Wi-Fi)</th>
           <th />
         </tr>
       </thead>
@@ -671,7 +686,12 @@ function DeviceTable({
 export function DevicesPage() {
   const { user, isSuperAdmin } = useAuth();
   const [villageId, setVillageId] = useState<number | ''>('');
-  const [statusFilter, setStatusFilter] = useState<DeviceStatusFilter | ''>('');
+  // 전체 현황의 「미배정 확인 ›」은 /devices?status=unassigned 로 온다(문제점 101번).
+  const [params] = useSearchParams();
+  const [statusFilter, setStatusFilter] = useState<DeviceStatusFilter | ''>(() => {
+    const q = params.get('status');
+    return q === 'online' || q === 'offline' || q === 'unassigned' ? q : '';
+  });
   const [search, setSearch] = useState('');
   const [assigning, setAssigning] = useState<Device | null>(null);
   const [credentialFor, setCredentialFor] = useState<Device | null>(null);
@@ -704,12 +724,19 @@ export function DevicesPage() {
 
   return (
     <>
-      <div className="page-head">
-        <h1>단말 관리</h1>
-        <p>
-          {devices.data?.length ?? 0}대 표시 중 · {POLL_INTERVAL.normal / 1000}초마다 갱신
-        </p>
-      </div>
+      <PageHead
+        title="단말 관리"
+        actions={
+          // 서버가 MAC 을 모르는 단말을 처음 넣는 입구 — QR 스캔/수동 + 계정 발행 + 시리얼 주입. 제목 옆(97번).
+          isSuperAdmin && (
+            <button type="button" className="btn btn--primary btn--lg" onClick={() => setRegistering(true)}>
+              신규 단말 등록
+            </button>
+          )
+        }
+      >
+        {devices.data?.length ?? 0}대 표시 중 · {POLL_INTERVAL.normal / 1000}초마다 갱신
+      </PageHead>
 
       <div className="filters">
         <select
@@ -735,13 +762,6 @@ export function DevicesPage() {
           <option value="offline">오프라인</option>
           {isSuperAdmin && <option value="unassigned">미배정</option>}
         </select>
-
-        {/* 서버가 MAC 을 모르는 단말을 처음 넣는 입구 — QR 스캔/수동 + 계정 발행 + 시리얼 주입 */}
-        {isSuperAdmin && (
-          <button type="button" className="btn btn--primary" onClick={() => setRegistering(true)}>
-            + 신규 단말 등록
-          </button>
-        )}
 
         <div className="filters__spacer" />
 

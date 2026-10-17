@@ -596,10 +596,10 @@ export function RegisterDeviceDialog({
       {fieldRow('MAC (콜론 없이 12자리)', mac, setMac, '58e6c5f2cc74')}
       {mac && !macValid && <p className="hint hint--warn">MAC 은 hex 12자리여야 합니다.</p>}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 12px' }}>
-        {fieldRow('P4 모델 번호', p4Model, setP4Model, 'IOT-1000')}
-        {fieldRow('P4 모델 버전', p4Version, setP4Version, 'V.260823-1')}
-        {fieldRow('C6 모델 번호', c6Model, setC6Model, 'IOT-1000C6')}
-        {fieldRow('C6 모델 버전', c6Version, setC6Version, 'V.260823-1')}
+        {fieldRow('APP 모듈 번호', p4Model, setP4Model, 'IOT-1000')}
+        {fieldRow('APP 모듈 버전', p4Version, setP4Version, 'V.260823-1')}
+        {fieldRow('Wi-Fi 모듈 번호', c6Model, setC6Model, 'IOT-1000C6')}
+        {fieldRow('Wi-Fi 모듈 버전', c6Version, setC6Version, 'V.260823-1')}
       </div>
 
       {/* ── 2. 계정 (시스템 난수 — 사용자가 못 정한다) ── */}

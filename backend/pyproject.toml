@@ -21,6 +21,8 @@ dependencies = [
     "pyjwt>=2.10",
     "bcrypt>=4.2",
     "python-multipart>=0.0.17",
+    # 단말 MQTT 비밀번호 암호화(AES-GCM, app/core/secretbox.py — 문제점 70번 10/15 ⑤)
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

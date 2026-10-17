@@ -2839,3 +2839,133 @@ class TestTombstone:
         service.TOMBSTONES.add("aabbccdd0001")
         assert service.is_tombstoned("aabbccdd0001") and not service.is_tombstoned("aabbccdd0002")
         service.TOMBSTONES.clear()
+
+
+# ── 공공 보안 보완 (문제점 70번 10/15 ①③④⑤) ─────────────────────────────────
+class TestSecurityHardening:
+    def test_audit_describe_maps_routes_and_targets(self):
+        from app.core.audit import describe
+
+        assert describe("POST", "/api/users") == ("계정 추가", None)
+        assert describe("DELETE", "/api/users/7") == ("계정 삭제", "7")
+        mac = "aabbccdd0001"
+        assert describe("PATCH", f"/api/devices/{mac}") == ("단말 수정(배정·위치·별칭)", mac)
+        assert describe("POST", f"/api/devices/{mac}/credential")[0] == "단말 비밀번호 조회·재발급"
+        assert describe("PUT", "/api/config") == ("환경 설정 변경", None)
+        # 표에 없는 경로도 빠지지 않는다
+        assert describe("POST", "/api/new/thing") == ("POST /api/new/thing", None)
+
+    def test_audit_never_stores_secrets(self):
+        from app.core.audit import summarize
+
+        body = json.dumps(
+            {
+                "username": "kim",
+                "password": "Abcdefg1!",
+                "new_password": "x",
+                "nested": {"token": "t"},
+            }
+        ).encode()
+        d = summarize(body, "application/json", len(body), "")
+        text = json.dumps(d, ensure_ascii=False)
+        assert "Abcdefg1!" not in text and '"t"' not in text and "kim" in text
+        # 파일 올리기는 내용 대신 크기만
+        assert summarize(b"", "multipart/form-data; boundary=x", 1234, "") == {"upload_bytes": 1234}
+
+    def test_audit_skips_login_and_review(self):
+        from app.core import audit
+
+        assert {"/api/auth/login", "/api/auth/logout", "/api/audit/review"} <= audit._SKIP
+
+    def test_secretbox_roundtrip_and_legacy_plaintext(self):
+        from app.core import secretbox
+
+        enc = secretbox.encrypt("Ab#12345")
+        assert enc.startswith(secretbox.PREFIX) and "Ab#12345" not in enc
+        assert secretbox.decrypt(enc) == "Ab#12345"
+        assert secretbox.encrypt("Ab#12345") != enc  # nonce 가 매번 다르다
+        assert secretbox.decrypt("plain-old") == "plain-old"  # 0028 이전 평문도 읽힌다
+
+    def test_secretbox_reads_old_values_after_key_is_set(self):
+        import base64
+        import os
+
+        from app.config import settings
+        from app.core import secretbox
+
+        secretbox._keys.cache_clear()
+        old = secretbox.encrypt("Ab#12345")  # JWT_SECRET 파생 키로 저장된 값
+        try:
+            with unittest.mock.patch.object(
+                settings, "data_encryption_key", base64.b64encode(os.urandom(32)).decode()
+            ):
+                secretbox._keys.cache_clear()
+                assert secretbox.decrypt(old) == "Ab#12345"
+                new = secretbox.encrypt("Cd#67890")
+            secretbox._keys.cache_clear()
+            from cryptography.exceptions import InvalidTag
+
+            with pytest.raises(InvalidTag):  # 새 키로만 풀린다
+                secretbox.decrypt(new)
+        finally:
+            secretbox._keys.cache_clear()
+
+    def test_device_password_column_is_encrypted_type(self):
+        from app.core.secretbox import EncryptedText
+
+        assert isinstance(Device.__table__.c.mqtt_password.type, EncryptedText)
+
+    def test_session_key_check(self):
+        from app.core.deps import _check_session
+        from app.errors import SessionReplaced
+
+        u = unittest.mock.Mock(session_key="abc")
+        _check_session({"sid": "abc"}, u)
+        with pytest.raises(SessionReplaced):
+            _check_session({"sid": "old"}, u)
+        with pytest.raises(SessionReplaced):
+            _check_session({}, u)
+        # 로그아웃(세션 비움) 뒤에는 그 토큰도 안 된다
+        u.session_key = None
+        with pytest.raises(Unauthorized):
+            _check_session({"sid": "abc"}, u)
+        _check_session({}, u)  # 0028 이전 토큰(sid 없음)은 세션이 빈 동안만
+
+    def test_token_carries_sid(self):
+        tok, _ = create_access_token(user_id=1, username="a", role="super_admin", sid="k1")
+        assert decode_access_token(tok)["sid"] == "k1"
+
+    def test_password_history_blocks_recent_reuse(self):
+        from app.errors import PasswordReused
+        from app.modules.org.service import _reject_reused, _remember_old_password
+
+        u = unittest.mock.Mock(password_hash=hash_password("Old-pass1"), password_history=[],
+                               must_change_password=False)
+        _remember_old_password(u)
+        u.password_hash = hash_password("New-pass2")
+        with pytest.raises(PasswordReused):
+            _reject_reused(u, "Old-pass1")
+        _reject_reused(u, "Other-pass3")
+        # 임시 비밀번호는 이력에 넣지 않는다
+        u.must_change_password = True
+        before = list(u.password_history)
+        _remember_old_password(u)
+        assert u.password_history == before
+
+    def test_migration_protects_logs(self):
+        import importlib.util
+        import pathlib
+
+        path = pathlib.Path(__file__).parents[1] / "alembic/versions/0028_security_hardening.py"
+        spec = importlib.util.spec_from_file_location("m0028", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        guards = "\n".join(mod.GUARD_LOGIN + mod.GUARD_AUDIT)
+        assert "BEFORE UPDATE OR DELETE ON login_events" in guards
+        assert "BEFORE TRUNCATE ON audit_events" in guards
+        assert "interval '365 days'" in guards
+        # asyncpg 는 한 문장씩만 — 문장 안에 「;\n CREATE」 같은 두 번째 문장이 없어야 한다
+        for stmt in [*mod.GUARD_LOGIN, *mod.GUARD_AUDIT,
+                     *mod._chain_trigger("login_events", "logged_in_at", "f")]:
+            assert ";\nCREATE" not in stmt
+

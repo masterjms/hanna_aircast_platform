@@ -14,6 +14,7 @@ import type {
   ApiErrorBody,
   ApiErrorCode,
   AudioFile,
+  AuditEventPage,
   BroadcastDetail,
   DashboardSummary,
   Device,
@@ -47,6 +48,7 @@ import type {
   Village,
   VillageBoundary,
   VillageInput,
+  VerifyResult,
   VoiceCatalog,
   Zone,
   ZoneInput,
@@ -86,6 +88,20 @@ export function setUnauthorizedHandler(handler: (() => void) | null): void {
   onUnauthorized = handler;
 }
 
+/** 401 — 토큰을 버리고 로그인 화면으로. 다른 곳 로그인으로 끊긴 것이면 로그인 화면에 사유를 띄운다
+ *  (동시 접속 제한, 문제점 70번 10/15 ③). */
+function unauthorized(code?: string): void {
+  if (code === 'SESSION_REPLACED') {
+    try {
+      sessionStorage.setItem('xwifi.logoutReason', '다른 곳에서 같은 계정으로 로그인해 이 화면은 로그아웃되었습니다.');
+    } catch {
+      /* 무시 */
+    }
+  }
+  setToken(null);
+  onUnauthorized?.();
+}
+
 // ── 서버 시계 ────────────────────────────────────────────────────────────
 // 방송 시작 시각은 서버가 찍고, "몇 초째"는 브라우저가 센다. PC 시계가 서버보다 몇 분 느리면
 // 경과가 음수라 0초에 머문다(문제점 59번 — 17:37 에 다시 해 보니 흐르더라는 것이 시계 보정의
@@ -115,11 +131,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(path, { ...init, headers });
   noteServerClock(res);
 
-  if (res.status === 401) {
-    setToken(null);
-    onUnauthorized?.();
-  }
-
   if (res.status === 204) return undefined as T;
 
   const text = await res.text();
@@ -130,6 +141,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   } catch {
     if (res.ok) throw new ApiError(res.status, 'UNKNOWN', '서버 응답을 읽지 못했습니다.');
   }
+
+  if (res.status === 401) unauthorized((parsed as ApiErrorBody | null)?.error?.code);
 
   if (!res.ok) {
     const body = parsed as ApiErrorBody | null;
@@ -267,12 +280,9 @@ export const api = {
       // transcode=true 는 "규격에 맞게 변환해도 좋다"는 사용자 확인이다.
       const url = transcode ? '/api/files?transcode=true' : '/api/files';
       const res = await fetch(url, { method: 'POST', body: form, headers });
-      if (res.status === 401) {
-        setToken(null);
-        onUnauthorized?.();
-      }
       const text = await res.text();
       const parsed: unknown = text ? JSON.parse(text) : null;
+      if (res.status === 401) unauthorized((parsed as ApiErrorBody | null)?.error?.code);
       if (!res.ok) {
         const body = parsed as ApiErrorBody | null;
         throw new ApiError(
@@ -294,6 +304,37 @@ export const api = {
     /** 관리자 미리듣기 URL. <audio src> 에 그대로 넣는다(토큰은 쿼리로 붙인다). */
     audioUrl: (id: number) =>
       `/api/files/${id}/audio${token ? `?access_token=${encodeURIComponent(token)}` : ''}`,
+  },
+
+  /** 관리 행위 감사 기록 · 기록 무결성(문제점 70번 10/15 ①④) */
+  audit: {
+    list: (params: { page: number; size: number; q?: string }) =>
+      request<AuditEventPage>(`/api/audit${query(params)}`),
+    verify: () => request<VerifyResult>('/api/audit/verify'),
+    review: () => request<VerifyResult>('/api/audit/review', { method: 'POST' }),
+    /** 한 달치 CSV — 파일과 그 SHA-256(점검표에 적는다). */
+    exportCsv: async (kind: 'login' | 'audit', month: string) => {
+      const headers = new Headers();
+      if (token) headers.set('Authorization', `Bearer ${token}`);
+      const res = await fetch(`/api/audit/export${query({ kind, month })}`, { headers });
+      if (!res.ok) {
+        const text = await res.text();
+        let body: ApiErrorBody | null = null;
+        try {
+          body = text ? (JSON.parse(text) as ApiErrorBody) : null;
+        } catch {
+          /* HTML 오류 */
+        }
+        if (res.status === 401) unauthorized(body?.error?.code);
+        throw new ApiError(res.status, body?.error?.code ?? 'UNKNOWN', body?.error?.message ?? `내려받기에 실패했습니다 (HTTP ${res.status})`);
+      }
+      const name = /filename\*=UTF-8''([^;]+)/.exec(res.headers.get('content-disposition') ?? '')?.[1];
+      return {
+        blob: await res.blob(),
+        filename: name ? decodeURIComponent(name) : `${kind}_${month}.csv`,
+        sha256: res.headers.get('x-content-sha256') ?? '',
+      };
+    },
   },
 
   broadcast: {

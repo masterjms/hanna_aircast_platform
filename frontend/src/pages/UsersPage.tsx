@@ -16,9 +16,11 @@ import type { LoginEventPage, Organization, Role, User, Village } from '../api/t
 import { PageSizeSelect, PagerBar, type PageSize } from '../components/Pager';
 import { TargetTreePicker } from '../components/broadcast/TargetTreePicker';
 import { useAuth } from '../auth/AuthContext';
+import { AuditHistory, RecordCheck } from '../components/AuditPanels';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { PASSWORD_RULE_TEXT, passwordOk } from '../lib/password';
 import { Modal } from '../components/Modal';
+import { PageHead } from '../components/PageHead';
 import { buildForest, flattenForest } from '../lib/orgtree';
 import { ROLE_LABEL, isOrgRole, manageableRoles } from '../lib/roles';
 
@@ -229,22 +231,23 @@ export function UsersPage() {
 
   return (
     <>
-      <div className="page-head page-head--row">
-        <div>
-          <h1>계정 관리</h1>
-          <p>관리자 계정 {users.length}개</p>
-        </div>
-        <button
-          type="button"
-          className="btn btn--primary"
-          onClick={() => {
-            setEditingId(null);
-            setForm({ ...EMPTY });
-          }}
-        >
-          계정 추가
-        </button>
-      </div>
+      <PageHead
+        title="계정 관리"
+        actions={
+          <button
+            type="button"
+            className="btn btn--primary btn--lg"
+            onClick={() => {
+              setEditingId(null);
+              setForm({ ...EMPTY });
+            }}
+          >
+            계정 추가
+          </button>
+        }
+      >
+        관리자 계정 {users.length}개
+      </PageHead>
 
       {error && (
         <div className="alert" style={{ marginBottom: 16 }}>
@@ -559,6 +562,9 @@ export function UsersPage() {
       )}
 
       <LoginHistory />
+      {/* 관리 행위 기록·기록 점검(문제점 70번 10/15 ①④) */}
+      <AuditHistory />
+      {isSuperAdmin && <RecordCheck />}
     </>
   );
 }
@@ -587,6 +593,7 @@ function LoginHistory() {
     bad_password: { text: '비밀번호 틀림', cls: 'badge badge--danger' },
     unknown_user: { text: '없는 아이디', cls: 'badge badge--danger' },
     expired: { text: '기간 만료', cls: 'badge badge--warn' },
+    locked: { text: '잠김', cls: 'badge badge--warn' },
   };
   return (
     <section style={{ marginTop: 28 }}>

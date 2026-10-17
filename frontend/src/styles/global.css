@@ -613,9 +613,10 @@ td.strong {
   color: var(--text);
 }
 
+/* 숫자 칸도 왼쪽 정렬 — 모든 목록은 왼쪽 기준(문제점 92·95번). 자릿수 폭만 고르게. */
 .num {
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  text-align: left;
 }
 
 td.dim {
@@ -1320,9 +1321,10 @@ tr.is-selected td {
   margin-top: 14px;
 }
 
+/* 묶음 제목은 항목보다 한 단계 크게, 항목은 번호를 붙여 촘촘히(문제점 93번) */
 .settings-group__title {
-  margin: 0 0 6px;
-  font-size: 15px;
+  margin: 0 0 4px;
+  font-size: 17px;
   font-weight: 800;
 }
 
@@ -1337,8 +1339,13 @@ tr.is-selected td {
   display: flex;
   align-items: center;
   gap: 20px;
-  padding: 20px 0;
-  border-bottom: 1px solid var(--border);
+  padding: 7px 0;
+}
+.settings-row__no {
+  display: inline-block;
+  min-width: 20px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
 }
 
 .settings-row__text {
@@ -1359,7 +1366,7 @@ tr.is-selected td {
 
 .settings-row input {
   width: 92px;
-  padding: 11px 12px;
+  padding: 8px 12px;
   font-size: 15px;
   font-weight: 700;
   text-align: right;
@@ -2873,11 +2880,9 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
 /* 설정 — 넓은 화면에서는 묶음을 두 단으로 펼쳐 한 화면에 담는다(묶음은 단 사이에서 쪼개지 않는다). */
 @media (min-width: 1280px) and (min-height: 560px) {
   .settings-grid { max-width: 1320px; }
-  .settings-card { column-count: 2; column-gap: 40px; column-rule: 1px solid var(--border); padding-top: 8px; }
-  .settings-group { break-inside: avoid; }
-  .settings-group + .settings-group { margin-top: 0; padding-top: 0; border-top: none; }
-  .settings-group__title { margin-top: 0; padding-top: 16px; }
-  .settings-card > button[type="submit"] { column-span: all; margin-top: 18px; }
+  .settings-card { column-count: 2; column-gap: 24px; padding-top: 16px; padding-bottom: 4px; }
+  .settings-group { break-inside: avoid; margin-bottom: 12px; }
+  .settings-group + .settings-group { margin-top: 0; }
 }
 
 /* 낮은 창 — 왼쪽 메뉴도 스크롤 없이 들어오게 여백만 줄인다(글자 크기는 그대로). */
@@ -3446,3 +3451,28 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
   .lg-bg, .lg-card::before, .lg-btn::after, .lg-dot { animation: none; }
   .lg-card { animation: none; opacity: 1; transform: none; }
 }
+
+/* 화면 머리 공통(문제점 96~100번) — 제목 옆에 「?」·주 버튼. components/PageHead.tsx */
+.page-head__titlerow h1 { display: inline-flex; align-items: center; gap: 8px; }
+/* 표 위 작은 머리줄 — 왼쪽 이름, 오른쪽 개수(예약 목록의 「전체 7/2,000」, 96번 ②) */
+.list-head { display: flex; align-items: center; gap: 12px; min-height: 24px; }
+.list-head__title { font-weight: 700; }
+.list-head .quota { margin-left: auto; }
+.sched-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.sched-grid > .sched-list { overflow: hidden; }
+.sched-list > .table-wrap { flex: 1 1 auto; min-height: 0; }
+
+/* 방송 자료 표 — 파일명 다음 다섯 칸(생성·길이·크기·아이디·등록일)을 같은 폭으로(문제점 92번) */
+.files-table { table-layout: fixed; width: 100%; }
+.files-table col.files-table__name { width: 34%; }
+.files-table col.files-table__col { width: 11%; }
+.files-table col.files-table__act { width: 11%; }
+.files-table td:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 미배정 카드의 「미배정 확인 ›」은 노랑(문제점 101번) — 오프라인 「원인 확인 ›」의 빨강과 구분 */
+.stat--warn .stat__action { color: var(--warn-text); }
+
+/* 기록 점검(문제점 70번 10/15 ④) — 계정 관리 아래, 최고 관리자 전용 */
+.record-check { padding: 16px 18px; }
+.record-check__rows { display: grid; gap: 6px; }
+.record-check__row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.record-check__files { margin: 10px 0 0; padding-left: 18px; font-size: 12.5px; display: grid; gap: 4px; word-break: break-all; }

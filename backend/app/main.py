@@ -22,9 +22,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from app.config import settings
+from app.core.audit import AuditMiddleware
 from app.db import SessionFactory, engine, session_scope
 from app.errors import register_exception_handlers
 from app.live.registry import LiveRegistry
+from app.modules.audit.router import router as audit_router
 from app.modules.auth.router import router as auth_router
 from app.modules.broadcast import service as broadcast_service
 from app.modules.broadcast.router import router as broadcast_router
@@ -243,6 +245,9 @@ if settings.cors_origins:
         allow_headers=["*"],
     )
 
+# 관리 행위 감사 기록(문제점 70번 10/15 ①) — 맨 바깥에서 변경 요청을 한 줄씩 남긴다.
+app.add_middleware(AuditMiddleware)
+
 app.include_router(system_router)
 app.include_router(auth_router)
 app.include_router(org_router)
@@ -254,3 +259,4 @@ app.include_router(broadcast_router)
 app.include_router(geo_router)
 app.include_router(history_router)
 app.include_router(ota_router)
+app.include_router(audit_router)

@@ -32,3 +32,10 @@ class LoginEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
     logged_out_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    #: 위·변조 방지 해시 체인(0028, 문제점 70번 10/15 ④) — DB 트리거가 채운다. 해시에는 바뀔 수 있는
+    #: 칸(logged_out_at, 계정 삭제 때 NULL 이 되는 user_id)을 넣지 않는다.
+    #: models/audit.py 와 같은 방식.
+    chain_seq: Mapped[int | None] = mapped_column(BigInteger, unique=True)
+    prev_hash: Mapped[str | None] = mapped_column(String(64))
+    row_hash: Mapped[str | None] = mapped_column(String(64))

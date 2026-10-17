@@ -186,8 +186,11 @@ class DeviceCredentialOut(ApiModel):
     """등록 화면이 표시하고 생산 라인이 시리얼(@SERVER/@MQTTID/@MQTTPW)로 넣는 값."""
 
     username: str
-    password: str
+    #: 발행 뒤 view_hours 가 지나면 None(hidden) — 재발행해야 다시 본다(문제점 70번 10/15 ⑤).
+    password: str | None
     #: 단말 `@SERVER` 에 넣을 호스트. 계정과 함께 한 번에 주입한다.
     server_host: str
     #: 이번 호출에서 새로 만들었는가. False = 기존 값 재사용.
     issued: bool
+    hidden: bool = False
+    view_hours: int = 24

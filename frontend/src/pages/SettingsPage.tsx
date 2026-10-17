@@ -17,6 +17,7 @@ import { ApiError, api } from '../api/client';
 import type { SystemConfig } from '../api/types';
 import { HelpTip } from '../components/HelpTip';
 import { Modal } from '../components/Modal';
+import { PageHead } from '../components/PageHead';
 
 /**
  * 설정은 두 묶음이다(문제점 리스트 7번). 섞어 두면 "저장하면 전 단말에 발행된다"는
@@ -245,9 +246,15 @@ export function SettingsPage() {
 
   return (
     <>
-      <div className="page-head">
-        <h1>
-          환경 설정
+      {/* 저장 버튼은 제목 바로 옆(문제점 94·100번) — 폼 밖이라 form 속성으로 제출한다. */}
+      <PageHead
+        title="환경 설정"
+        actions={
+          <button type="submit" form="settings-form" className="btn btn--primary btn--lg" disabled={busy || !config}>
+            {busy ? '저장 중…' : '저장'}
+          </button>
+        }
+        help={
           <HelpTip label="저장하면 어떻게 되나요">
             <strong>단말 공통 CONFIG</strong>를 바꾸면 config_version 이 올라가고 서버가 MQTT
             CONFIG(retain)를 다시 발행합니다. 단말은 버전이 바뀔 때만 값을 적용하고 STATUS 로
@@ -259,12 +266,11 @@ export function SettingsPage() {
             단말에 발행되지 않습니다(라이브 준비 제한만 방송 시작 명령에 실려 나갑니다). 오디오
             품질은 다음 방송·이후 올리는 파일부터 적용됩니다.
           </HelpTip>
-        </h1>
-        <p>
-          {config &&
-            `현재 config_version ${config.config_version} · 마지막 저장 ${new Date(config.updated_at).toLocaleString('ko-KR')}`}
-        </p>
-      </div>
+        }
+      >
+        {config &&
+          `현재 config_version ${config.config_version} · 마지막 저장 ${new Date(config.updated_at).toLocaleString('ko-KR')}`}
+      </PageHead>
 
       {message && (
         <div
@@ -277,17 +283,19 @@ export function SettingsPage() {
       )}
 
       <div className="settings-grid">
-        <form className="settings-card" onSubmit={onSubmit}>
+        <form id="settings-form" className="settings-card" onSubmit={onSubmit}>
           {GROUPS.map((g) => (
             <section key={g.key} className="settings-group">
               <h2 className="settings-group__title">
                 {g.title}
                 <HelpTip label={`${g.title} 도움말`}>{g.hint}</HelpTip>
               </h2>
-              {FIELDS.filter((f) => f.group === g.key).map((f) => (
+              {FIELDS.filter((f) => f.group === g.key).map((f, i) => (
                 <div className="settings-row" key={f.key}>
                   <div className="settings-row__text">
                     <div className="settings-row__label">
+                      {/* 묶음 안 번호(문제점 93번) */}
+                      <span className="settings-row__no">{i + 1}.</span>
                       {f.label}
                       <HelpTip label={`${f.label} 도움말`}>{f.hint}</HelpTip>
                     </div>
@@ -329,10 +337,6 @@ export function SettingsPage() {
               ))}
             </section>
           ))}
-
-          <button type="submit" className="btn btn--primary btn--block" disabled={busy || !config}>
-            {busy ? '저장 중…' : '저장'}
-          </button>
         </form>
       </div>
 

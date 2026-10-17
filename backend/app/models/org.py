@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     false,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -151,6 +152,13 @@ class User(Base):
         SmallInteger, nullable=False, server_default="0"
     )
     locked_until: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    #: 직전 비밀번호 해시들(최근 것부터, PASSWORD_HISTORY_COUNT 개) — 재사용 금지(0028, 70번 ③).
+    password_history: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    #: 지금 유효한 로그인 세션 하나(0028, 70번 ③). 토큰의 sid 와 다르면 401 SESSION_REPLACED.
+    #: 로그아웃하면 비운다 — 그 토큰도 더는 못 쓴다.
+    session_key: Mapped[str | None] = mapped_column(String(32))
 
     def is_expired(self, now: dt.datetime | None = None) -> bool:
         if self.expires_at is None:

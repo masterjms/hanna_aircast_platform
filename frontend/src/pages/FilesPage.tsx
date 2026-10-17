@@ -19,6 +19,7 @@ import type { AudioFile } from '../api/types';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { PageSizeSelect, PagerBar, usePager } from '../components/Pager';
 import { TtsModal } from '../components/TtsModal';
+import { PageHead } from '../components/PageHead';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -105,10 +106,11 @@ export function FilesPage() {
 
   return (
     <>
-      <div className="page-head">
-        {/* 버튼은 제목 바로 옆 — 오른쪽 끝에 두면 넓은 화면에서 눈에 안 띈다(2026-09-21). */}
-        <div className="page-head__titlerow">
-          <h1>방송 자료</h1>
+      {/* 버튼은 제목 바로 옆 — 오른쪽 끝에 두면 넓은 화면에서 눈에 안 띈다(2026-09-21, 화면 공통 96번). */}
+      <PageHead
+        title="방송 자료"
+        actions={
+          <>
           <input
             ref={inputRef}
             type="file"
@@ -126,14 +128,14 @@ export function FilesPage() {
             onClick={() => inputRef.current?.click()}
             disabled={uploading}
           >
-            {uploading ? '올리는 중…' : '＋ 소리 파일 올리기'}
+            {uploading ? '올리는 중…' : '소리 파일 올리기'}
           </button>
-        </div>
-        <p>
-          {isSuperAdmin ? '모든 계정의 방송용 소리' : '내 방송용 소리'} {files.length}개 · mp3 파일을 올리거나, 글을 적어
-          음성(TTS)으로 만듭니다. 방송 자료는 계정마다 따로입니다.
-        </p>
-      </div>
+          </>
+        }
+      >
+        {isSuperAdmin ? '모든 계정의 방송용 소리' : '내 방송용 소리'} {files.length}개 · mp3 파일을 올리거나, 글을 적어
+        음성(TTS)으로 만듭니다. 방송 자료는 계정마다 따로입니다.
+      </PageHead>
 
       {error && (
         <div className="alert" style={{ marginBottom: 16 }}>
@@ -160,7 +162,7 @@ export function FilesPage() {
 
       {files.length > 0 && (
         <div className="filters" style={{ marginBottom: 8 }}>
-          <span className="dim">{files.length}개</span>
+          {/* 개수는 제목 아래 설명에 있다 — 여기서 또 쓰지 않는다(96번 ③) */}
           <div className="filters__spacer" />
           <PageSizeSelect value={pager.size} onChange={pager.setSize} />
         </div>
@@ -173,14 +175,23 @@ export function FilesPage() {
             아직 파일이 없습니다. mp3 를 올리거나 TTS 로 문구를 음성으로 만드세요.
           </div>
         ) : (
-          <table>
+          <table className="files-table">
+            <colgroup>
+              <col className="files-table__name" />
+              <col className="files-table__col" />
+              <col className="files-table__col" />
+              <col className="files-table__col" />
+              <col className="files-table__col" />
+              <col className="files-table__col" />
+              <col className="files-table__act" />
+            </colgroup>
             <thead>
               <tr>
                 <th>파일명</th>
                 <th>생성</th>
                 <th className="num">길이</th>
                 <th className="num">크기</th>
-                <th>올린 사람</th>
+                <th>아이디</th>
                 <th className="num">등록일</th>
                 <th />
               </tr>
@@ -188,7 +199,7 @@ export function FilesPage() {
             <tbody>
               {pager.rows.map((f) => (
                 <tr key={f.id}>
-                  <td className="strong">{f.filename}</td>
+                  <td className="strong" title={f.filename}>{f.filename}</td>
                   <td>
                     <span className={`badge badge--${f.source === 'tts' ? 'warn' : 'idle'}`}>
                       {f.source === 'tts' ? `TTS · ${f.tts_lang ?? ''}` : '업로드'}

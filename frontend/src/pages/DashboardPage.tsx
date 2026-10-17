@@ -18,6 +18,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 import { api } from '../api/client';
 import type { Device, GeoGeometry, MapVillage, Organization, Village } from '../api/types';
@@ -208,7 +209,7 @@ function AlertTable({
                 <th className="num">RSSI</th>
                 <th className="num">CFG</th>
                 <th>마지막 통신</th>
-                <th title="마지막 STATUS 가 보고한 펌웨어 — P4 / C6">버전 (P4 / C6)</th>
+                <th title="마지막 STATUS 가 보고한 펌웨어 — APP(P4) / Wi-Fi(C6) 모듈">버전 (APP / Wi-Fi)</th>
               </tr>
             </thead>
             <tbody>
@@ -251,6 +252,7 @@ function AlertTable({
 
 export function DashboardPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [selectedMac, setSelectedMac] = useState<string | null>(null);
   const [hoveredMac, setHoveredMac] = useState<string | null>(null);
 
@@ -387,7 +389,10 @@ export function DashboardPage() {
                 // 없을 때는 회색 「관리 정상」, 생기면 노랑(문제점 85번 10/12)
                 badge={devices.unassigned > 0 ? '배정 대기' : '관리 정상'}
                 tone={devices.unassigned > 0 ? 'warn' : 'idle'}
-                tip="지역 배정을 기다리는 단말. 단말 관리에서 배정합니다."
+                tip="지역 배정을 기다리는 단말. 누르면 단말 관리의 미배정 목록으로 갑니다."
+                // 있을 때만 「미배정 확인 ›」 + 눌러서 이동(문제점 101번)
+                action={devices.unassigned > 0 ? '미배정 확인' : undefined}
+                onClick={devices.unassigned > 0 ? () => navigate('/devices?status=unassigned') : undefined}
               />
             )}
           </div>

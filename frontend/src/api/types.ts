@@ -208,7 +208,10 @@ export interface DeviceDetail extends Device {
 /** 등록 화면이 표시하고 생산 라인이 시리얼(@MQTTID/@MQTTPW)로 단말에 넣는 값 */
 export interface DeviceCredential {
   username: string;
-  password: string;
+  /** 발행 뒤 view_hours 가 지나면 null(hidden) — 재발행해야 다시 보인다(문제점 70번 10/15 ⑤) */
+  password: string | null;
+  hidden: boolean;
+  view_hours: number;
   /** 단말 @SERVER 에 넣을 호스트 (스킴·포트 없음) */
   server_host: string;
   /** 이번 호출에서 새로 발행했는가. false = 기존 값 재사용 */
@@ -657,4 +660,48 @@ export interface Occurrence {
   repeat: Repeat;
   target_label: string;
   file_name: string | null;
+}
+
+/** 관리 행위 감사 기록 한 줄(문제점 70번 10/15 ①) */
+export interface AuditEvent {
+  id: number;
+  at: string;
+  user_id: number | null;
+  username: string | null;
+  role: string | null;
+  ip: string | null;
+  method: string;
+  path: string;
+  action: string;
+  target: string | null;
+  status: number;
+  detail: Record<string, unknown> | null;
+}
+
+export interface AuditEventPage {
+  total: number;
+  page: number;
+  size: number;
+  items: AuditEvent[];
+}
+
+/** 해시 체인 확인 결과(문제점 70번 10/15 ④) */
+export interface ChainCheck {
+  table: string;
+  label: string;
+  rows: number;
+  ok: boolean;
+  first_bad_seq: number | null;
+  unchained: number;
+  last_seq: number | null;
+  last_hash: string | null;
+  anchor_mismatch: number[];
+}
+
+export interface VerifyResult {
+  ok: boolean;
+  checked_at: string;
+  chains: ChainCheck[];
+  last_review_at: string | null;
+  last_review_by: string | null;
 }

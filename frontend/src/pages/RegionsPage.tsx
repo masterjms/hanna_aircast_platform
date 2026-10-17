@@ -34,6 +34,7 @@ import { useAuth } from '../auth/AuthContext';
 import { Modal } from '../components/Modal';
 import { Chevron, FolderIcon, VillageIcon } from '../components/TreeIcons';
 import { Tile, VillagePanel } from '../components/regions/VillagePanel';
+import { PageHead } from '../components/PageHead';
 import {
   buildForest,
   isUnder,
@@ -796,15 +797,10 @@ export function RegionsPage() {
 
   return (
     <>
-      <div className="page-head page-head--row">
-        <div>
-          <h1>지역 관리</h1>
-          <p>
-            기관 {orgs.length}개 · 지역 {villages.length}개. 폴더처럼 다룹니다 — 마디를 고르고 새 기관·새
-            지역을 만들고, 끌어서 옮기고, F2 로 이름을 바꿉니다. 주소는 지역에만 적습니다.
-          </p>
-        </div>
-      </div>
+      <PageHead title="지역 관리">
+        기관 {orgs.length}개 · 지역 {villages.length}개. 폴더처럼 다룹니다 — 마디를 고르고 새 기관·새 지역을 만들고,
+        끌어서 옮기고, F2 로 이름을 바꿉니다. 주소는 지역에만 적습니다.
+      </PageHead>
 
       {error && (
         <div className="alert" style={{ marginBottom: 16 }}>
@@ -1161,10 +1157,10 @@ function OrgPanel({
             이름 바꾸기
           </button>
           <button type="button" className="btn" onClick={onNewOrg}>
-            + 새 기관
+            새 기관
           </button>
           <button type="button" className="btn btn--primary" onClick={onNewVillage}>
-            + 새 지역
+            새 지역
           </button>
           <button
             type="button"
