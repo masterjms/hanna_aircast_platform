@@ -6,7 +6,8 @@ Revises: 0027
 
 · audit_events: 관리 행위 감사 기록(변경 요청 한 줄씩). app/models/audit.py.
 · login_events·audit_events 해시 체인: BEFORE INSERT 트리거가 chain_seq·prev_hash·row_hash 를
-  채운다. 한 줄을 고치거나 빼면 그 뒤 해시가 전부 어긋난다(GET /api/audit/verify 가 다시 계산해 본다).
+  채운다. 한 줄을 고치거나 빼면 그 뒤 해시가 전부 어긋난다
+  (GET /api/audit/verify 가 다시 계산해 본다).
   수정·삭제 방지 트리거: 감사 기록은 수정 불가, 접속기록은 로그아웃 시각·계정 삭제 때의 user_id 만
   바꿀 수 있다. 삭제는 둘 다 1년이 지난 줄(보관 기간 정리)만. TRUNCATE 는 막는다.
   ⚠ DB 소유자 계정은 트리거를 끌 수 있다 — 그래서 월 점검 때 마지막 해시를 감사 기록에 남겨(앵커)
@@ -214,13 +215,14 @@ def downgrade() -> None:
         op.execute(f"DROP TRIGGER IF EXISTS {t}_chain ON {t}")
         op.execute(f"DROP FUNCTION IF EXISTS xwifi_guard_{t}()")
         op.execute(f"DROP FUNCTION IF EXISTS xwifi_chain_{t}()")
+    # 해시 함수는 표의 행 타입을 인자로 받아 표에 매여 있다 — 표·열보다 먼저 지운다.
+    op.execute("DROP FUNCTION IF EXISTS xwifi_login_event_hash(login_events)")
+    op.execute("DROP FUNCTION IF EXISTS xwifi_audit_event_hash(audit_events)")
     op.drop_constraint("uq_login_events_chain_seq", "login_events", type_="unique")
     op.drop_column("login_events", "row_hash")
     op.drop_column("login_events", "prev_hash")
     op.drop_column("login_events", "chain_seq")
     op.drop_table("audit_events")
-    op.execute("DROP FUNCTION IF EXISTS xwifi_login_event_hash(login_events)")
-    op.execute("DROP FUNCTION IF EXISTS xwifi_audit_event_hash(audit_events)")
     # 단말 비밀번호는 복호화해 평문으로 되돌린다.
     from app.core.secretbox import decrypt
 

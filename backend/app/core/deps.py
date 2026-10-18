@@ -30,6 +30,7 @@ from app.errors import (
     ConfirmPasswordRequired,
     ConfirmPasswordWrong,
     OrgAdminRequired,
+    OtpEnrollRequired,
     PasswordChangeRequired,
     SessionReplaced,
     SuperAdminRequired,
@@ -75,6 +76,9 @@ async def get_current_user(
     # 화면만 막으면 임시 비밀번호를 아는 사람이 API 로 그냥 쓴다 — 서버에서 막는다.
     if user.must_change_password and request.url.path not in PASSWORD_CHANGE_ALLOWED_PATHS:
         raise PasswordChangeRequired()
+    # 2단계 인증이 필수인 역할인데 아직 등록하지 않았으면 등록만 하게 한다(문제점 70번 2항).
+    if must_enroll_otp(user) and request.url.path not in OTP_ENROLL_ALLOWED_PATHS:
+        raise OtpEnrollRequired()
     return user
 
 
@@ -89,6 +93,22 @@ def _check_session(payload: dict, user: User) -> None:
         return
     if payload.get("sid") != user.session_key:
         raise SessionReplaced() if user.session_key else Unauthorized()
+
+
+#: 2단계 인증 등록 전에도 부를 수 있는 경로
+OTP_ENROLL_ALLOWED_PATHS = PASSWORD_CHANGE_ALLOWED_PATHS | {
+    "/api/auth/otp/setup",
+    "/api/auth/otp/enable",
+}
+
+
+def otp_required(user: User) -> bool:
+    roles = {r.strip() for r in settings.totp_required_roles.split(",") if r.strip()}
+    return user.role in roles
+
+
+def must_enroll_otp(user: User) -> bool:
+    return otp_required(user) and user.totp_enabled_at is None
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]

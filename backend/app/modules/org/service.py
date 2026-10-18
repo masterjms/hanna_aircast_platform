@@ -503,6 +503,7 @@ async def _to_user_out(
     villages: dict[int, list[int]] | None = None,
 ) -> UserOut:
     out = UserOut.model_validate(user)
+    out.otp_enabled = user.totp_enabled_at is not None
     # 배치로 받은 게 있으면 쓰고, 단건 경로(생성·수정)는 지금처럼 직접 읽는다.
     out.village_ids = (
         sorted(villages.get(user.id, [])) if villages is not None
@@ -808,6 +809,32 @@ async def change_own_password(
     user.password_hash = hash_password(new_password)
     user.must_change_password = False
     user.password_changed_at = dt.datetime.now(dt.timezone.utc)
+    await db.flush()
+
+
+async def reset_user_otp(
+    db: AsyncSession,
+    user_id: int,
+    *,
+    actor: User,
+    org_ids: set[int] | None,
+    scope: VillageScope,
+) -> None:
+    if user_id == actor.id:
+        raise ApiError(
+            "자기 계정의 2단계 인증은 초기화하지 않습니다. 복구 코드로 로그인하세요.",
+            code="CANNOT_RESET_SELF",
+        )
+    user = await db.get(User, user_id)
+    if user is None:
+        raise UserNotFound()
+    if not await _manageable(db, user, actor, org_ids, scope):
+        raise TierTooLow(detail={"user_id": user_id})
+    user.totp_secret = None
+    user.totp_enabled_at = None
+    user.totp_last_step = None
+    user.totp_recovery = []
+    user.session_key = None
     await db.flush()
 
 

@@ -23,6 +23,7 @@ import { BroadcastPage } from './pages/BroadcastPage';
 import { DevicesPage } from './pages/DevicesPage';
 import { FilesPage } from './pages/FilesPage';
 import { ChangePasswordPage } from './pages/ChangePasswordPage';
+import { OtpEnrollPage } from './pages/OtpEnrollPage';
 import { LoginPage } from './pages/LoginPage';
 import { PrivacyPage } from './pages/legal/PrivacyPage';
 import { TermsPage } from './pages/legal/TermsPage';
@@ -91,6 +92,10 @@ export function App() {
   // 임시 비밀번호 계정은 새 비밀번호를 정하기 전까지 다른 화면에 못 간다(향후검토 10번).
   if (user.must_change_password) {
     return <ChangePasswordPage />;
+  }
+  // 2단계 인증이 필수인데 아직 등록하지 않은 계정(문제점 70번 2항).
+  if (user.must_enroll_otp) {
+    return <OtpEnrollPage />;
   }
 
   return (

@@ -23,7 +23,7 @@ interface AuthState {
   user: Me | null;
   /** 저장된 토큰으로 세션을 복구하는 중. 이 동안은 로그인 화면으로 튕기지 않는다. */
   loading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string, otp?: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
   isSuperAdmin: boolean;
@@ -69,8 +69,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => setUnauthorizedHandler(null);
   }, []);
 
-  const login = useCallback(async (username: string, password: string) => {
-    const res = await api.auth.login(username, password);
+  const login = useCallback(async (username: string, password: string, otp?: string) => {
+    const res = await api.auth.login(username, password, otp);
     setToken(res.access_token);
     setUser(res.user);
   }, []);

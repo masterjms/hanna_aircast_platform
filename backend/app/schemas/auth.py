@@ -13,6 +13,8 @@ from app.schemas.common import ApiModel
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=50)
     password: str = Field(min_length=1, max_length=128)
+    #: 2단계 인증 숫자 6자리 또는 복구 코드(XXXX-XXXX). 켠 계정만 필요(문제점 70번 2항).
+    otp: str | None = Field(default=None, max_length=20)
 
 
 class VillageBrief(ApiModel):
@@ -33,6 +35,31 @@ class MeResponse(ApiModel):
     organization_name: str | None = None
     #: 임시 비밀번호 계정. 화면은 이 값이면 비밀번호 변경 화면만 보여준다(향후검토 10번).
     must_change_password: bool = False
+    #: 2단계 인증을 켰는가 / 역할상 필수인데 아직 등록 안 했는가(그러면 등록 화면만 쓴다).
+    otp_enabled: bool = False
+    otp_required: bool = False
+    must_enroll_otp: bool = False
+
+
+class OtpSetupOut(ApiModel):
+    """등록 시작 — OTP 앱에 넣을 비밀과 QR 주소. 이 응답에서만 나온다."""
+
+    secret: str
+    otpauth_uri: str
+
+
+class OtpCodeIn(BaseModel):
+    code: str = Field(min_length=6, max_length=20)
+
+
+class OtpEnabledOut(ApiModel):
+    """켜기 완료 — 복구 코드 10개(이 응답에서 한 번만)."""
+
+    recovery_codes: list[str]
+
+
+class OtpDisableIn(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
 
 
 class PasswordChangeRequest(BaseModel):

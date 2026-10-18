@@ -178,6 +178,17 @@ class UserOut(ApiModel):
     organization_name: str | None = None
     #: 임시 비밀번호를 받고 아직 바꾸지 않은 계정. 계정 목록에 「변경 대기」로 보인다.
     must_change_password: bool = False
+    #: 2단계 인증을 켰는가(문제점 70번 2항) — 계정 목록 표시·관리자 초기화 버튼용.
+    otp_enabled: bool = False
+
+
+class UsernameCheck(ApiModel):
+    """계정 추가 「중복 확인」 결과(문제점 102번)."""
+
+    username: str
+    available: bool
+    #: 못 쓰는 이유(형식·중복). 쓸 수 있으면 None.
+    reason: str | None = None
 
 
 class TempPasswordOut(ApiModel):

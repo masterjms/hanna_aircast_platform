@@ -86,7 +86,9 @@ export function UsersPage() {
   const [copied, setCopied] = useState(false);
 
   const closeForm = () => {
+    setOtpResetDone(false);
     setFormError(null);
+    setNameCheck(null);
     setForm(null);
     setEditingId(null);
     setTempPw(null);
@@ -120,6 +122,31 @@ export function UsersPage() {
     }
   };
 
+  /** 2단계 인증 초기화(문제점 70번 2항) — 휴대폰 분실·교체. 그 계정은 다음 로그인 때 다시 등록한다. */
+  const resetOtp = async () => {
+    if (editingId === null || !form) return;
+    if (
+      !window.confirm(
+        `${form.username} 의 2단계 인증을 초기화합니다.\n` +
+          '그 계정이 쓰던 화면은 로그아웃되고, 다음 로그인 때 휴대폰 앱을 다시 등록합니다(필수 계정) 또는 꺼진 채로 들어옵니다.\n계속할까요?',
+      )
+    )
+      return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.users.otpReset(editingId);
+      setOtpResetDone(true);
+      await load();
+    } catch (err) {
+      fail(err, '2단계 인증을 초기화하지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const [otpResetDone, setOtpResetDone] = useState(false);
+  const editingUser = editingId === null ? null : users.find((u) => u.id === editingId) ?? null;
+
   const fail = (err: unknown, fallback: string) =>
     setError(err instanceof ApiError ? err.message : fallback);
 
@@ -151,6 +178,26 @@ export function UsersPage() {
   // 확인 창 안에서는 「내 비밀번호」 오류만 보여 준다. 그 밖의 오류(새 계정 비밀번호 규칙, 아이디 중복 등)는
   // 확인 창을 닫고 계정 폼에 띄운다 — 안 그러면 관리자 비밀번호가 틀린 것처럼 읽힌다(2026-10-12).
   const [formError, setFormError] = useState<string | null>(null);
+
+  // 아이디 중복 확인(문제점 102번) — 새 계정은 확인을 통과해야 저장으로 넘어간다. 아이디를 고치면 다시 확인.
+  const [nameCheck, setNameCheck] = useState<{ name: string; ok: boolean; text: string } | null>(null);
+  const [checkingName, setCheckingName] = useState(false);
+  const checkName = async () => {
+    if (!form) return;
+    const name = form.username.trim();
+    if (!name) return;
+    setCheckingName(true);
+    try {
+      const r = await api.users.checkUsername(name);
+      setNameCheck({ name, ok: r.available, text: r.available ? '사용할 수 있는 아이디입니다.' : (r.reason ?? '쓸 수 없는 아이디입니다.') });
+    } catch (e) {
+      setNameCheck({ name, ok: false, text: e instanceof ApiError ? e.message : '확인하지 못했습니다. 다시 눌러 주세요.' });
+    } finally {
+      setCheckingName(false);
+    }
+  };
+  const nameChecked = nameCheck !== null && form !== null && nameCheck.name === form.username.trim();
+
   const createWith = async (confirmPassword: string) => {
     if (!form) return;
     setFormError(null);
@@ -168,6 +215,11 @@ export function UsersPage() {
       );
     } catch (err) {
       if (err instanceof ApiError && err.code.startsWith('CONFIRM_PASSWORD')) throw err;
+      if (err instanceof ApiError && err.code === 'DUPLICATE_USERNAME') {
+        // 확인한 뒤 다른 사람이 먼저 만든 경우 — 아이디 칸 바로 아래에 띄운다.
+        setNameCheck({ name: form.username.trim(), ok: false, text: err.message });
+        return;
+      }
       setFormError(err instanceof ApiError ? err.message : '계정을 만들지 못했습니다.');
       return; // 확인 창은 닫히고 폼에 사유가 남는다
     }
@@ -218,7 +270,8 @@ export function UsersPage() {
   const pwBad = form !== null && form.password !== '' && !passwordOk(form.password);
   const canSubmit =
     form !== null &&
-    (editingId !== null || (form.username.trim().length >= 3 && form.password !== '')) &&
+    (editingId !== null ||
+      (form.username.trim().length >= 3 && form.password !== '' && nameChecked && nameCheck?.ok === true)) &&
     !pwBad &&
     // 기관형 역할은 기관이 있어야 범위가 생긴다.
     (!isOrgRole(form.role) || form.organization_id !== '');
@@ -276,6 +329,11 @@ export function UsersPage() {
                   <td className="strong">
                     {u.username}
                     {u.id === me?.id && <span className="tag">나</span>}
+                    {u.otp_enabled && (
+                      <span className="tag tag--ok" title="2단계 인증(OTP)을 켠 계정">
+                        2단계
+                      </span>
+                    )}
                     {u.must_change_password && (
                       <span className="tag" title="임시 비밀번호를 받고 아직 바꾸지 않았습니다">
                         임시 비밀번호
@@ -360,15 +418,38 @@ export function UsersPage() {
           {formError && <div className="alert" style={{ marginBottom: 12 }}>{formError}</div>}
           <div className="field">
             <label htmlFor="u-name">아이디</label>
-            <input
-              id="u-name"
-              type="text"
-              autoComplete="off"
-              value={form.username}
-              disabled={editingId !== null}
-              onChange={(e) => setForm({ ...form, username: e.target.value })}
-            />
-            {editingId === null && <p className="hint">영문·숫자·. _ - 만, 3자 이상</p>}
+            <div className="field-inline">
+              <input
+                id="u-name"
+                type="text"
+                autoComplete="off"
+                value={form.username}
+                disabled={editingId !== null}
+                onChange={(e) => setForm({ ...form, username: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && editingId === null) void checkName();
+                }}
+              />
+              {editingId === null && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => void checkName()}
+                  disabled={checkingName || form.username.trim() === '' || nameChecked}
+                >
+                  {checkingName ? '확인 중…' : '중복 확인'}
+                </button>
+              )}
+            </div>
+            {editingId === null &&
+              (nameChecked ? (
+                <p className={`hint ${nameCheck.ok ? 'hint--ok' : 'hint--warn'}`} role="status">
+                  {nameCheck.ok ? '✓ ' : ''}
+                  {nameCheck.text}
+                </p>
+              ) : (
+                <p className="hint">영문·숫자·. _ - 만, 3자 이상 — 「중복 확인」을 눌러야 저장할 수 있습니다</p>
+              ))}
           </div>
 
           <div className="field">
@@ -420,6 +501,20 @@ export function UsersPage() {
                       이 창을 닫으면 다시 볼 수 없습니다. 담당자에게 전달하면 다음 로그인에서 새
                       비밀번호를 정하게 됩니다.
                     </span>
+                  </>
+                )}
+              </div>
+            )}
+            {editingUser && editingUser.id !== me?.id && (editingUser.otp_enabled || otpResetDone) && (
+              <div className="temp-pw">
+                {otpResetDone ? (
+                  <span className="hint hint--ok">2단계 인증을 초기화했습니다. 다음 로그인 때 다시 등록합니다.</span>
+                ) : (
+                  <>
+                    <button type="button" className="btn btn--ghost btn--sm" onClick={() => void resetOtp()} disabled={busy}>
+                      2단계 인증 초기화
+                    </button>
+                    <span className="hint">휴대폰을 잃었거나 바꿨을 때. 쓰던 화면은 로그아웃됩니다.</span>
                   </>
                 )}
               </div>

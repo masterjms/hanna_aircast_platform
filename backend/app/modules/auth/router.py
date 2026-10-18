@@ -14,11 +14,18 @@ from fastapi import APIRouter, Query, Request, status
 from sqlalchemy import func, select
 
 from app.config import settings
-from app.core import authz
-from app.core.deps import CurrentUser, Db, Scope
+from app.core import authz, totp
+from app.core.deps import CurrentUser, Db, Scope, must_enroll_otp, otp_required
 from app.core.scope import VillageScope
 from app.core.security import create_access_token, verify_password
-from app.errors import AccountExpired, AccountLocked, InvalidCredentials
+from app.errors import (
+    AccountExpired,
+    AccountLocked,
+    ApiError,
+    InvalidCredentials,
+    OtpInvalid,
+    OtpRequired,
+)
 from app.models.auth_log import LoginEvent
 from app.models.device import Device
 from app.models.org import Organization, User, Village
@@ -29,6 +36,10 @@ from app.schemas.auth import (
     LoginRequest,
     LoginResponse,
     MeResponse,
+    OtpCodeIn,
+    OtpDisableIn,
+    OtpEnabledOut,
+    OtpSetupOut,
     PasswordChangeRequest,
     VillageBrief,
 )
@@ -68,6 +79,9 @@ async def _build_me(db: Db, user: User, scope: VillageScope) -> MeResponse:
         organization_id=user.organization_id,
         organization_name=org_name,
         must_change_password=user.must_change_password,
+        otp_enabled=user.totp_enabled_at is not None,
+        otp_required=otp_required(user),
+        must_enroll_otp=must_enroll_otp(user),
     )
 
 
@@ -129,6 +143,8 @@ async def login(payload: LoginRequest, db: Db, request: Request) -> LoginRespons
             db, request, username=payload.username, user=user, result="bad_password"
         )
         raise InvalidCredentials()
+    # OTP 단계에서 틀리면 비밀번호 실패와 같은 잠금 수에 더한다 — 맞은 뒤 0 으로.
+    failed_before = user.failed_login_count or 0
     user.failed_login_count = 0
     user.locked_until = None
 
@@ -136,6 +152,24 @@ async def login(payload: LoginRequest, db: Db, request: Request) -> LoginRespons
     if user.is_expired():
         await _record_login(db, request, username=payload.username, user=user, result="expired")
         raise AccountExpired()
+
+    # 2단계 인증(문제점 70번 2항) — 켠 계정은 비밀번호 다음 OTP 숫자(또는 복구 코드)가 맞아야 한다.
+    if user.totp_enabled_at is not None and user.totp_secret:
+        if not payload.otp:
+            # 비밀번호까지는 맞았다 — 실패로 세지 않고 6자리 칸을 열게 한다. 실패 수는 그대로 둔다.
+            user.failed_login_count = failed_before
+            await db.commit()
+            raise OtpRequired()
+        if not _accept_otp(user, payload.otp):
+            user.failed_login_count = failed_before + 1
+            if (
+                settings.login_lock_threshold > 0
+                and user.failed_login_count >= settings.login_lock_threshold
+            ):
+                user.locked_until = now + dt.timedelta(minutes=settings.login_lock_minutes)
+                user.failed_login_count = 0
+            await _record_login(db, request, username=payload.username, user=user, result="bad_otp")
+            raise OtpInvalid()
 
     # 비밀번호 사용 기간(문제점 70번 ②) — 지나면 새 비밀번호를 정하기 전까지 다른 화면을 막는다.
     if (
@@ -160,6 +194,80 @@ async def login(payload: LoginRequest, db: Db, request: Request) -> LoginRespons
         expires_in=expires_in,
         user=await _build_me(db, user, scope),
     )
+
+
+def _accept_otp(user: User, code: str) -> bool:
+    """6자리 숫자면 TOTP, 아니면 복구 코드(쓰면 지운다)."""
+    digits = "".join(ch for ch in code if ch.isdigit())
+    if len(digits) == totp.DIGITS and len(code.strip()) <= totp.DIGITS + 1:
+        step = totp.verify(user.totp_secret or "", digits, last_step=user.totp_last_step)
+        if step is None:
+            return False
+        user.totp_last_step = step
+        return True
+    h = totp.hash_recovery(code)
+    if h in (user.totp_recovery or []):
+        user.totp_recovery = [x for x in user.totp_recovery if x != h]
+        return True
+    return False
+
+
+@router.post("/otp/setup", response_model=OtpSetupOut)
+async def otp_setup(user: CurrentUser, db: Db) -> OtpSetupOut:
+    """등록 시작 — 새 비밀을 만들어 돌려준다. 앱의 숫자로 확인(/otp/enable)해야 켜진다.
+
+    이미 켠 계정은 다시 시작하지 못한다(먼저 끄거나 관리자 초기화) — 켜진 비밀을 몰래 바꾸지 못하게.
+    """
+    if user.totp_enabled_at is not None:
+        raise ApiError("이미 2단계 인증을 쓰고 있습니다.", code="OTP_ALREADY_ENABLED")
+    secret = totp.new_secret()
+    user.totp_secret = secret
+    user.totp_last_step = None
+    await db.flush()
+    return OtpSetupOut(
+        secret=secret,
+        otpauth_uri=totp.otpauth_uri(secret, username=user.username, issuer=settings.totp_issuer),
+    )
+
+
+@router.post("/otp/enable", response_model=OtpEnabledOut)
+async def otp_enable(payload: OtpCodeIn, user: CurrentUser, db: Db) -> OtpEnabledOut:
+    """앱에 뜬 6자리로 확인하고 켠다. 복구 코드 10개를 이 응답에서 한 번만 준다."""
+    if user.totp_enabled_at is not None:
+        raise ApiError("이미 2단계 인증을 쓰고 있습니다.", code="OTP_ALREADY_ENABLED")
+    if not user.totp_secret:
+        raise ApiError("먼저 등록을 시작하세요.", code="OTP_NOT_STARTED")
+    step = totp.verify(user.totp_secret, payload.code)
+    if step is None:
+        raise ApiError(
+            "인증 번호가 맞지 않습니다. 앱에 지금 뜬 숫자를 넣어 주세요"
+            "(휴대폰 시계가 자동인지 확인).",
+            code="OTP_INVALID",
+        )
+    codes = totp.new_recovery_codes()
+    user.totp_last_step = step
+    user.totp_recovery = [totp.hash_recovery(c) for c in codes]
+    user.totp_enabled_at = dt.datetime.now(dt.timezone.utc)
+    await db.flush()
+    return OtpEnabledOut(recovery_codes=codes)
+
+
+@router.post("/otp/disable", status_code=status.HTTP_204_NO_CONTENT)
+async def otp_disable(payload: OtpDisableIn, user: CurrentUser, db: Db) -> None:
+    """스스로 끄기 — 필수 역할은 못 끈다(관리자 초기화 뒤 다시 등록)."""
+    if otp_required(user):
+        raise ApiError("이 계정은 2단계 인증이 필수라 끌 수 없습니다.", code="OTP_REQUIRED_ROLE")
+    if not verify_password(payload.password, user.password_hash):
+        raise ApiError("비밀번호가 맞지 않습니다.", code="WRONG_PASSWORD")
+    clear_otp(user)
+    return None
+
+
+def clear_otp(user: User) -> None:
+    user.totp_secret = None
+    user.totp_enabled_at = None
+    user.totp_last_step = None
+    user.totp_recovery = []
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

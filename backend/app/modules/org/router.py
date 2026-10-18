@@ -10,10 +10,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, status
+import re
+from typing import Annotated
+
+from fastapi import APIRouter, Query, status
+from sqlalchemy import select
 
 from app.constants import ScheduleTarget
 from app.core.deps import CurrentUser, Db, OrgAdmin, OrgIds, PasswordConfirmed, Publisher, Scope
+from app.models.org import User
 from app.modules.device import service as device_service
 from app.modules.org import service
 from app.modules.schedule import service as schedule_service
@@ -23,6 +28,7 @@ from app.schemas.org import (
     OrganizationUpdate,
     TempPasswordOut,
     UserCreate,
+    UsernameCheck,
     UserOut,
     UserUpdate,
     VillageCreate,
@@ -172,6 +178,24 @@ async def list_users(db: Db, actor: OrgAdmin, org_ids: OrgIds, scope: Scope) -> 
     return await service.list_users(db, actor=actor, org_ids=org_ids, scope=scope)
 
 
+@router.get("/api/users/username-check", response_model=UsernameCheck)
+async def username_check(
+    db: Db, _: OrgAdmin, username: Annotated[str, Query(max_length=50)]
+) -> UsernameCheck:
+    """계정 추가 폼의 「중복 확인」(문제점 102번). 형식이 틀리면 그 사유, 아니면 쓸 수 있는지."""
+    name = username.strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]{3,50}", name):
+        return UsernameCheck(
+            username=name, available=False, reason="영문·숫자·. _ - 만, 3자 이상이어야 합니다."
+        )
+    taken = await db.scalar(select(User.id).where(User.username == name)) is not None
+    return UsernameCheck(
+        username=name,
+        available=not taken,
+        reason="이미 사용 중인 아이디입니다." if taken else None,
+    )
+
+
 @router.post("/api/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 async def create_user(
     payload: UserCreate,
@@ -203,6 +227,17 @@ async def issue_temp_password(
         db, user_id, actor=actor, org_ids=org_ids, scope=scope
     )
     return TempPasswordOut(password=password)
+
+
+@router.post("/api/users/{user_id}/otp-reset", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_user_otp(
+    user_id: int, db: Db, actor: OrgAdmin, org_ids: OrgIds, scope: Scope
+) -> None:
+    """2단계 인증 초기화(휴대폰 분실·교체, 문제점 70번 2항). 그 계정은 다음 로그인 때 다시 등록한다.
+
+    관리할 수 있는 계정에만, 자기 계정은 안 된다(자기 것은 복구 코드로). 쓰던 화면은 로그아웃된다.
+    """
+    await service.reset_user_otp(db, user_id, actor=actor, org_ids=org_ids, scope=scope)
 
 
 @router.delete("/api/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

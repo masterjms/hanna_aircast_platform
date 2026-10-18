@@ -7,6 +7,7 @@
  * 접근 제어의 실체는 백엔드다. 여기 숨기는 건 UI 편의일 뿐이다.
  */
 
+import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 
 import type { Role } from '../../api/types';
@@ -15,6 +16,7 @@ import { ROLE_LABEL } from '../../lib/roles';
 import { LegalLinks } from '../../pages/legal/LegalLayout';
 import { Logo } from '../Logo';
 import { NAV_ICONS } from './NavIcons';
+import { SecurityDialog } from '../SecurityDialog';
 
 interface MenuItem {
   to: string;
@@ -79,6 +81,7 @@ function MenuLinks({ items, atLeast }: { items: MenuItem[]; atLeast: (r: Role) =
 
 export function Sidebar() {
   const { user, atLeast, logout } = useAuth();
+  const [securityOpen, setSecurityOpen] = useState(false);
 
   return (
     <aside className="sidebar">
@@ -104,10 +107,15 @@ export function Sidebar() {
           <div className="sidebar__user-name">{user?.username}</div>
           <div className="sidebar__user-role">{user ? ROLE_LABEL[user.role] : ''}</div>
         </div>
+        {/* 내 계정 보안 — 2단계 인증(문제점 70번 2항) */}
+        <button type="button" className="btn btn--ghost" onClick={() => setSecurityOpen(true)} title="2단계 인증 등 내 계정 보안">
+          보안
+        </button>
         <button type="button" className="btn btn--ghost" onClick={() => void logout()}>
           로그아웃
         </button>
       </div>
+      {securityOpen && <SecurityDialog onClose={() => setSecurityOpen(false)} />}
 
       {/* 저작권·약관 — 본문 아래에 띠를 두면 「화면에 맞추기」 높이를 먹는다. 메뉴 맨 아래 빈자리에 둔다. */}
       <LegalLinks className="legal-links--sidebar" />
@@ -121,6 +129,7 @@ export function Sidebar() {
  */
 export function MobileNav() {
   const { atLeast, logout } = useAuth();
+  const [securityOpen, setSecurityOpen] = useState(false);
   const items = [...OPERATION, ...ADMIN]
     .filter((item) => !item.minRole || atLeast(item.minRole))
     .filter((item) => !item.pending);
@@ -139,9 +148,13 @@ export function MobileNav() {
           {item.label}
         </NavLink>
       ))}
+      <button type="button" className="tabbar__item" onClick={() => setSecurityOpen(true)}>
+        보안
+      </button>
       <button type="button" className="tabbar__item" onClick={() => void logout()}>
         로그아웃
       </button>
+      {securityOpen && <SecurityDialog onClose={() => setSecurityOpen(false)} />}
       <NavLink to="/terms" className="tabbar__item tabbar__item--minor">
         약관
       </NavLink>

@@ -173,11 +173,20 @@ function query(params: Record<string, string | number | undefined | null>): stri
 // ── 엔드포인트 ───────────────────────────────────────────────────────────
 export const api = {
   auth: {
-    login: (username: string, password: string) =>
+    /** otp: 2단계 인증을 켠 계정만 — 6자리 또는 복구 코드(문제점 70번 2항) */
+    login: (username: string, password: string, otp?: string) =>
       request<LoginResponse>('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify(otp ? { username, password, otp } : { username, password }),
       }),
+    otpSetup: () => request<{ secret: string; otpauth_uri: string }>('/api/auth/otp/setup', { method: 'POST' }),
+    otpEnable: (code: string) =>
+      request<{ recovery_codes: string[] }>('/api/auth/otp/enable', {
+        method: 'POST',
+        body: JSON.stringify({ code }),
+      }),
+    otpDisable: (password: string) =>
+      request<void>('/api/auth/otp/disable', { method: 'POST', body: JSON.stringify({ password }) }),
     logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
     /** 로그인 기록(문제점 65번). 최고 관리자는 전부, 그 외는 자기 것. */
     logins: (params: { page: number; size: number; q?: string }) =>
@@ -235,6 +244,13 @@ export const api = {
       request<User>(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
     remove: (id: number, confirmPassword: string) =>
       request<void>(`/api/users/${id}`, { method: 'DELETE', headers: confirmHeader(confirmPassword) }),
+    /** 계정 추가 「중복 확인」(문제점 102번) */
+    checkUsername: (username: string) =>
+      request<{ username: string; available: boolean; reason: string | null }>(
+        `/api/users/username-check${query({ username })}`,
+      ),
+    /** 2단계 인증 초기화(휴대폰 분실·교체) — 그 계정은 다음 로그인 때 다시 등록 */
+    otpReset: (id: number) => request<void>(`/api/users/${id}/otp-reset`, { method: 'POST' }),
     /** 임시 비밀번호 발급 — 응답에서 한 번만 나온다. */
     tempPassword: (id: number) =>
       request<{ password: string }>(`/api/users/${id}/temp-password`, { method: 'POST' }),

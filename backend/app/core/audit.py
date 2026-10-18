@@ -32,7 +32,7 @@ _MUTATING = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _SKIP = frozenset({"/api/auth/login", "/api/auth/logout", "/api/audit/review"})
 _BODY_LIMIT = 64 * 1024
 _DETAIL_LIMIT = 2000
-_SECRET_KEY = re.compile(r"pass|token|secret|key$|^key|credential", re.IGNORECASE)
+_SECRET_KEY = re.compile(r"pass|token|secret|key$|^key|credential|^code$|otp", re.IGNORECASE)
 
 #: (METHOD, 경로 정규식, 행위 이름). 위에서부터 처음 맞는 것. 그룹 1 이 있으면 대상.
 _ROUTES: list[tuple[str, re.Pattern[str], str]] = [
@@ -41,6 +41,10 @@ _ROUTES: list[tuple[str, re.Pattern[str], str]] = [
         ("POST", r"^/api/auth/password$", "내 비밀번호 변경"),
         ("POST", r"^/api/users$", "계정 추가"),
         ("POST", r"^/api/users/(\d+)/temp-password$", "임시 비밀번호 발급"),
+        ("POST", r"^/api/users/(\d+)/otp-reset$", "2단계 인증 초기화"),
+        ("POST", r"^/api/auth/otp/setup$", "2단계 인증 등록 시작"),
+        ("POST", r"^/api/auth/otp/enable$", "2단계 인증 켜기"),
+        ("POST", r"^/api/auth/otp/disable$", "2단계 인증 끄기"),
         ("PATCH", r"^/api/users/(\d+)$", "계정 수정"),
         ("DELETE", r"^/api/users/(\d+)$", "계정 삭제"),
         ("POST", r"^/api/organizations$", "기관 추가"),

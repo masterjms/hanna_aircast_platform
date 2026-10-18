@@ -3476,3 +3476,22 @@ input[type='date']::-webkit-calendar-picker-indicator { opacity: 0.7; cursor: po
 .record-check__rows { display: grid; gap: 6px; }
 .record-check__row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .record-check__files { margin: 10px 0 0; padding-left: 18px; font-size: 12.5px; display: grid; gap: 4px; word-break: break-all; }
+
+/* 아이디 중복 확인 통과(문제점 102번) */
+.hint--ok { color: var(--ok-text); }
+
+/* ── 2단계 인증(문제점 70번 2항) ── */
+.tag--ok { color: var(--ok-text); background: color-mix(in srgb, var(--ok-text) 14%, transparent); }
+.login__inner--wide { max-width: 620px; }
+.otp-setup { display: grid; gap: 12px; font-size: 13.5px; line-height: 1.6; }
+.otp-setup p { margin: 0; }
+.otp-setup__grid { display: grid; grid-template-columns: 180px 1fr; gap: 18px; align-items: start; }
+.otp-qr { width: 180px; height: 180px; border-radius: 8px; }
+.otp-secret { font-size: 14px; letter-spacing: 0.06em; padding: 8px 10px; border-radius: var(--r-md); background: var(--surface-sunken); border: 1px solid var(--border); word-break: break-all; margin: 6px 0 10px !important; }
+.otp-setup__ok { color: var(--ok-text); font-weight: 700; }
+.otp-codes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 24px; margin: 0; padding: 12px 12px 12px 34px; border-radius: var(--r-md); background: var(--surface-sunken); border: 1px solid var(--border); font-size: 15px; }
+.otp-setup__row { display: flex; gap: 8px; justify-content: flex-end; }
+.otp-dialog__title { margin: 0 0 12px; font-size: 15px; display: flex; align-items: center; gap: 6px; }
+@media (max-width: 560px) {
+  .otp-setup__grid { grid-template-columns: 1fr; justify-items: center; }
+}

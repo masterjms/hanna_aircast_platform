@@ -78,6 +78,11 @@ export interface Me {
   organization_name: string | null;
   /** 임시 비밀번호 계정 — 새 비밀번호를 정하기 전까지 변경 화면만 쓴다(향후검토 10번). */
   must_change_password: boolean;
+  /** 2단계 인증을 켰는가(문제점 70번 2항) */
+  otp_enabled: boolean;
+  /** 역할상 필수인가 / 필수인데 아직 등록 안 했는가(등록 화면만 쓴다) */
+  otp_required: boolean;
+  must_enroll_otp: boolean;
 }
 
 /** 로그인 기록 한 줄(문제점 65번). result: ok · bad_password · unknown_user · expired */
@@ -300,6 +305,8 @@ export interface User {
   organization_name: string | null;
   /** 임시 비밀번호를 받고 아직 바꾸지 않았다. */
   must_change_password: boolean;
+  /** 2단계 인증을 켰는가(문제점 70번 2항) */
+  otp_enabled: boolean;
 }
 
 export interface UserCreate {

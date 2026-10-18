@@ -72,6 +72,26 @@ class SessionReplaced(Unauthorized):
     message = "다른 곳에서 같은 계정으로 로그인해 이 화면은 로그아웃되었습니다."
 
 
+class OtpRequired(Unauthorized):
+    """비밀번호는 맞았고 2단계 인증 숫자가 필요하다(문제점 70번 2항). 화면은 6자리 칸을 연다."""
+
+    code = "OTP_REQUIRED"
+    message = "휴대폰 OTP 앱의 인증 번호 6자리를 넣어 주세요."
+
+
+class OtpInvalid(Unauthorized):
+    code = "OTP_INVALID"
+    message = "인증 번호가 맞지 않습니다. 앱의 새 숫자로 다시 넣어 주세요."
+
+
+class OtpEnrollRequired(ApiError):
+    """이 역할은 2단계 인증이 필수인데 아직 등록하지 않았다 — 등록 화면 말고는 막는다."""
+
+    status_code = 403
+    code = "OTP_ENROLL_REQUIRED"
+    message = "2단계 인증을 먼저 등록해야 합니다."
+
+
 class PasswordReused(ApiError):
     """직전 비밀번호 재사용(문제점 70번 10/15 ③)."""
 

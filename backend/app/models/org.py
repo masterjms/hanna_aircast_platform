@@ -6,6 +6,7 @@ import datetime as dt
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -22,6 +23,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.constants import Role
+from app.core.secretbox import EncryptedText
 from app.models.base import Base
 
 _ROLES = ", ".join(f"'{r.value}'" for r in Role)
@@ -159,6 +161,15 @@ class User(Base):
     #: 지금 유효한 로그인 세션 하나(0028, 70번 ③). 토큰의 sid 와 다르면 401 SESSION_REPLACED.
     #: 로그아웃하면 비운다 — 그 토큰도 더는 못 쓴다.
     session_key: Mapped[str | None] = mapped_column(String(32))
+    #: 2단계 인증(0029, 문제점 70번 2항). 비밀은 암호화 저장, 켠 시각이 있어야 켜진 것.
+    totp_secret: Mapped[str | None] = mapped_column(EncryptedText)
+    totp_enabled_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    #: 마지막으로 받은 30초 칸 번호 — 같은 숫자를 다시 받지 않는다.
+    totp_last_step: Mapped[int | None] = mapped_column(BigInteger)
+    #: 일회용 복구 코드 SHA-256 목록. 쓰면 빠진다.
+    totp_recovery: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
 
     def is_expired(self, now: dt.datetime | None = None) -> bool:
         if self.expires_at is None:

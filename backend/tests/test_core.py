@@ -2969,3 +2969,93 @@ class TestSecurityHardening:
                      *mod._chain_trigger("login_events", "logged_in_at", "f")]:
             assert ";\nCREATE" not in stmt
 
+
+# ── 2단계 인증 (문제점 70번 2항) · 아이디 중복 확인 (102번) ─────────────────────
+class TestOtp:
+    # RFC 6238 부록 B 의 SHA1 시험 비밀 "12345678901234567890"(base32) — 8자리 값의 끝 6자리
+    RFC_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+
+    def test_rfc6238_vectors(self):
+        from app.core import totp
+
+        for t, expect in [(59, "287082"), (1111111109, "081804"), (1234567890, "005924"),
+                          (2000000000, "279037")]:
+            assert totp._code_at(self.RFC_SECRET, t // 30) == expect
+
+    def test_verify_window_and_replay(self):
+        from app.core import totp
+
+        now = 1_700_000_000.0
+        step = totp.current_step(now)
+        code = totp._code_at(self.RFC_SECRET, step)
+        assert totp.verify(self.RFC_SECRET, code, now=now) == step
+        # 30초 뒤(다음 칸)에도 받는다 — 시계 차이 한 칸
+        assert totp.verify(self.RFC_SECRET, code, now=now + 30) == step
+        # 2칸 넘게 지나면 거절
+        assert totp.verify(self.RFC_SECRET, code, now=now + 90) is None
+        # 이미 쓴 칸은 다시 받지 않는다
+        assert totp.verify(self.RFC_SECRET, code, last_step=step, now=now) is None
+        assert totp.verify(self.RFC_SECRET, "12345", now=now) is None
+
+    def test_recovery_codes(self):
+        from app.core import totp
+
+        codes = totp.new_recovery_codes()
+        assert len(codes) == 10 and len(set(codes)) == 10
+        assert all(len(c) == 9 and c[4] == "-" for c in codes)
+        # 소문자·하이픈 없이 넣어도 같은 코드
+        c = codes[0]
+        assert totp.hash_recovery(c.lower().replace("-", "")) == totp.hash_recovery(c)
+
+    def test_otpauth_uri(self):
+        from app.core import totp
+
+        uri = totp.otpauth_uri("ABC", username="super", issuer="HANNA AirCast")
+        assert uri.startswith("otpauth://totp/HANNA%20AirCast%3Asuper?secret=ABC")
+        assert "period=30" in uri and "digits=6" in uri
+
+    def test_login_accepts_otp_or_recovery_once(self):
+        from app.core import totp
+        from app.modules.auth.router import _accept_otp
+
+        secret = totp.new_secret()
+        rec = totp.new_recovery_codes()
+        u = unittest.mock.Mock(totp_secret=secret, totp_last_step=None,
+                               totp_recovery=[totp.hash_recovery(c) for c in rec])
+        code = totp._code_at(secret, totp.current_step())
+        assert _accept_otp(u, code) and u.totp_last_step == totp.current_step()
+        assert not _accept_otp(u, code)  # 같은 숫자 재사용
+        assert _accept_otp(u, rec[3]) and len(u.totp_recovery) == 9
+        assert not _accept_otp(u, rec[3])  # 복구 코드도 한 번만
+        assert not _accept_otp(u, "ZZZZ-ZZZZ")
+
+    def test_enroll_gate(self):
+        from app.config import settings
+        from app.core.deps import OTP_ENROLL_ALLOWED_PATHS, must_enroll_otp, otp_required
+
+        su = unittest.mock.Mock(role="super_admin", totp_enabled_at=None)
+        va = unittest.mock.Mock(role="village_admin", totp_enabled_at=None)
+        with unittest.mock.patch.object(settings, "totp_required_roles", "super_admin"):
+            assert otp_required(su) and must_enroll_otp(su)
+            assert not otp_required(va) and not must_enroll_otp(va)
+            su.totp_enabled_at = "2026-10-18"
+            assert not must_enroll_otp(su)
+        with unittest.mock.patch.object(settings, "totp_required_roles", ""):
+            assert not otp_required(unittest.mock.Mock(role="super_admin"))
+        allowed = {"/api/auth/otp/setup", "/api/auth/otp/enable", "/api/auth/me"}
+        assert allowed <= OTP_ENROLL_ALLOWED_PATHS
+
+    def test_audit_hides_otp_codes(self):
+        from app.core.audit import describe, summarize
+
+        body = json.dumps({"code": "123456", "password": "x"}).encode()
+        assert "123456" not in json.dumps(summarize(body, "application/json", len(body), ""))
+        assert describe("POST", "/api/users/5/otp-reset") == ("2단계 인증 초기화", "5")
+
+
+class TestUsernameCheck:
+    def test_route_exists_before_user_id_routes(self):
+        from app.modules.org.router import router
+
+        assert any(getattr(r, "path", "") == "/api/users/username-check" for r in router.routes)
+

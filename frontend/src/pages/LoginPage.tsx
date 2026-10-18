@@ -67,15 +67,30 @@ export function LoginPage() {
     el.classList.add('lg-shake');
   };
 
+  // 2단계 인증(문제점 70번 2항) — 비밀번호가 맞고 그 계정이 OTP 를 켰으면 서버가 OTP_REQUIRED 로 답한다.
+  // 그때 6자리 칸을 열고, 같은 아이디·비밀번호에 숫자를 붙여 다시 보낸다.
+  const [otpStep, setOtpStep] = useState(false);
+  const [otp, setOtp] = useState('');
+  const [useRecovery, setUseRecovery] = useState(false);
+  const otpRef = useRef<HTMLInputElement | null>(null);
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
     if (!username.trim() || !password) return fail('아이디와 비밀번호를 넣으세요.');
+    if (otpStep && !otp.trim()) return fail(useRecovery ? '복구 코드를 넣으세요.' : '인증 번호 6자리를 넣으세요.');
     setBusy(true);
     setError(null);
     try {
-      await login(username.trim(), password);
+      await login(username.trim(), password, otpStep ? otp.trim() : undefined);
       // 성공하면 App 의 라우팅이 알아서 대시보드로 바꾼다.
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'OTP_REQUIRED') {
+        setOtpStep(true);
+        setBusy(false);
+        setTimeout(() => otpRef.current?.focus(), 50);
+        return;
+      }
+      if (err instanceof ApiError && err.code === 'OTP_INVALID') setOtp('');
       fail(
         err instanceof ApiError
           ? err.status === 429
@@ -109,6 +124,55 @@ export function LoginPage() {
 
           {notice && !error && <div className="lg-note">{notice}</div>}
 
+          {otpStep ? (
+            <>
+              <div className="lg-note">
+                <strong>{username.trim()}</strong> — 휴대폰 OTP 앱의 {useRecovery ? '대신 복구 코드(XXXX-XXXX)를' : '인증 번호 6자리를'}{' '}
+                넣어 주세요.
+              </div>
+              <div className="lg-field">
+                <input
+                  id="lg-otp"
+                  ref={otpRef}
+                  value={otp}
+                  placeholder=" "
+                  inputMode={useRecovery ? 'text' : 'numeric'}
+                  autoComplete="one-time-code"
+                  maxLength={useRecovery ? 9 : 7}
+                  onChange={(e) => setOtp(useRecovery ? e.target.value.toUpperCase() : e.target.value.replace(/[^\d ]/g, ''))}
+                />
+                <label htmlFor="lg-otp">{useRecovery ? '복구 코드' : '인증 번호'}</label>
+                <IconLock />
+              </div>
+              <div className="lg-row">
+                <button
+                  type="button"
+                  className="lg-link"
+                  onClick={() => {
+                    setUseRecovery((v) => !v);
+                    setOtp('');
+                    setTimeout(() => otpRef.current?.focus(), 50);
+                  }}
+                >
+                  {useRecovery ? '인증 번호로 넣기' : '휴대폰이 없어요(복구 코드)'}
+                </button>
+                <button
+                  type="button"
+                  className="lg-link"
+                  onClick={() => {
+                    setOtpStep(false);
+                    setOtp('');
+                    setUseRecovery(false);
+                    setPassword('');
+                    setError(null);
+                  }}
+                >
+                  다른 아이디로
+                </button>
+              </div>
+            </>
+          ) : (
+          <>
           <div className="lg-field">
             <input
               id="lg-uid"
@@ -156,6 +220,8 @@ export function LoginPage() {
               비밀번호는 상위 관리자가 계정 관리에서 임시 비밀번호로 다시 발급합니다 — 관리자에게 문의하세요.
             </div>
           )}
+          </>
+          )}
           {error && (
             <div className="lg-err" role="alert">
               {error}
@@ -163,7 +229,7 @@ export function LoginPage() {
           )}
 
           <button className={`lg-btn${busy ? ' loading' : ''}`} type="submit" disabled={busy}>
-            <span className="label">로그인</span>
+            <span className="label">{otpStep ? '확인' : '로그인'}</span>
             <span className="spin" />
           </button>
 

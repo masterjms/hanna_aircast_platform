@@ -97,6 +97,17 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 }
 ```
 
+**2단계 인증(2026-10-18, 문제점 70번 2항).** 2단계 인증을 켠 계정은 body 에 `"otp"`(OTP 앱 6자리 또는 복구 코드 `XXXX-XXXX`)를 함께 보낸다. 비밀번호까지 맞고 `otp`가 없으면 `401 OTP_REQUIRED`(실패로 세지 않음 — 화면이 6자리 칸을 연다), 틀리면 `401 OTP_INVALID`(비밀번호 실패와 같은 잠금 수에 더함, 로그인 기록 result=`bad_otp`). 앞뒤 30초까지 받고, 한 번 받은 30초 칸의 숫자와 쓴 복구 코드는 다시 받지 않는다. `TOTP_REQUIRED_ROLES`(기본 `super_admin`)의 계정이 아직 등록하지 않았으면 로그인은 되지만 `/me`의 `must_enroll_otp=true` — 등록 API 와 `/me`·로그아웃 말고는 `403 OTP_ENROLL_REQUIRED`.
+
+| Method | Path | 설명 |
+|---|---|---|
+| POST | `/api/auth/otp/setup` | 등록 시작 → `{secret, otpauth_uri}`(QR 용). 이미 켠 계정은 `OTP_ALREADY_ENABLED` |
+| POST | `/api/auth/otp/enable` | `{code}` 앱의 6자리로 확인하고 켬 → `{recovery_codes: [10개]}` — **한 번만** |
+| POST | `/api/auth/otp/disable` | `{password}` 스스로 끄기 — 필수 역할은 `OTP_REQUIRED_ROLE` |
+| POST | `/api/users/{id}/otp-reset` | 관리자 초기화(휴대폰 분실·교체) — 관리할 수 있는 계정만, 자기 계정은 `CANNOT_RESET_SELF`. 그 계정의 세션도 끊음 |
+
+비밀(`totp_secret`)은 단말 비밀번호처럼 AES-GCM 으로 저장한다. 최고 관리자가 한 명뿐인데 휴대폰·복구 코드를 모두 잃었으면 서버에서 `docker compose exec backend python -m app.otp_reset <아이디>`.
+
 제약:
 
 - username 1~50자
@@ -156,7 +167,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
    "result": "ok", "logged_in_at": "…", "logged_out_at": null}]}
 ```
 
-`result`: `ok` · `bad_password` · `unknown_user` · `expired` · `locked`. 실패도 남긴다(무차별 대입 흔적). IP는 nginx가 넘기는 `X-Real-IP`(없으면 `X-Forwarded-For` 첫 값). 해지 시각은 「로그아웃」을 눌렀을 때만 채워진다. 보관 `LOGIN_RETENTION_DAYS`(기본 730일) — 매시간 정리 작업이 지운다.
+`result`: `ok` · `bad_password` · `unknown_user` · `expired` · `locked` · `bad_otp`. 실패도 남긴다(무차별 대입 흔적). IP는 nginx가 넘기는 `X-Real-IP`(없으면 `X-Forwarded-For` 첫 값). 해지 시각은 「로그아웃」을 눌렀을 때만 채워진다. 보관 `LOGIN_RETENTION_DAYS`(기본 730일) — 매시간 정리 작업이 지운다.
 
 ## 3. 상태와 설정 API
 
@@ -304,6 +315,7 @@ JWT에는 `sub`, `username`, `role`, `iat`, `exp`가 들어간다. 운영 예시
 | POST | `/api/users` | 계정 생성 — `X-Confirm-Password` 필수 |
 | PATCH | `/api/users/{id}` | 비밀번호·역할·기관·담당 마을·사용 기간 수정 |
 | DELETE | `/api/users/{id}` | 계정 삭제 — `X-Confirm-Password` 필수 |
+| GET | `/api/users/username-check?username=` | 계정 추가 「중복 확인」(2026-10-18, 문제점 102번) → `{username, available, reason}` — 형식이 틀리면 그 사유, 있으면 「이미 사용 중인 아이디입니다.」 |
 
 **마지막 확인 비밀번호(2026-10-12, 문제점 83·84번).** 계정 추가·삭제와 방송 자료 삭제는 지금 로그인한 계정의 비밀번호를 헤더 `X-Confirm-Password`(퍼센트 인코딩 — 헤더는 latin-1 이라 한글 비밀번호를 그대로 못 싣는다)로 함께 보내야 한다. 없으면 `400 CONFIRM_PASSWORD_REQUIRED`, 틀리면 `403 CONFIRM_PASSWORD_WRONG`. 연속 실패 제한은 두지 않는다(요청 사항).
 | POST | `/api/users/{id}/temp-password` | 임시 비밀번호 발급 → `{password}`(10자, 헷갈리는 글자 0 O o 1 l I 제외). **응답에서 한 번만** 나오고 그 계정은 `must_change_password=true`. 관리할 수 있는 계정에만(같은 마디 동료·관할 밖은 `TIER_TOO_LOW`), 자기 계정은 `CANNOT_RESET_SELF` |
