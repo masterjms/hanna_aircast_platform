@@ -133,6 +133,14 @@ if [ -f "$CERT" ]; then
 else
     add_warn "TLS 인증서 파일을 찾을 수 없다 ($CERT)"
 fi
+# 자동 갱신 방식 — standalone 이면 nginx 가 80 번을 쥐고 있어 갱신이 매번 실패한다
+# (2026-11-24 실제로 이렇게 만료됐다. 처음 발급을 nginx 없이 standalone 으로 받은 탓).
+for RC in /etc/letsencrypt/renewal/*.conf; do
+    [ -r "$RC" ] || continue
+    if grep -q '^authenticator *= *standalone' "$RC"; then
+        add_bad "인증서 자동 갱신이 standalone 방식($(basename "$RC" .conf)) — nginx 때문에 갱신 실패. 고치기: sudo certbot reconfigure --cert-name $(basename "$RC" .conf) --webroot -w $PWD/infra/certbot-webroot"
+    fi
+done
 
 # ── 출력 ────────────────────────────────────────────────────────────
 if [ ${#PROBLEMS[@]} -gt 0 ]; then

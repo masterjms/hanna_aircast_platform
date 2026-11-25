@@ -91,6 +91,22 @@ HOOKEOF
 chmod +x "$HOOK"
 echo "== 갱신 훅 등록: $HOOK"
 
+# ── 4. 갱신은 웹루트로 ──────────────────────────────────────────────
+# 처음 발급을 standalone 으로 받으면 갱신 설정도 standalone 으로 남는다. 그 뒤에는 nginx 가 80 번을
+# 쓰고 있어 자동 갱신이 매번 실패하고 90일 뒤 만료된다(2026-11-24 운영에서 실제로 발생).
+# nginx 가 떠 있으면 지금 웹루트로 바꾸고, 아니면 스택을 띄운 뒤 할 명령을 남긴다.
+if grep -q '^authenticator *= *standalone' "/etc/letsencrypt/renewal/$DOMAIN.conf" 2>/dev/null; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^xwifi-nginx$'; then
+        echo "== 갱신 방식을 standalone → webroot 로 바꾼다"
+        certbot reconfigure --cert-name "$DOMAIN" --webroot -w "$WEBROOT" --non-interactive
+    else
+        echo
+        echo "!! 지금은 standalone 으로 발급했다. 스택(nginx)을 띄운 **뒤에** 꼭 한 번 실행할 것:"
+        echo "   sudo certbot reconfigure --cert-name $DOMAIN --webroot -w $WEBROOT"
+        echo "   안 하면 90일 뒤 자동 갱신이 실패한다(scripts/healthcheck.sh 가 경고한다)."
+    fi
+fi
+
 echo
 echo "완료. 갱신 동작을 미리 확인하려면:"
 echo "   sudo certbot renew --dry-run"
