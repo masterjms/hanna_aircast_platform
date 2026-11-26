@@ -167,6 +167,10 @@ class Settings(BaseSettings):
     totp_required_roles: str = "super_admin"
     #: OTP 앱에 보이는 발급자 이름
     totp_issuer: str = "HANNA AirCast"
+    #: 개발 중 임시로 2단계 인증을 통째로 끈다(로그인에서 OTP 를 묻지 않고 등록도 강제하지 않음).
+    #: 켠 계정의 등록 정보는 그대로 두므로 false 로 돌리면 바로 원래대로. 운영에서는 쓰지 말 것 —
+    #: 켜져 있으면 기동 로그에 경고가 남는다.
+    totp_disabled: bool = False
     #: OTA 작업이 이 시간 안에 전 단말 OTA_RESULT 를 못 받으면 종료로 확정한다(초).
     #: 다 받은 신호도 OTA_RESULT 도 없는 단말을 포기하기까지. 패키지 몇 MB 는 몇 분이면 받는다.
     #: 30분이었을 때 실패한 OTA 가 그 단말의 방송을 수십 분 막았다(문제점 48번 보조설명 3).

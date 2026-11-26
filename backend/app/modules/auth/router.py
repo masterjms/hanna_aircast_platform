@@ -154,7 +154,8 @@ async def login(payload: LoginRequest, db: Db, request: Request) -> LoginRespons
         raise AccountExpired()
 
     # 2단계 인증(문제점 70번 2항) — 켠 계정은 비밀번호 다음 OTP 숫자(또는 복구 코드)가 맞아야 한다.
-    if user.totp_enabled_at is not None and user.totp_secret:
+    # TOTP_DISABLED=true(개발 중 임시)면 묻지 않는다.
+    if user.totp_enabled_at is not None and user.totp_secret and not settings.totp_disabled:
         if not payload.otp:
             # 비밀번호까지는 맞았다 — 실패로 세지 않고 6자리 칸을 열게 한다. 실패 수는 그대로 둔다.
             user.failed_login_count = failed_before

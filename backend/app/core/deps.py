@@ -103,6 +103,8 @@ OTP_ENROLL_ALLOWED_PATHS = PASSWORD_CHANGE_ALLOWED_PATHS | {
 
 
 def otp_required(user: User) -> bool:
+    if settings.totp_disabled:
+        return False
     roles = {r.strip() for r in settings.totp_required_roles.split(",") if r.strip()}
     return user.role in roles
 

@@ -184,6 +184,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001
         log.exception("기동 시 고아 방송 정리 실패")
 
+    if settings.totp_disabled:
+        log.warning("TOTP_DISABLED=true — 2단계 인증이 꺼져 있다(개발용). 운영에서는 끌 것")
     log.info("기동 완료 (env=%s)", settings.app_env)
 
     yield

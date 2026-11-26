@@ -3059,3 +3059,13 @@ class TestUsernameCheck:
 
         assert any(getattr(r, "path", "") == "/api/users/username-check" for r in router.routes)
 
+    def test_totp_disabled_switch_turns_off_enroll_gate(self):
+        from app.config import settings
+        from app.core.deps import must_enroll_otp, otp_required
+
+        su = unittest.mock.Mock(role="super_admin", totp_enabled_at=None)
+        with unittest.mock.patch.object(settings, "totp_disabled", True):
+            assert not otp_required(su) and not must_enroll_otp(su)
+        with unittest.mock.patch.object(settings, "totp_disabled", False):
+            assert otp_required(su)
+
